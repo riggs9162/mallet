@@ -1439,7 +1439,7 @@ pub fn load_presets() -> Vec<Preset> {
 }
 
 pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
-    let path = presets_path().ok_or("APPDATA is not set, so presets cannot be saved")?;
+    let path = presets_path().ok_or("Mallet's settings folder is unavailable, so presets cannot be saved")?;
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     }

@@ -432,10 +432,13 @@ fn run_program(
     if command.working_dir.is_dir() {
         process.current_dir(&command.working_dir);
     }
+    #[cfg(not(windows))]
+    load_libraries_beside(&mut process, &command.program);
     hide_window(&mut process, low_priority);
     let mut child = process
         .spawn()
         .map_err(|error| format!("Could not start {}: {error}", command.program.display()))?;
+    lower_priority(&child, low_priority);
 
     let (sender, receiver) = mpsc::channel::<(usize, Vec<u8>)>();
     let pipes: [Option<Box<dyn Read + Send>>; 2] = [
@@ -520,8 +523,41 @@ fn hide_window(process: &mut Command, low_priority: bool) {
     process.creation_flags(CREATE_NO_WINDOW | priority);
 }
 
+/// Nothing to hide on Unix: the compile window spawns compilers without a
+/// console of their own. Low priority is applied after spawn instead, on the
+/// child itself, so cancelling still kills the compiler directly.
 #[cfg(not(windows))]
 fn hide_window(_process: &mut Command, _low_priority: bool) {}
+
+/// Has a compile tool load the engine libraries that sit in its own folder, such as
+/// `libtier0.so`, ahead of the folders `LD_LIBRARY_PATH` already lists. Without this the
+/// Linux tools stop with a loader error before they start. Windows looks beside the
+/// program by itself.
+#[cfg(not(windows))]
+fn load_libraries_beside(process: &mut Command, program: &Path) {
+    let Some(folder) = program.parent().filter(|folder| !folder.as_os_str().is_empty()) else {
+        return;
+    };
+    let existing = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let listed = std::env::split_paths(&existing).filter(|path| !path.as_os_str().is_empty());
+    if let Ok(paths) = std::env::join_paths(std::iter::once(folder.to_path_buf()).chain(listed)) {
+        process.env("LD_LIBRARY_PATH", paths);
+    }
+}
+
+/// Runs the compiler at a lower priority when asked, as `BELOW_NORMAL` does on Windows.
+#[cfg(not(windows))]
+fn lower_priority(child: &std::process::Child, low_priority: bool) {
+    if low_priority {
+        unsafe {
+            libc::setpriority(libc::PRIO_PROCESS, child.id(), 10);
+        }
+    }
+}
+
+/// Windows sets the priority when it starts the program, in `hide_window`.
+#[cfg(windows)]
+fn lower_priority(_child: &std::process::Child, _low_priority: bool) {}
 
 /// Starts a program without waiting for it, such as the game.
 fn launch(command: &CommandLine) -> Result<Option<String>, String> {

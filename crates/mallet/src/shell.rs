@@ -4,6 +4,12 @@
 //! Everything is written for the current user only, under
 //! `HKEY_CURRENT_USER\Software\Classes`, the way per-user installers do it: no
 //! administrator rights are needed and Hammer stays the default program for VMF files.
+//!
+//! On other platforms nothing here runs: the options page hides its file-type
+//! section, and the registry stub refuses every call. The API stays compiled
+//! so Windows behaviour is untouched, which is why dead-code is allowed there.
+
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
 

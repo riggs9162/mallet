@@ -20,5 +20,15 @@ mallet-format.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 egui-phosphor = "0.9"
 
+# Low compile priority (nice) on non-Windows targets.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windowing backends for non-Windows targets: winit has no platform without
+# one of these. The workspace spec carries no backend features, so Windows
+# builds stay exactly as they were.
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
+
 [build-dependencies]
 embed-resource = "3"

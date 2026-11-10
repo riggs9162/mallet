@@ -13,13 +13,21 @@ use crate::config::{self, ToolKind};
 use crate::editor::Editor;
 use crate::keymap::KeyMap;
 use crate::lighting::{HelperMode, LightingDetail, SkyMode, Tonemap};
+#[cfg(windows)]
 use crate::shell;
 use crate::view3d::MAX_LOOK_FRAMES;
 
 const GOOD: Color32 = Color32::from_rgb(90, 190, 110);
 const ERROR: Color32 = Color32::from_rgb(235, 90, 80);
+#[cfg(windows)]
 const WARNING: Color32 = Color32::from_rgb(230, 180, 70);
 const MUTED: Color32 = Color32::from_gray(140);
+/// Where compile logs are kept, as the compile options say it.
+const LOGS_NOTE: &str = if cfg!(windows) {
+    "Written to %APPDATA%\\Mallet\\logs."
+} else {
+    "Written to ~/.config/Mallet/logs."
+};
 /// The width of the label column of the lighting preview's settings, so its grids line
 /// up.
 const LIGHTING_LABEL_WIDTH: f32 = 170.0;
@@ -485,7 +493,7 @@ fn compiling_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         ui,
         &mut options.keep_logs,
         "Keep a log of every compile",
-        "Written to %APPDATA%\\Mallet\\logs.",
+        LOGS_NOTE,
     );
     ui.add_space(8.0);
     egui::Grid::new("compile_options")
@@ -1387,45 +1395,49 @@ fn files_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         }
     });
 
-    ui.add_space(14.0);
-    ui.strong("Windows file types");
-    ui.label(
-        RichText::new(
-            "For your Windows account only; nothing else changes. While Mallet runs, opening a map from \
-             Explorer adds it as a tab instead of starting another Mallet.",
-        )
-        .color(MUTED),
-    );
-    ui.add_space(4.0);
-    let types = shell::file_types();
-    let mallet = file_type_row(
-        ui,
-        "Open .mallet maps in Mallet",
-        "Double-clicking a .mallet file opens it here, and Explorer shows Mallet's icon for it.",
-        &types.mallet,
-    );
-    let vmf = file_type_row(
-        ui,
-        "Mallet in \"Open with\" for VMF files",
-        "Right-click a VMF and choose Open with > Mallet. Hammer stays the program VMF files open in.",
-        &types.vmf_open_with,
-    );
-    let result = match (mallet, vmf) {
-        (Some(true), _) => Some(shell::register_mallet()),
-        (Some(false), _) => Some(shell::unregister_mallet()),
-        (_, Some(true)) => Some(shell::add_vmf_open_with()),
-        (_, Some(false)) => Some(shell::remove_vmf_open_with()),
-        (None, None) => None,
-    };
-    match result {
-        Some(Ok(())) => editor.message = "Updated the Windows file types".to_owned(),
-        Some(Err(error)) => editor.message = format!("Could not update the Windows file types: {error}"),
-        None => {}
+    #[cfg(windows)]
+    {
+        ui.add_space(14.0);
+        ui.strong("Windows file types");
+        ui.label(
+            RichText::new(
+                "For your Windows account only; nothing else changes. While Mallet runs, opening a map from \
+                 Explorer adds it as a tab instead of starting another Mallet.",
+            )
+            .color(MUTED),
+        );
+        ui.add_space(4.0);
+        let types = shell::file_types();
+        let mallet = file_type_row(
+            ui,
+            "Open .mallet maps in Mallet",
+            "Double-clicking a .mallet file opens it here, and Explorer shows Mallet's icon for it.",
+            &types.mallet,
+        );
+        let vmf = file_type_row(
+            ui,
+            "Mallet in \"Open with\" for VMF files",
+            "Right-click a VMF and choose Open with > Mallet. Hammer stays the program VMF files open in.",
+            &types.vmf_open_with,
+        );
+        let result = match (mallet, vmf) {
+            (Some(true), _) => Some(shell::register_mallet()),
+            (Some(false), _) => Some(shell::unregister_mallet()),
+            (_, Some(true)) => Some(shell::add_vmf_open_with()),
+            (_, Some(false)) => Some(shell::remove_vmf_open_with()),
+            (None, None) => None,
+        };
+        match result {
+            Some(Ok(())) => editor.message = "Updated the Windows file types".to_owned(),
+            Some(Err(error)) => editor.message = format!("Could not update the Windows file types: {error}"),
+            None => {}
+        }
     }
 }
 
 /// One file type: whether it is set up, and a button to set it up or undo it. Returns
 /// `Some(true)` to set it up for this copy of Mallet, `Some(false)` to undo it.
+#[cfg(windows)]
 fn file_type_row(ui: &mut egui::Ui, title: &str, note: &str, state: &shell::Registration) -> Option<bool> {
     let mut choice = None;
     ui.add_space(6.0);
