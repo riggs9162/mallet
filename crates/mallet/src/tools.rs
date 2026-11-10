@@ -556,6 +556,26 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "show_model_browser",
+            "Open or close the model browser, optionally searching for something. A model picked there goes on \
+             the selected entities, or on new props when none is selected.",
+            json!({ "open": { "type": "boolean" }, "filter": { "type": "string" } }),
+            &[],
+        ),
+        tool(
+            "list_models",
+            "List the game's models, such as models/props_c17/oildrum001.mdl, to use as an entity's model key.",
+            json!({
+                "filter": {
+                    "type": "string",
+                    "description": "Words that must all appear in the path. A word starting with ! must not appear."
+                },
+                "used_only": { "type": "boolean", "description": "Only models the map's entities use, with counts." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Default 200." }
+            }),
+            &[],
+        ),
+        tool(
             "list_recent_maps",
             "The maps opened or saved lately, the latest first, as File > Recent Maps lists them. Open one \
              with open_map.",
@@ -727,13 +747,14 @@ pub fn run(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
 }
 
 /// Tools that drive the window, which an agent in its own view may not use.
-const WINDOW_TOOLS: [&str; 6] = [
+const WINDOW_TOOLS: [&str; 7] = [
     "send_input",
     "show_compile",
     "show_options",
     "show_about",
     "show_properties",
     "show_texture_browser",
+    "show_model_browser",
 ];
 
 /// Runs a tool call in the agent's own view. Tab tools move only the agent between
@@ -1214,6 +1235,46 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             } else {
                 "The texture browser is closed."
             }))
+        }
+        "show_model_browser" => {
+            editor.model_browser_open = args.get("open").and_then(Value::as_bool).unwrap_or(true);
+            editor.model_browser_filter = optional_string(args, "filter")?.map(str::to_owned);
+            Ok(ToolResult::text(if editor.model_browser_open {
+                "The model browser is open."
+            } else {
+                "The model browser is closed."
+            }))
+        }
+        "list_models" => {
+            let limit = optional_number(args, "limit")?.unwrap_or(200.0).max(1.0) as usize;
+            let words: Vec<String> = optional_string(args, "filter")?
+                .unwrap_or("")
+                .split_whitespace()
+                .map(str::to_ascii_lowercase)
+                .collect();
+            let matches = |path: &str| {
+                let path = path.replace('\\', "/").to_ascii_lowercase();
+                words.iter().all(|word| match word.strip_prefix('!') {
+                    Some(unwanted) => unwanted.is_empty() || !path.contains(unwanted),
+                    None => path.contains(word.as_str()),
+                })
+            };
+            if args.get("used_only").and_then(Value::as_bool).unwrap_or(false) {
+                let used: Vec<Value> = editor
+                    .used_models()
+                    .into_iter()
+                    .filter(|(path, _)| matches(path))
+                    .take(limit)
+                    .map(|(path, entities)| json!({ "model": path, "entities": entities }))
+                    .collect();
+                return Ok(ToolResult::json(&json!({ "models": used })));
+            }
+            let list = editor.model_list()?;
+            let found: Vec<&String> = list.iter().filter(|path| matches(path)).collect();
+            Ok(ToolResult::json(&json!({
+                "total": found.len(),
+                "models": found.iter().take(limit).collect::<Vec<_>>(),
+            })))
         }
         "list_recent_maps" => {
             let maps: Vec<Value> = editor

@@ -240,6 +240,21 @@ The texture browser lists materials with their sources on a thread, describes ev
 the background for the kind filters (`MaterialInfo`), and loads thumbnails on four worker
 threads, newest request first, so what is on screen loads before what scrolled past.
 
+The model browser (`app/model_browser.rs`) works the same way for `.mdl` files. Its listing
+thread also collects which models have a `.phy` beside them. Whether a model is a static
+prop is a flag in its `.mdl`, learned for free when its thumbnail is drawn. Only the "Static
+props" filter needs it for models not yet seen, and then one thread reads the flag of the
+models the other filters let through, one after another, and stops when the filters change:
+a game's files often sit on a slow disk, and reading all of them is not worth it. Thumbnails and
+the preview are drawn on the CPU by `model_render.rs`, a small depth-buffered triangle
+filler with perspective-correct texturing, half-Lambert lighting and alpha test and blend.
+That keeps model pictures off the graphics card and away from the 3D views' renderer:
+worker threads paint thumbnails newest request first, and one preview thread keeps the
+selected model loaded and redraws it for the newest camera angle only, at a lower quality
+while it is being dragged. `load_model_variant` loads a model with a chosen skin and body
+groups and returns `ModelDetails` (skins, body groups, static prop flag, sequences) for the
+preview; `load_model` still loads the first skin with every body group for the 3D views.
+
 ## Clipping
 
 `mallet_vmf::clip::split_solid` cuts a brush along a plane the way Hammer does: each half
@@ -584,6 +599,8 @@ Tools:
 | `set_faces` | Material, scale, shift, rotation, lightmap scale, alignment and justify, as one undo step |
 | `replace_material` | Replace a material in the map or the selected faces |
 | `show_texture_browser` | Open the texture browser with a search |
+| `list_models` | The game's models, filtered, or the ones the map's entities use with counts |
+| `show_model_browser` | Open the model browser with a search |
 | `send_input` | Key presses, clicks and drags fed into the window as if a user made them, in a viewport or anywhere in the window (`window`, in screenshot pixels); refused while agents work in their own view |
 
 `send_input` queues synthetic egui events that `MalletApp::raw_input_hook` feeds into the

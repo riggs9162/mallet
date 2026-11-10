@@ -44,6 +44,20 @@ impl Editor {
         ids.into_iter().collect()
     }
 
+    /// The studio models the map's entities use, lower case with forward slashes, each
+    /// with how many entities use it, sorted.
+    pub fn used_models(&self) -> Vec<(String, usize)> {
+        let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let entities = self.document.iter().flat_map(|document| document.vmf.entities());
+        for model in entities.filter_map(|entity| entity.get("model")) {
+            let model = model.replace('\\', "/").to_ascii_lowercase();
+            if model.ends_with(".mdl") {
+                *counts.entry(model).or_default() += 1;
+            }
+        }
+        counts.into_iter().collect()
+    }
+
     /// The world or entity with this id.
     pub fn entity(&self, id: u32) -> Option<&Entity> {
         self.document
