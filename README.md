@@ -12,7 +12,8 @@ Selection, Block and Entity tools with scale, rotate and skew handles and a Hamm
 3D transform gizmo, Overlay and Decal tools that show posters, stains and graffiti where the
 game will, Object Properties driven by the game's FGD, map tabs,
 a CompilePal-style compile window with presets, SourceCubemap and leak lines,
-Hammer's texture tool with a texture browser that loads every mounted game's materials, and
+Hammer's texture tool with a texture browser that loads every mounted game's materials, a
+model browser with thumbnails and a preview you can turn, and
 a Hammer++-style 3D Lighting Preview that lights the map with every Source light entity. A
 built-in MCP server lets AI agents inspect and edit maps, compile them and take
 screenshots. It is a work in progress: displacements are next.
@@ -276,6 +277,38 @@ textures", Mark, Replace, Open Source and the Opaque, Translucent, Selfillum, En
 error filters. The "per row" slider sets how many textures fit across, and they resize with
 the window. Thumbnails load in the background while you scroll. Mounted games can be
 turned off one by one in Edit > Mallet Options > Game.
+
+## Models
+
+The model browser lists every model the game mounts, each with a thumbnail drawn in the
+background while you scroll. Open it with the cube button beside a model key in Object
+Properties, with the cube button under New entity in the side panel, or with Tools > Model
+Browser. What a picked model is for shows in the window's title:
+
+- Opened from Object Properties, or from the menu with props selected, double-clicking a
+  model puts it on those entities as one undo step.
+- Otherwise it becomes the model of new props: the Entity tool is chosen and every prop it
+  places gets that model. When the current class takes no model, the class changes to
+  `prop_static`, `prop_physics` or `prop_dynamic`, whichever suits the model.
+
+The sidebar narrows the list to particular games and addons, and to a folder in the folder
+tree; click a folder's name to choose it and its arrow to open it. The filter takes several
+words that must all be in a model's path. A word starting with `!` leaves out the models
+that have it, `*` stands for any text and `?` for one character, so `props_* crate !gib`
+finds crates in the prop folders that are not gibs. "Static props" shows only models
+`prop_static` can use and "Physics props" only those with a collision model. "Only used
+models" shows what the map's entities use. Right-click a model to copy its path or show
+its folder.
+
+Clicking a model shows it in the preview on the right: drag to turn it, scroll to zoom and
+double-click to reset. Under it are its skins and body groups to try, its size, triangle
+count, materials (missing ones in orange) and animation sequences, and a warning when it
+would not work on the entities it is for, such as a model that is not a static prop on a
+`prop_static`. A skin or body group chosen there is written to the entity's `skin` and
+`body` keys along with the model. The 3D views still draw every prop with its first skin.
+
+Thumbnails use the loading threads and the memory limit set for the texture browser in
+Mallet Options.
 
 ## Compiling
 

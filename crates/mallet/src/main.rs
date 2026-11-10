@@ -26,6 +26,7 @@ mod input;
 mod keymap;
 mod lighting;
 mod mcp;
+mod model_render;
 mod netgraph;
 mod prop_brushes;
 mod properties;

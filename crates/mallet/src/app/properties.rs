@@ -82,6 +82,8 @@ enum Change {
     Flag(u32, bool),
     Outputs(Vec<Connection>),
     Select(u32),
+    /// Open the model browser to pick a model for this key.
+    BrowseModel(String),
 }
 
 impl MalletApp {
@@ -112,6 +114,7 @@ impl MalletApp {
         };
         let mut open = true;
         let mut changes = Vec::new();
+        let mut browse_model = None;
         egui::Window::new(title)
             .id(egui::Id::new("object_properties"))
             .open(&mut open)
@@ -141,10 +144,21 @@ impl MalletApp {
                     editor.select([Owner::Entity(id)], SelectMode::Replace);
                     Ok(())
                 }
+                Change::BrowseModel(key) => {
+                    browse_model = Some(key);
+                    Ok(())
+                }
             };
             if let Err(error) = result {
                 editor.message = error;
             }
+        }
+        if let Some(key) = browse_model {
+            let pick = super::model_browser::Pick::Keys {
+                ids: snapshot.ids.clone(),
+                key,
+            };
+            self.open_model_browser(editor, pick);
         }
     }
 }
@@ -608,6 +622,26 @@ fn property_editor(
                     changes.push(Change::SetKey(property.name.clone(), text));
                 }
                 picker
+            })
+            .inner
+        }
+        "studio" => {
+            ui.horizontal(|ui| {
+                let width = (width - 34.0).max(80.0);
+                let (response, committed) =
+                    text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
+                if let Some(text) = committed {
+                    changes.push(Change::SetKey(property.name.clone(), text));
+                }
+                if ui
+                    .button(icon::CUBE_FOCUS)
+                    .on_hover_text("Model browser: pick a model")
+                    .clicked()
+                {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::BrowseModel(property.name.clone()));
+                }
+                response
             })
             .inner
         }

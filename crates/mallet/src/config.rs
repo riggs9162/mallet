@@ -86,6 +86,8 @@ pub struct Config {
     pub texture_browser: TextureBrowserOptions,
     /// What the texture browser shows, as it was last left.
     pub texture_browser_view: TextureBrowserView,
+    /// What the model browser shows, as it was last left.
+    pub model_browser_view: ModelBrowserView,
     pub interface: InterfaceOptions,
     pub agents: AgentOptions,
     pub transform: TransformOptions,
@@ -479,6 +481,58 @@ impl Default for TextureBrowserView {
             show_envmap: true,
             show_errors: true,
             show_alpha: false,
+        }
+    }
+}
+
+/// Which models the model browser lists, by what they can be used as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKinds {
+    #[default]
+    All,
+    /// Models compiled as static props, which `prop_static` needs.
+    Static,
+    /// Models with a collision model, which physics props need.
+    Physics,
+}
+
+/// The model browser's filters and layout, kept between runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelBrowserView {
+    /// How many cards fit across the grid.
+    pub per_row: usize,
+    /// Show only models the map's entities use.
+    pub used_only: bool,
+    /// Text the search box held.
+    pub filter: String,
+    /// Earlier searches, the latest first.
+    pub filter_history: Vec<String>,
+    /// The folder under `models/` the list is narrowed to, if any, such as
+    /// `props_c17` or `props/de_dust`.
+    pub folder: Option<String>,
+    /// Folders and archives whose models are hidden, by path.
+    pub hidden_sources: Vec<PathBuf>,
+    pub kinds: ModelKinds,
+    /// Show the pane that previews the clicked model.
+    pub show_preview: bool,
+    /// Draw a checkerboard behind the preview.
+    pub show_backdrop: bool,
+}
+
+impl Default for ModelBrowserView {
+    fn default() -> Self {
+        Self {
+            per_row: 6,
+            used_only: false,
+            filter: String::new(),
+            filter_history: Vec::new(),
+            folder: None,
+            hidden_sources: Vec::new(),
+            kinds: ModelKinds::All,
+            show_preview: true,
+            show_backdrop: false,
         }
     }
 }

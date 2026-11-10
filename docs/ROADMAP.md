@@ -122,7 +122,9 @@ or edit it yet.
 
 ### Browsers
 
-- [ ] Model browser: search with wildcards and `!` negation, several panels, model preview with skins, bodygroups and attachments. Hammer, improved in H++
+- [x] Model browser: thumbnails, folder tree, search with wildcards and `!` negation, model preview with skins and bodygroups. Hammer, improved in H++
+- [ ] Model browser: several panels, and attachments in the preview. H++
+- [ ] Draw props in the 3D views with their `skin` and `body` keys.
 - [ ] Sound browser (Ctrl+Shift+S) with playback of WAV, MP3 and OGG, a volume slider and Reload Sounds. Hammer, improved in H++
 - [ ] Particle browser with a preview of each system. Hammer (from Alien Swarm), H++
 - [ ] Alpha channel display in the texture browser. H++

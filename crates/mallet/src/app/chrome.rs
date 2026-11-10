@@ -400,6 +400,24 @@ impl MalletApp {
                     });
                     lighting_menu(ui, editor);
                 });
+                if editor.class_takes_model(&editor.entity_class) {
+                    let mut browse = false;
+                    ui.horizontal(|ui| {
+                        browse = ui
+                            .button(icon::CUBE_FOCUS)
+                            .on_hover_text("Model browser: pick the model for new props")
+                            .clicked();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editor.prop_model)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("model (the class's default)"),
+                        )
+                        .on_hover_text("Model the entity tool gives new entities of this class");
+                    });
+                    if browse {
+                        self.open_model_browser(editor, super::model_browser::Pick::NewEntity);
+                    }
+                }
                 ui.label(
                     RichText::new("Entity tool: click a surface in 3D, or place in 2D and press Enter")
                         .small()

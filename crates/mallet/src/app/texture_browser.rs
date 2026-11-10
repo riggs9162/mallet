@@ -980,7 +980,7 @@ fn open_source(loader: &MaterialLoader, material: &str) {
 }
 
 /// A grey checkerboard, so transparent parts of a texture show.
-fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
+pub(super) fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
     let cell = 8.0;
     let columns = (rect.width() / cell).ceil() as usize;
     let rows = (rect.height() / cell).ceil() as usize;
@@ -996,7 +996,7 @@ fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
 }
 
 /// `30782` as `30,782`.
-fn thousands(number: usize) -> String {
+pub(super) fn thousands(number: usize) -> String {
     let digits = number.to_string();
     let mut grouped = String::new();
     for (index, digit) in digits.chars().enumerate() {
@@ -1009,7 +1009,7 @@ fn thousands(number: usize) -> String {
 }
 
 /// Cuts text to `limit` characters with an ellipsis.
-fn elide(text: &str, limit: usize) -> String {
+pub(super) fn elide(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit.max(4) {
         text.to_owned()
     } else {

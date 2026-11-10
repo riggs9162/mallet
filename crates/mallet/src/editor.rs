@@ -372,6 +372,14 @@ pub struct Editor {
     /// Whether the texture browser is showing, and a filter an MCP tool asked for.
     pub texture_browser_open: bool,
     pub texture_browser_filter: Option<String>,
+    /// Whether the model browser is showing, and a filter an MCP tool asked for.
+    pub model_browser_open: bool,
+    pub model_browser_filter: Option<String>,
+    /// The model the entity tool gives new entities of a class that takes one, such as
+    /// `models/props_c17/oildrum001.mdl`; empty to keep the class's own default.
+    pub prop_model: String,
+    /// Every model of the game, listed once per game for MCP tools.
+    model_list: Option<(PathBuf, Arc<Vec<String>>)>,
     /// The GPU renderer for the textured camera view, created once the window has a GPU.
     pub gpu: Option<Renderer3D>,
     /// The texture lights of the game's `lights.rad` and the map's own `.rad` file, for
@@ -450,6 +458,10 @@ impl Default for Editor {
             material_list: None,
             texture_browser_open: false,
             texture_browser_filter: None,
+            model_browser_open: false,
+            model_browser_filter: None,
+            prop_model: String::new(),
+            model_list: None,
             window_shot: WindowShot::Idle,
             gpu: None,
             texture_lights: Arc::new(TextureLights::new()),
@@ -843,6 +855,68 @@ impl Editor {
         Ok(list)
     }
 
+    /// Every model the game mounts, such as `models/props_c17/oildrum001.mdl`, sorted.
+    /// Listed once per game.
+    pub fn model_list(&mut self) -> Result<Arc<Vec<String>>, String> {
+        let materials = self.materials.as_ref().ok_or("choose a game folder first")?;
+        let game = materials.filesystem().game_dir().to_owned();
+        if let Some((listed, list)) = &self.model_list {
+            if *listed == game {
+                return Ok(Arc::clone(list));
+            }
+        }
+        let models: Vec<String> = materials
+            .loader()
+            .list_models()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        let list = Arc::new(models);
+        self.model_list = Some((game, Arc::clone(&list)));
+        Ok(list)
+    }
+
+    /// Whether entities of a class show a model of their own choosing: the class has a
+    /// `model` key that names a studio model. Without game data, the `prop_` classes do.
+    pub fn class_takes_model(&self, classname: &str) -> bool {
+        match self.entity_class(classname.trim()) {
+            Some(class) => class
+                .property("model")
+                .is_some_and(|property| property.kind == "studio"),
+            None => self.game_data.is_none() && classname.trim().to_ascii_lowercase().starts_with("prop_"),
+        }
+    }
+
+    /// The selected entities whose model can be changed: those with a `model` key that
+    /// names a studio model, or of a class that takes one.
+    pub fn model_targets(&self) -> Vec<u32> {
+        self.selection
+            .iter()
+            .filter_map(|owner| match owner {
+                Owner::Entity(id) => Some(*id),
+                Owner::Solid(_) => None,
+            })
+            .filter(|id| {
+                self.entity(*id).is_some_and(|entity| {
+                    entity
+                        .get("model")
+                        .is_some_and(|model| model.to_ascii_lowercase().ends_with(".mdl"))
+                        || self.class_takes_model(entity.classname())
+                })
+            })
+            .collect()
+    }
+
+    /// The keys the entity tool adds to a new entity of the current class: the model
+    /// picked in the model browser, when the class takes one.
+    pub fn entity_tool_keys(&self) -> Vec<(String, String)> {
+        let model = self.prop_model.trim();
+        if model.is_empty() || !self.class_takes_model(&self.entity_class) {
+            return Vec::new();
+        }
+        vec![("model".to_owned(), model.to_owned())]
+    }
+
     /// Changes the selection. Owners that are not in the map are ignored. The texture
     /// tool selects faces rather than brushes, so there it selects the owners' faces.
     pub fn select(&mut self, owners: impl IntoIterator<Item = Owner>, mode: SelectMode) {
@@ -1136,7 +1210,7 @@ impl Editor {
             .entity
             .ok_or("click in a 2D view to place the entity first")?;
         let classname = self.entity_class.clone();
-        self.create_entity(&classname, origin, &[])
+        self.create_entity(&classname, origin, &self.entity_tool_keys())
     }
 
     /// Moves the entity tool's marker to a grid-snapped point in a 2D view. The axis

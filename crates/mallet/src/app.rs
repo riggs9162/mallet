@@ -7,6 +7,7 @@ mod compile_window;
 mod context_menu;
 mod decal_tools;
 pub(crate) use compile_window::count;
+mod model_browser;
 mod options;
 mod paste_special;
 mod properties;
@@ -187,6 +188,8 @@ pub struct MalletApp {
     /// Face Edit and texture browser state for the texture tool.
     face_edit: texture_tool::FaceEditState,
     texture_browser: texture_browser::TextureBrowserState,
+    /// The model browser's listing, thumbnails and preview.
+    model_browser: model_browser::ModelBrowserState,
     /// The Object Properties window's tab, drafts and other state.
     properties: properties::PropertiesState,
     /// The interface scale last applied from Mallet Options, so the window's own zoom
@@ -235,6 +238,7 @@ impl MalletApp {
             logo: None,
             face_edit: texture_tool::FaceEditState::default(),
             texture_browser: texture_browser::TextureBrowserState::default(),
+            model_browser: model_browser::ModelBrowserState::default(),
             options: options::OptionsState::default(),
             properties: properties::PropertiesState::default(),
             applied_scale: None,
@@ -381,6 +385,7 @@ impl MalletApp {
         let mut export = false;
         let mut choose_game = false;
         let mut choose_fgds = false;
+        let mut browse_models = false;
         let mut recent = RecentChoice::None;
         let mut show_net_graph = editor.config.view.net_graph;
         let mut draw_distance = editor.config.view.draw_distance;
@@ -488,6 +493,14 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Split Face", Action::SplitFace, &mut chosen);
                     menu_item(ui, &self.keymap, "Create Block", Action::CreateBlock, &mut chosen);
                     ui.separator();
+                    if ui
+                        .button("Model Browser...")
+                        .on_hover_text("Pick a model for the selected entities, or for new props")
+                        .clicked()
+                    {
+                        browse_models = true;
+                        ui.close_menu();
+                    }
                     menu_item(ui, &self.keymap, "Transform...", Action::Transform, &mut chosen);
                     menu_item(
                         ui,
@@ -558,6 +571,9 @@ impl MalletApp {
         }
         if export {
             export_dialog(editor);
+        }
+        if browse_models {
+            editor.model_browser_open = true;
         }
         if choose_game {
             choose_game_dir(editor);
@@ -850,7 +866,8 @@ impl MalletApp {
                     Some(point) => {
                         // Adding zero turns -0 into 0, so the origin is never written as "-0".
                         let classname = editor.entity_class.clone();
-                        if let Err(error) = editor.create_entity(&classname, point.round() + DVec3::ZERO, &[]) {
+                        let keys = editor.entity_tool_keys();
+                        if let Err(error) = editor.create_entity(&classname, point.round() + DVec3::ZERO, &keys) {
                             editor.message = error;
                         }
                     }
@@ -1592,6 +1609,7 @@ impl eframe::App for MalletApp {
         self.face_edit_window(ctx, &mut editor);
         self.vertex_merge_window(ctx, &mut editor);
         self.texture_browser_window(ctx, &mut editor);
+        self.model_browser_window(ctx, &mut editor);
         self.options_window(ctx, &mut editor);
         self.about_window(ctx, &mut editor);
         self.transform_window(ctx, &mut editor);
