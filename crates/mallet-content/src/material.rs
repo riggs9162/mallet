@@ -353,6 +353,68 @@ impl MaterialLoader {
         crate::model::load_model(&self.filesystem, path)
     }
 
+    /// Loads a model with the chosen skin and body groups, and says what the model is.
+    pub fn model_variant(
+        &self,
+        path: &str,
+        variant: crate::model::ModelVariant,
+    ) -> Result<(crate::model::Model, crate::model::ModelDetails), String> {
+        crate::model::load_model_variant(&self.filesystem, path, variant)
+    }
+
+    /// Every model in the game, such as `models/props_c17/oildrum001.mdl`, sorted, with
+    /// every source that has it, as [`GameFs::sources`] lists them; the first is the one it
+    /// loads from.
+    pub fn list_models(&self) -> Vec<(String, Vec<usize>)> {
+        self.filesystem.list_sourced("models/", ".mdl")
+    }
+
+    /// The models as [`MaterialLoader::list_models`] lists them, and those among them
+    /// that have a collision model, as physics props need: a `.phy` file beside the
+    /// `.mdl`. Both come from one pass over the game's files.
+    pub fn list_models_and_collision(&self) -> (Vec<(String, Vec<usize>)>, std::collections::HashSet<String>) {
+        let mut models = Vec::new();
+        let mut collision = std::collections::HashSet::new();
+        for (path, sources) in self.filesystem.list_sourced("models/", "") {
+            if path.ends_with(".mdl") {
+                models.push((path, sources));
+            } else if let Some(stem) = path.strip_suffix(".phy") {
+                collision.insert(format!("{stem}.mdl"));
+            }
+        }
+        (models, collision)
+    }
+
+    /// Whether a model was compiled with `$staticprop`, as `prop_static` needs. `None`
+    /// when its file cannot be read.
+    pub fn model_is_static(&self, path: &str) -> Option<bool> {
+        crate::model::is_static_prop(&self.filesystem, path)
+    }
+
+    /// Where a model's `.mdl` lies on disk, when it is a loose file.
+    pub fn locate_model(&self, path: &str) -> Option<std::path::PathBuf> {
+        self.filesystem.locate(path)
+    }
+
+    /// Loads a material like [`MaterialLoader::load`], with its texture at most
+    /// `max_side` pixels across, for small pictures such as model thumbnails.
+    pub fn load_small(&self, material: &str, max_side: u32) -> Material {
+        let key = material_key(material);
+        let Some(properties) = self.properties(&key, 0) else {
+            return Material::missing();
+        };
+        let image = properties
+            .texture
+            .as_ref()
+            .and_then(|name| self.texture_file(name))
+            .and_then(|file| vtf::load(|start, length| file.read(start, length), max_side).ok());
+        Material {
+            size: image.as_ref().map(|image| [image.width, image.height]),
+            texture: image.map(Arc::new),
+            ..properties.material()
+        }
+    }
+
     /// Loads a material such as `TOOLS/TOOLSNODRAW`: its texture and alpha mode.
     pub fn load(&self, material: &str) -> Material {
         let key = material_key(material);
