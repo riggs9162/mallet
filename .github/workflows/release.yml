@@ -6,6 +6,9 @@
 # The judge (tools/versioning/judge_version.py) reads every commit since the newest vMAJOR.MINOR.PATCH tag and asks
 # the Copilot CLI for one bump per commit. The largest bump becomes the new SemVer version. The job then commits the
 # version to Cargo.toml and Cargo.lock, tags it, pushes, builds the Windows executable and publishes a GitHub release.
+# A second job then builds the Linux program from the new tag and adds it to that release.
+#
+# Run it with "linux_for" set to an existing tag to build only the Linux download and add it to that release.
 #
 # Run it with "preview" to see the next release notes in the run summary without releasing anything.
 #
@@ -13,7 +16,8 @@
 # "Copilot Requests" permission. Without it the CLI tries the workflow token. If Copilot cannot be reached, each commit
 # is judged from its subject instead, and the run summary says so in the "Judged by" column.
 #
-# Mallet is tested only on Windows, so every job runs on windows-latest.
+# Mallet is tested mostly on Windows, so the release job runs on windows-latest. The Linux download is built on
+# ubuntu-22.04, so it also starts on systems a few years old.
 
 name: Release
 
@@ -40,6 +44,10 @@ on:
         description: "With preview, start from this older tag instead of the last release (such as v0.1.0)"
         type: string
         default: ""
+      linux_for:
+        description: "Only build the Linux download for this existing release (such as v0.3.0) and add it to that release"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -53,8 +61,12 @@ concurrency:
 jobs:
   release:
     name: Judge the commits, tag and publish
+    if: ${{ !inputs.linux_for }}
     runs-on: windows-latest
     timeout-minutes: 90
+    outputs:
+      released: ${{ steps.judge.outputs.released }}
+      tag: ${{ steps.judge.outputs.tag }}
     env:
       FORCED_BUMP: ${{ inputs.bump || 'auto' }}
       PREVIEW: ${{ inputs.preview && 'true' || 'false' }}
@@ -180,3 +192,48 @@ jobs:
             --verify-tag \
             --title "Mallet $VERSION" \
             --notes-file "$NOTES"
+
+  linux:
+    name: Build the Linux download
+    needs: release
+    if: ${{ always() && (needs.release.outputs.released == 'true' || inputs.linux_for) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.linux_for || needs.release.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.linux_for || needs.release.outputs.tag }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install the system libraries
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libvulkan-dev
+
+      - name: Build the Linux program
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p mallet
+          archive="mallet-$TAG-linux-x64.tar.gz"
+          tar -czf "$archive" -C target/release mallet
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Add it to the GitHub release
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            "mallet-$TAG-linux-x64.tar.gz" \
+            "mallet-$TAG-linux-x64.tar.gz.sha256" \
+            --clobber
