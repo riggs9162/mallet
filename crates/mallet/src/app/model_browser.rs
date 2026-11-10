@@ -1349,7 +1349,7 @@ impl ModelBrowserState {
             }
             if ui
                 .button(icon::FOLDER_OPEN)
-                .on_hover_text("Show the model's file in Explorer, when it is a loose file")
+                .on_hover_text("Show the model's file in its folder, when it is a loose file")
                 .clicked()
             {
                 reveal(loader, &path);
@@ -1789,11 +1789,23 @@ fn color_image(picture: &Picture) -> egui::ColorImage {
     egui::ColorImage::from_rgba_unmultiplied([picture.width as usize, picture.height as usize], &picture.rgba)
 }
 
-/// Shows a model's `.mdl` in Explorer, when it is a loose file rather than in a VPK.
+/// Shows a model's `.mdl` in the file manager, when it is a loose file rather than in a
+/// VPK: selected in Explorer on Windows, and its folder opened elsewhere.
 fn reveal(loader: &MaterialLoader, model: &str) {
-    if let Some(path) = loader.locate_model(model) {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
-    }
+    let Some(path) = loader.locate_model(model) else {
+        return;
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or(&path));
+        command
+    };
+    let _ = command.spawn();
 }
