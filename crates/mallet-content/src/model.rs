@@ -189,17 +189,14 @@ fn read_model(filesystem: &GameFs, path: &str, variant: ModelVariant) -> Result<
     details.skins = model.skin_tables().count().max(1);
     let (hull_min, hull_max) = model.bounding_box();
 
+    let basis = root_basis(&model);
     let vertices: Vec<ModelVertex> = model
         .vertices()
         .iter()
-        .map(|vertex| {
-            let position = model.apply_root_transform(vertex.position);
-            let normal = model.apply_root_transform(vertex.normal);
-            ModelVertex {
-                position: [position.x, position.y, position.z],
-                normal: [normal.x, normal.y, normal.z],
-                uv: vertex.texture_coordinates,
-            }
+        .map(|vertex| ModelVertex {
+            position: turn(&basis, vertex.position),
+            normal: turn(&basis, vertex.normal),
+            uv: vertex.texture_coordinates,
         })
         .collect();
 
@@ -271,6 +268,32 @@ fn read_model(filesystem: &GameFs, path: &str, variant: ModelVariant) -> Result<
         },
         details,
     ))
+}
+
+/// Where the stored X, Y and Z axes of a model's vertices point in the model's own space.
+///
+/// A static prop stores its vertices as they are shown. Any other model stores them a
+/// quarter turn about the up axis away, and the parser works the turn out from the root
+/// bone and the idle animation. For some characters it reads another animation than the
+/// idle one and ends up with a model on its head; a turn that does not keep up pointing
+/// up is replaced by the quarter turn.
+fn root_basis(model: &vmdl::Model) -> [[f32; 3]; 3] {
+    let axis = |x: f32, y: f32, z: f32| {
+        let turned = model.apply_root_transform(vmdl::Vector { x, y, z });
+        [turned.x, turned.y, turned.z]
+    };
+    let basis = [axis(1.0, 0.0, 0.0), axis(0.0, 1.0, 0.0), axis(0.0, 0.0, 1.0)];
+    let [across, along, up] = basis[2];
+    if across.abs() < 0.01 && along.abs() < 0.01 && (up - 1.0).abs() < 0.01 {
+        basis
+    } else {
+        [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    }
+}
+
+/// Turns a stored position or normal into the model's own space.
+fn turn(basis: &[[f32; 3]; 3], vector: vmdl::Vector) -> [f32; 3] {
+    [0, 1, 2].map(|axis| vector.x * basis[0][axis] + vector.y * basis[1][axis] + vector.z * basis[2][axis])
 }
 
 /// The first `directory/texture` that has a material file, or the first candidate when
