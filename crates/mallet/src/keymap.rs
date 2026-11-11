@@ -28,6 +28,10 @@ pub enum Action {
     PasteSpecial,
     GridSmaller,
     GridLarger,
+    /// Turn snapping to the grid on or off, as Hammer's Map > Snap to Grid does.
+    ToggleSnapToGrid,
+    /// Show or hide the grid in the 2D views, as Hammer's Map > Show Grid does.
+    ToggleShowGrid,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,
@@ -194,6 +198,15 @@ impl Chord {
         modifiers.ctrl == self.ctrl && modifiers.shift == self.shift && modifiers.alt == self.alt
     }
 
+    /// Whether the held modifiers trigger this chord. Brackets also count when typed
+    /// with AltGr, which Windows reports as Ctrl+Alt, because keyboards such as the German
+    /// one have no other way to type them.
+    fn triggered_by(&self, modifiers: &Modifiers) -> bool {
+        let alt_gr = modifiers.ctrl && modifiers.alt && !self.ctrl && !self.alt;
+        let typed_with_alt_gr = matches!(self.key, Key::OpenBracket | Key::CloseBracket) && alt_gr;
+        self.modifiers_match(modifiers) || (typed_with_alt_gr && modifiers.shift == self.shift)
+    }
+
     /// Text shown next to menu entries, such as `Ctrl+O`.
     pub fn label(&self) -> String {
         let mut label = String::new();
@@ -221,7 +234,9 @@ impl KeyMap {
     /// file sets them. Actions Hammer++ has no key for keep Mallet's own, unless that key
     /// does something else in Hammer++: closing a tab uses Ctrl+F4 because Hammer++ puts
     /// group ignore on Ctrl+W. The camera turns with the mouse only, since Hammer++'s
-    /// arrow keys strafe.
+    /// arrow keys strafe. Stock Hammer's keys that the Valve Developer Community tutorials
+    /// teach work as well where nothing else uses them: `[` and `]` (or Alt+A and Alt+S)
+    /// for the grid size and Shift+R to show or hide the grid.
     pub fn hammer_plus_plus_defaults() -> Self {
         Self {
             bindings: vec![
@@ -242,6 +257,12 @@ impl KeyMap {
                 (Action::PasteSpecial, Chord::ctrl_shift(Key::V)),
                 (Action::GridSmaller, Chord::key(Key::Minus)),
                 (Action::GridLarger, Chord::key(Key::Plus)),
+                (Action::GridSmaller, Chord::key(Key::OpenBracket)),
+                (Action::GridLarger, Chord::key(Key::CloseBracket)),
+                (Action::GridSmaller, Chord::alt(Key::A)),
+                (Action::GridLarger, Chord::alt(Key::S)),
+                (Action::ToggleSnapToGrid, Chord::shift(Key::W)),
+                (Action::ToggleShowGrid, Chord::shift(Key::R)),
                 (Action::SelectionTool, Chord::shift(Key::S)),
                 (Action::CameraTool, Chord::shift(Key::C)),
                 (Action::BlockTool, Chord::shift(Key::B)),
@@ -270,7 +291,6 @@ impl KeyMap {
                 (Action::FlipVertical, Chord::ctrl(Key::I)),
                 (Action::ToggleTextureLock, Chord::shift(Key::L)),
                 (Action::CycleGizmoMode, Chord::key(Key::Q)),
-                (Action::ToggleRotationSnap, Chord::shift(Key::R)),
                 (Action::ToggleMouseLook, Chord::key(Key::Z)),
                 (Action::MoveForward, Chord::key(Key::W)),
                 (Action::MoveBack, Chord::key(Key::S)),
@@ -327,7 +347,7 @@ impl KeyMap {
     /// [`clipboard_action`] reads, so this only sees those keys in synthetic input.
     pub fn pressed(&self, input: &InputState, action: Action) -> bool {
         self.bindings.iter().any(|(bound, chord)| {
-            *bound == action && input.key_pressed(chord.key) && chord.modifiers_match(&input.modifiers)
+            *bound == action && input.key_pressed(chord.key) && chord.triggered_by(&input.modifiers)
         })
     }
 
@@ -401,6 +421,15 @@ mod tests {
         let shift = keymap.hints(&held(false, true, false));
         let cuts = shift.iter().filter(|(action, _)| *action == Action::Cut).count();
         assert_eq!(cuts, 1);
+    }
+
+    #[test]
+    fn brackets_typed_with_alt_gr_change_the_grid() {
+        let bracket = Chord::key(Key::OpenBracket);
+        assert!(bracket.triggered_by(&Modifiers::NONE));
+        assert!(bracket.triggered_by(&held(true, false, true)));
+        assert!(!bracket.triggered_by(&held(true, false, false)));
+        assert!(!Chord::alt(Key::A).triggered_by(&held(true, false, true)));
     }
 
     #[test]

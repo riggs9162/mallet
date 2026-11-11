@@ -57,8 +57,8 @@ The tools a mapper reaches for every few minutes.
 
 ### Grid, views and navigation
 
-- [ ] Show Grid (Shift+R) and Snap to Grid (Shift+W) toggles; Alt held while dragging skips snapping. Hammer
-- [ ] `[` and `]` (and Alt+A, Alt+S) for the grid size. Hammer
+- [x] Show Grid (Shift+R) and Snap to Grid (Shift+W) toggles; Alt held while dragging skips snapping. Hammer
+- [x] `[` and `]` (and Alt+A, Alt+S) for the grid size. Hammer
 - [ ] Microgrid sizes 0.125, 0.25 and 0.5, and a custom grid size (View > Set Grid Size). H++
 - [ ] 3D grid on brush faces (P). Hammer, overhauled in H++
 - [ ] Shift+arrow keys clone and nudge the selection. Hammer

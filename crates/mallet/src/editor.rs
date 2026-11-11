@@ -113,6 +113,9 @@ pub enum SelectMode {
 pub const MIN_GRID: f64 = 1.0;
 pub const MAX_GRID: f64 = 512.0;
 const DEFAULT_GRID: f64 = 64.0;
+/// What drags snap to while Snap to Grid is off or Alt is held: fine enough to move
+/// freely, yet coarse enough that coordinates stay short in the saved map.
+const FREE_STEP: f64 = 1.0 / 64.0;
 /// The most frames a screenshot draws to let textures load, small shadow maps draw and
 /// luxels bake, a batch of lights a frame.
 const SCREENSHOT_ROUNDS: usize = 600;
@@ -287,6 +290,12 @@ pub struct Editor {
     pub layout: [ViewMode; 4],
     pub camera: Camera3D,
     pub grid: f64,
+    /// Whether drags and new points snap to the grid, as Hammer's Map > Snap to Grid.
+    pub snap_to_grid: bool,
+    /// Whether the 2D views draw the grid, as Hammer's Map > Show Grid.
+    pub show_grid: bool,
+    /// Whether Alt is held, which lets a drag move freely of the grid, as in Hammer.
+    pub snap_suspended: bool,
     /// Latest status line, shown at the bottom of the window.
     pub message: String,
     pub tool: Tool,
@@ -419,6 +428,9 @@ impl Default for Editor {
             layout: [ViewMode::Textured, ViewMode::Top, ViewMode::Front, ViewMode::Side],
             camera: Camera3D::new(),
             grid: DEFAULT_GRID,
+            snap_to_grid: true,
+            show_grid: true,
+            snap_suspended: false,
             message: "Open a map with File > Open or drop a .vmf or .mallet onto the window.".to_owned(),
             tool: Tool::Select,
             entity_class: ENTITY_CLASSES[0].to_owned(),
@@ -656,12 +668,16 @@ impl Editor {
         match Document::load(path) {
             Ok(document) => {
                 let grid = document.vmf.grid_spacing();
+                let snap = document.vmf.view_flag("bSnapToGrid");
+                let show = document.vmf.view_flag("bShowGrid");
                 self.set_document(document);
                 self.message = format!("Loaded {}", path.display());
                 self.remember_map(path);
                 if let Some(grid) = grid.filter(|grid| (MIN_GRID..=MAX_GRID).contains(grid)) {
                     self.grid = grid;
                 }
+                self.snap_to_grid = snap.unwrap_or(true);
+                self.show_grid = show.unwrap_or(true);
                 self.frame_map();
                 self.refit_on_layout = true;
                 Ok(())
@@ -678,6 +694,8 @@ impl Editor {
         self.set_document(Document::untitled());
         self.views = default_views();
         self.camera = Camera3D::new();
+        self.snap_to_grid = true;
+        self.show_grid = true;
         self.refit_on_layout = false;
         self.message = "New map".to_owned();
     }
@@ -713,10 +731,12 @@ impl Editor {
             position: self.camera.position,
             look: self.camera.look_point(),
         };
-        let grid = self.grid;
+        let (grid, snap, show) = (self.grid, self.snap_to_grid, self.show_grid);
         let document = self.document.as_mut().ok_or("no map is open")?;
         document.vmf.set_active_camera(camera);
         document.vmf.set_grid_spacing(grid);
+        document.vmf.set_view_flag("bSnapToGrid", snap);
+        document.vmf.set_view_flag("bShowGrid", show);
         Ok(document)
     }
 
@@ -1227,7 +1247,8 @@ impl Editor {
     /// sets all three coordinates.
     pub fn place_entity_marker(&mut self, axis: Axis2D, point: DVec2) {
         let [horizontal, vertical, _] = axis.axes();
-        let snapped = (point / self.grid).round() * self.grid;
+        let step = self.snap_step();
+        let snapped = (point / step).round() * step;
         let mut marker = self.overlay.entity.unwrap_or(DVec3::ZERO);
         marker[horizontal] = snapped.x;
         marker[vertical] = snapped.y;
@@ -1256,6 +1277,25 @@ impl Editor {
 
     pub fn change_grid(&mut self, factor: f64) {
         self.grid = (self.grid * factor).clamp(MIN_GRID, MAX_GRID);
+    }
+
+    /// The step drags and new points snap to: the grid while Snap to Grid is on and Alt
+    /// is not held, as in Hammer, and otherwise a step too fine to notice.
+    pub fn snap_step(&self) -> f64 {
+        if self.snap_to_grid && !self.snap_suspended {
+            self.grid
+        } else {
+            FREE_STEP
+        }
+    }
+
+    /// The grid size the 2D views draw, or 0 when Show Grid is off.
+    pub fn shown_grid(&self) -> f64 {
+        if self.show_grid {
+            self.grid
+        } else {
+            0.0
+        }
     }
 
     /// Fits the whole map into the three 2D views.
@@ -1553,6 +1593,7 @@ impl Editor {
         let overlay = self.display_overlay();
         let points = self.viewport_rects[slot].size();
         let pixels = [points.x.round().max(1.0) as u32, points.y.round().max(1.0) as u32];
+        let grid = self.shown_grid();
         let gpu = self.gpu.as_mut()?;
         gpu.render_2d(
             slot,
@@ -1561,7 +1602,7 @@ impl Editor {
             pixels,
             &self.scene,
             &overlay,
-            self.grid,
+            grid,
         );
         let (width, height, rgba) = gpu.read_pixels(slot)?;
         let mut canvas = PixmapCanvas::from_rgba(width, height, rgba)?;
@@ -1619,7 +1660,7 @@ impl Editor {
         let overlay = self.display_overlay();
         match self.layout[slot].view_index() {
             None => self.camera.draw(&mut canvas, local, &self.scene, false, &overlay),
-            Some(view) => self.views[view].draw(&mut canvas, local, &self.scene, self.grid, false, &overlay),
+            Some(view) => self.views[view].draw(&mut canvas, local, &self.scene, self.shown_grid(), false, &overlay),
         }
         Ok(canvas)
     }

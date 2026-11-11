@@ -272,7 +272,7 @@ impl Editor {
         drag: CornerDrag,
         group: u64,
     ) -> Result<(), String> {
-        let grid = self.grid;
+        let grid = self.snap_step();
         let mut placed = self
             .entity(entity)
             .and_then(Overlay::of)

@@ -30,7 +30,7 @@ way.
 
 The one thing saving adds is where the map was viewed from, as Hammer does: the 3D camera
 goes into the active entry of the `cameras` block (other cameras are kept) and the grid
-size into `viewsettings`. Opening a map puts the camera and grid back, in Mallet and in
+size, Snap to Grid and Show Grid into `viewsettings`. Opening a map puts the camera and grid back, in Mallet and in
 Hammer. This is not an edit, so it neither dirties the map nor enters the undo history.
 
 ## The .mallet format

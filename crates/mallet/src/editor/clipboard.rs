@@ -246,7 +246,7 @@ impl Editor {
         } else {
             at
         };
-        let shift = paste_shift(at, &bounds, self.grid);
+        let shift = paste_shift(at, &bounds, self.snap_step());
         let pivot = match clipboard.pivot {
             Some(pivot) if options.around_pivot => pivot,
             _ => bounds.center(),

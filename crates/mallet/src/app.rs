@@ -50,7 +50,7 @@ const PIVOT_REACH_PIXELS: f32 = 7.0;
 const INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Actions checked against the keyboard every frame.
-const KEY_ACTIONS: [Action; 42] = [
+const KEY_ACTIONS: &[Action] = &[
     Action::NewFile,
     Action::CloseTab,
     Action::NextTab,
@@ -65,6 +65,8 @@ const KEY_ACTIONS: [Action; 42] = [
     Action::PasteSpecial,
     Action::GridSmaller,
     Action::GridLarger,
+    Action::ToggleSnapToGrid,
+    Action::ToggleShowGrid,
     Action::SelectionTool,
     Action::CameraTool,
     Action::BlockTool,
@@ -329,7 +331,8 @@ impl MalletApp {
         let keymap = &self.keymap;
         let triggered = ctx.input(|input| {
             KEY_ACTIONS
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|action| keymap.pressed(input, *action))
                 .collect::<Vec<_>>()
         });
@@ -438,6 +441,15 @@ impl MalletApp {
                     ui.separator();
                     menu_item(ui, &self.keymap, "Mallet Options...", Action::Options, &mut chosen);
                 });
+                ui.menu_button("Map", |ui| {
+                    let keymap = &self.keymap;
+                    menu_toggle(ui, keymap, "Snap to Grid", editor.snap_to_grid, Action::ToggleSnapToGrid, &mut chosen);
+                    menu_toggle(ui, keymap, "Show Grid", editor.show_grid, Action::ToggleShowGrid, &mut chosen);
+                    ui.menu_button("Grid Settings", |ui| {
+                        menu_item(ui, keymap, "Smaller Grid", Action::GridSmaller, &mut chosen);
+                        menu_item(ui, keymap, "Larger Grid", Action::GridLarger, &mut chosen);
+                    });
+                });
                 ui.menu_button("View", |ui| {
                     menu_item(ui, &self.keymap, "Center 2D Views", Action::CenterViews2D, &mut chosen);
                     menu_item(ui, &self.keymap, "Center 3D View", Action::CenterView3D, &mut chosen);
@@ -461,9 +473,6 @@ impl MalletApp {
                                 .integer(),
                         );
                     });
-                    ui.separator();
-                    menu_item(ui, &self.keymap, "Smaller Grid", Action::GridSmaller, &mut chosen);
-                    menu_item(ui, &self.keymap, "Larger Grid", Action::GridLarger, &mut chosen);
                 });
                 ui.menu_button("Tools", |ui| {
                     if ui.button("Game Folder...").clicked() {
@@ -527,32 +536,19 @@ impl MalletApp {
                         menu_item(ui, &self.keymap, "To Bottom", Action::AlignBottom, &mut chosen);
                     });
                     ui.separator();
-                    let mut texture_lock = editor.config.transform.texture_lock;
-                    if ui
-                        .checkbox(
-                            &mut texture_lock,
-                            format!("Texture Lock\t{}", self.keymap.label(Action::ToggleTextureLock)),
-                        )
-                        .clicked()
-                    {
-                        chosen = Some(Action::ToggleTextureLock);
-                        ui.close_menu();
-                    }
-                    let mut scale_lock = editor.config.transform.texture_scale_lock;
-                    if ui.checkbox(&mut scale_lock, "Texture Scale Lock").clicked() {
-                        chosen = Some(Action::ToggleTextureScaleLock);
-                        ui.close_menu();
-                    }
-                    let mut rotation_snap = editor.config.transform.snap_rotation;
-                    if ui
-                        .checkbox(
-                            &mut rotation_snap,
-                            format!("Rotation Snap\t{}", self.keymap.label(Action::ToggleRotationSnap)),
-                        )
-                        .clicked()
-                    {
-                        chosen = Some(Action::ToggleRotationSnap);
-                        ui.close_menu();
+                    let transform = &editor.config.transform;
+                    let keymap = &self.keymap;
+                    let locks = [
+                        ("Texture Lock", transform.texture_lock, Action::ToggleTextureLock),
+                        (
+                            "Texture Scale Lock",
+                            transform.texture_scale_lock,
+                            Action::ToggleTextureScaleLock,
+                        ),
+                        ("Rotation Snap", transform.snap_rotation, Action::ToggleRotationSnap),
+                    ];
+                    for (text, on, action) in locks {
+                        menu_toggle(ui, keymap, text, on, action, &mut chosen);
                     }
                 });
                 ui.menu_button("Help", |ui| {
@@ -730,7 +726,14 @@ impl MalletApp {
             ui.horizontal(|ui| {
                 ui.label(&editor.message);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Grid: {}", editor.grid));
+                    let snap = if !editor.snap_to_grid {
+                        "Off"
+                    } else if editor.snap_suspended {
+                        "Off (Alt)"
+                    } else {
+                        "On"
+                    };
+                    ui.label(format!("Snap: {snap}  Grid: {}", editor.grid));
                     if let Some(cursor) = self.cursor {
                         ui.label(format!("@{}, {}", cursor.x, cursor.y));
                     }
@@ -1052,7 +1055,7 @@ impl MalletApp {
         let angle_step = editor.config.transform.angle_step(pointer.modifiers.shift);
         let change = pointer
             .position
-            .and_then(|position| drag.change(&editor.camera, rect, position, editor.grid, angle_step));
+            .and_then(|position| drag.change(&editor.camera, rect, position, editor.snap_step(), angle_step));
         if let Some(change) = change {
             editor.overlay.transform = Some(Remap {
                 matrix: change.matrix(),
@@ -1169,10 +1172,10 @@ impl MalletApp {
                 view.draw_overlay(canvas, rect, &overlay, response.hovered());
                 vertex_tool::draw_vertex_2d(canvas, &view, rect, editor);
             }
-            None => view.draw(canvas, rect, &editor.scene, editor.grid, response.hovered(), &overlay),
+            None => view.draw(canvas, rect, &editor.scene, editor.shown_grid(), response.hovered(), &overlay),
         }
         if let Some(position) = response.hover_pos() {
-            let point = snap(view.to_world(rect, position), editor.grid);
+            let point = snap(view.to_world(rect, position), editor.snap_step());
             self.cursor = Some(point);
             editor.paste_cursor = Some((view.axis, point));
         }
@@ -1218,6 +1221,7 @@ impl MalletApp {
     ) -> egui::TextureId {
         let overlay = editor.display_overlay();
         let pixels = editor.slot_pixels(slot);
+        let grid = editor.shown_grid();
         let renderer = editor.gpu.get_or_insert_with(|| new_renderer(render_state));
         let (view, recreated) = renderer.render_2d(
             slot,
@@ -1226,7 +1230,7 @@ impl MalletApp {
             pixels,
             &editor.scene,
             &overlay,
-            editor.grid,
+            grid,
         );
         show_texture(render_state, &mut self.slot_textures[slot], view, recreated)
     }
@@ -1284,7 +1288,7 @@ impl MalletApp {
             ) => Drag::Marquee { view: index, start },
             (Tool::Block, ..) => Drag::NewBlock {
                 view: index,
-                start: snap(start, editor.grid),
+                start: snap(start, editor.snap_step()),
             },
         }
     }
@@ -1385,7 +1389,7 @@ impl MalletApp {
         editor: &mut Editor,
         pointer: &PointerState,
     ) {
-        let grid = editor.grid;
+        let grid = editor.snap_step();
         if editor.tool == Tool::Camera {
             // The Camera tool's clicks zoom the view, which view_slot handled already.
             return;
@@ -1603,6 +1607,7 @@ impl eframe::App for MalletApp {
         editor.timings.interval_average_ms = average;
         editor.timings.interval_max_ms = max;
         editor.timings.recent_intervals_ms = self.net_graph.recent_intervals(40);
+        editor.snap_suspended = ctx.input(|input| input.modifiers.alt);
         self.handle_input(ctx, &mut editor);
         take_window_shot(ctx, &mut editor);
         self.update_title(ctx, &editor);
@@ -2196,6 +2201,14 @@ fn run(action: Action, editor: &mut Editor) {
         Action::PasteSpecial => report(editor.open_paste_special(), editor),
         Action::GridSmaller => editor.change_grid(0.5),
         Action::GridLarger => editor.change_grid(2.0),
+        Action::ToggleSnapToGrid => {
+            editor.snap_to_grid = !editor.snap_to_grid;
+            editor.message = format!("Snap to grid {}", on_off(editor.snap_to_grid));
+        }
+        Action::ToggleShowGrid => {
+            editor.show_grid = !editor.show_grid;
+            editor.message = format!("Grid {}", if editor.show_grid { "shown" } else { "hidden" });
+        }
         Action::SelectionTool => editor.set_tool(Tool::Select),
         Action::CameraTool => {
             editor.set_tool(Tool::Camera);
@@ -2412,6 +2425,17 @@ fn menu_item(ui: &mut egui::Ui, keymap: &KeyMap, text: &str, action: Action, cho
         .add(egui::Button::new(text).shortcut_text(keymap.label(action)))
         .clicked()
     {
+        *chosen = Some(action);
+        ui.close_menu();
+    }
+}
+
+/// A menu entry that turns a setting on or off, ticked while it is on, with the
+/// action's shortcut beside it.
+fn menu_toggle(ui: &mut egui::Ui, keymap: &KeyMap, text: &str, on: bool, action: Action, chosen: &mut Option<Action>) {
+    let tick = if on { egui_phosphor::regular::CHECK } else { "  " };
+    let button = egui::Button::new(format!("{tick} {text}")).shortcut_text(keymap.label(action));
+    if ui.add(button).clicked() {
         *chosen = Some(action);
         ui.close_menu();
     }

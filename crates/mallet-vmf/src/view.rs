@@ -69,6 +69,27 @@ impl Vmf {
     /// Stores the grid size in `viewsettings`, adding the block with Hammer's defaults
     /// when the map has none.
     pub fn set_grid_spacing(&mut self, size: f64) {
+        set_pair(self.view_settings_mut(), "nGridSpacing", format_number(size));
+    }
+
+    /// A yes-or-no setting Hammer saved in `viewsettings`, such as `bSnapToGrid` or
+    /// `bShowGrid`. `None` when the map has no such setting.
+    pub fn view_flag(&self, key: &str) -> Option<bool> {
+        match self.block("viewsettings")?.get(key)?.trim() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Stores a yes-or-no setting in `viewsettings`, adding the block with Hammer's
+    /// defaults when the map has none.
+    pub fn set_view_flag(&mut self, key: &str, on: bool) {
+        set_pair(self.view_settings_mut(), key, if on { "1" } else { "0" }.to_owned());
+    }
+
+    /// The `viewsettings` block, added with Hammer's defaults when the map has none.
+    fn view_settings_mut(&mut self) -> &mut Block {
         let settings = self.block_mut_or_insert("viewsettings", &["world"], false);
         if settings.items.is_empty() {
             for (key, value) in [
@@ -81,7 +102,7 @@ impl Vmf {
                 settings.push_pair(key, value);
             }
         }
-        set_pair(settings, "nGridSpacing", format_number(size));
+        settings
     }
 
     /// The first top-level block with this name, added when missing: before the first of
@@ -179,6 +200,11 @@ mod tests {
         assert!(text.contains("\"activecamera\" \"0\""), "{text}");
         assert!(text.contains("\"position\" \"[-339.39 -277.163 162.5]\""), "{text}");
         assert!(text.contains("\"nGridSpacing\" \"16\""), "{text}");
+        assert_eq!(vmf.view_flag("bSnapToGrid"), Some(true));
+        vmf.set_view_flag("bSnapToGrid", false);
+        assert_eq!(vmf.view_flag("bSnapToGrid"), Some(false));
+        assert_eq!(vmf.view_flag("bNoSuchSetting"), None);
+        let text = vmf.to_text();
         let reloaded = Vmf::parse(&text).unwrap();
         let restored = reloaded.active_camera().unwrap();
         assert!((restored.position - camera.position).length() < 0.001);

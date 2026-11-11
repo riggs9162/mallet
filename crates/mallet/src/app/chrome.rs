@@ -116,6 +116,28 @@ impl MalletApp {
                 {
                     chosen = Some(Action::GridLarger);
                 }
+                let grid_toggles = [
+                    (
+                        icon::MAGNET,
+                        "Snap to grid: drags and new points snap to the grid; hold Alt to move freely",
+                        Action::ToggleSnapToGrid,
+                        editor.snap_to_grid,
+                    ),
+                    (
+                        icon::GRID_NINE,
+                        "Show the grid in the 2D views",
+                        Action::ToggleShowGrid,
+                        editor.show_grid,
+                    ),
+                ];
+                for (glyph, name, action, on) in grid_toggles {
+                    if self
+                        .icon_button(ui, glyph, name, Some(action), on, TOOLBAR_ICON_SIZE)
+                        .clicked()
+                    {
+                        chosen = Some(action);
+                    }
+                }
                 ui.separator();
                 let edit = &editor.config.transform;
                 let toggles = [

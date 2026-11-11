@@ -85,7 +85,7 @@ impl MalletApp {
             match drag {
                 VertexPointer::Move2D { start, anchor, .. } => {
                     let corner = view.axis.project(anchor);
-                    let offset = view.axis.lift(snap(corner + world - start, editor.grid) - corner);
+                    let offset = view.axis.lift(snap(corner + world - start, editor.snap_step()) - corner);
                     editor.drag_vertices(offset);
                 }
                 VertexPointer::Marquee { start, .. } => editor.overlay.marquee = Some((view.axis, start, world)),
@@ -183,7 +183,7 @@ impl MalletApp {
                 response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                 if let Some(position) = pointer.position {
                     let (origin, direction) = editor.camera.ray(rect, position);
-                    let target = drag_target(&editor.camera, origin, direction, anchor, vertical, editor.grid);
+                    let target = drag_target(&editor.camera, origin, direction, anchor, vertical, editor.snap_step());
                     if let Some(target) = target {
                         editor.drag_vertices(target - anchor);
                     }

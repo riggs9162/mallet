@@ -489,8 +489,12 @@ impl View2D {
 
     /// The visible grid lines, in 2D world coordinates, with their colours. Lines closer
     /// than the style's minimum spacing are thinned out by doubling the spacing, and
-    /// nothing is returned if even that would be too many lines.
+    /// nothing is returned if even that would be too many lines, or for a grid of 0,
+    /// which is how a hidden grid is passed.
     pub fn grid_lines(&self, rect: Rect, grid: f64) -> Vec<([DVec2; 2], Color32)> {
+        if !(grid > 0.0 && grid.is_finite()) {
+            return Vec::new();
+        }
         let style = style::current();
         let mut spacing = grid.max(MIN_SCALE);
         while spacing * self.scale < f64::from(style.grid_min_pixels) {

@@ -148,7 +148,8 @@ impl Editor {
 
     /// Adds a three-point clip point where the 3D view's ray meets a surface, on the grid.
     pub fn add_clip_point_3d(&mut self, point: DVec3) -> usize {
-        let snapped = (point / self.grid).round() * self.grid + DVec3::ZERO;
+        let step = self.snap_step();
+        let snapped = (point / step).round() * step + DVec3::ZERO;
         self.add_clip_point(snapped)
     }
 
@@ -196,7 +197,8 @@ impl Editor {
     /// A grid point in a 2D view lifted to 3D. The depth comes from `keep_depth`, else
     /// from the points already placed, else from the centre of the selection.
     fn clip_point_in_view(&self, axis: Axis2D, at: DVec2, keep_depth: Option<DVec3>) -> DVec3 {
-        let snapped = (at / self.grid).round() * self.grid;
+        let step = self.snap_step();
+        let snapped = (at / step).round() * step;
         let [horizontal, vertical, depth] = axis.axes();
         let mut point = keep_depth.unwrap_or_else(|| {
             let placed = &self.clipper.points;
@@ -205,7 +207,7 @@ impl Editor {
                 if bounds.is_empty() {
                     DVec3::ZERO
                 } else {
-                    (bounds.center() / self.grid).round() * self.grid
+                    (bounds.center() / step).round() * step
                 }
             } else {
                 placed.iter().sum::<DVec3>() / placed.len() as f64

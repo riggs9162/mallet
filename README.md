@@ -118,7 +118,9 @@ These follow Hammer++'s default keybindings.
 | Shift+O | Overlay tool: click a brush face in the 3D view to place an overlay with the current texture there, at the texture's own shape. Click an overlay to select it, then drag one of its four corner handles to resize it on the grid (hold Shift as the drag starts to move just that corner). Ctrl+click a face to add it to the selected overlay, or take it off |
 | Shift+D | Decal tool: click a brush face in the 3D view to place a decal with the current texture there; click a decal to select it |
 | Delete / Shift+Q or Escape / Ctrl+Shift+A | Delete selection / deselect or cancel the block / select all |
-| Numpad `-` / Numpad `+` | Smaller / larger grid |
+| `[` / `]`, Alt+A / Alt+S, Numpad `-` / Numpad `+` | Smaller / larger grid; on keyboards that type brackets with AltGr, AltGr+`[` and AltGr+`]` work too |
+| Shift+W | Snap to Grid on or off (Map > Snap to Grid). Hold Alt while dragging to move freely of the grid for one drag |
+| Shift+R | Show or hide the grid in the 2D views (Map > Show Grid) |
 | Ctrl+E / Ctrl+R | Centre 2D views / 3D view on the map |
 | Mouse wheel | Zoom a 2D view around the cursor, or move the camera forward |
 | Middle-drag or Space+drag | Pan a 2D view |
