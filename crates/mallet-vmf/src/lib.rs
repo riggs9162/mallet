@@ -6,6 +6,7 @@
 pub mod build;
 pub mod carve;
 pub mod clip;
+pub mod displacement;
 pub mod edit;
 pub mod geometry;
 pub mod hollow;
