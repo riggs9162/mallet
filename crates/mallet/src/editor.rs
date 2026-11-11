@@ -38,6 +38,7 @@ mod brush_entities;
 mod cameras;
 mod carve;
 mod clipboard;
+mod displacements;
 mod groups;
 mod hollow;
 mod primitives;
@@ -45,6 +46,7 @@ mod views;
 
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
+pub use displacements::{effect_label, AxisChoice, DisplacementMode, DisplacementTool};
 pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
 
@@ -457,6 +459,8 @@ pub struct Editor {
     pub texture_lights: Arc<TextureLights>,
     /// The vertex tool's brushes and selected vertices.
     pub vertex: crate::vertex_tool::VertexState,
+    /// The Displacement tab's tool and paint brush settings.
+    pub displacement: DisplacementTool,
     /// The last block created; new blocks reuse its depth.
     last_block: Bounds,
     /// Camera, top, front and side viewport rectangles from the latest window layout.
@@ -546,6 +550,7 @@ impl Default for Editor {
             gpu: None,
             texture_lights: Arc::new(TextureLights::new()),
             vertex: Default::default(),
+            displacement: DisplacementTool::default(),
             last_block: DEFAULT_BLOCK,
             viewport_rects: quad_rects(Rect::from_min_size(Pos2::ZERO, DEFAULT_AREA), VIEWPORT_GAP),
             pixels_per_point: 1.0,

@@ -162,7 +162,7 @@ impl Editor {
     }
 
     /// Clones of the brushes that pass `wanted`, in every entity.
-    fn solids_where(&self, wanted: impl Fn(&Solid) -> bool) -> Vec<Solid> {
+    pub(crate) fn solids_where(&self, wanted: impl Fn(&Solid) -> bool) -> Vec<Solid> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
@@ -261,6 +261,7 @@ impl Editor {
         }
         if self.tool == Tool::Texture {
             self.clear_face_selection();
+            self.displacement.mode = crate::editor::DisplacementMode::Select;
         }
         let sides = (tool == Tool::Texture).then(|| self.owner_sides(&self.selection));
         if sides.is_some() {

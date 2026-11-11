@@ -682,11 +682,18 @@ impl History {
     /// Applies an edit that continues the previous one when both have the same `group`,
     /// such as each step of dragging a value: they undo together, back to before the
     /// first. The edits of one group must change the same things, so the first inverse
-    /// restores all of them.
+    /// restores all of them, except that steps replacing brushes may reach new ones, as
+    /// a paint stroke does: a brush a later step changes first joins the first inverse.
     pub fn apply_grouped(&mut self, vmf: &mut Vmf, edit: &Edit, group: u64) -> Result<(), EditError> {
         let inverse = edit.apply(vmf)?;
         if self.last_group != Some(group) || self.undo.is_empty() {
             self.undo.push(inverse);
+        } else if let (Some(Edit::ReplaceSolids(first)), Edit::ReplaceSolids(later)) = (self.undo.last_mut(), inverse) {
+            for solid in later {
+                if !first.iter().any(|kept| kept.id() == solid.id()) {
+                    first.push(solid);
+                }
+            }
         }
         self.redo.clear();
         self.last_group = Some(group);
@@ -769,6 +776,55 @@ entity { "id" "3" "classname" "info_target" }
         assert!(history.undo(&mut vmf).unwrap());
         assert_eq!(vmf.to_text(), original, "the three steps of group 7 undo as one");
         assert!(!history.undo(&mut vmf).unwrap());
+    }
+
+    #[test]
+    fn a_grouped_stroke_undoes_every_brush_it_reached() {
+        let mut vmf = Vmf::new_map();
+        let mut ids = crate::IdAllocator::for_map(&vmf);
+        let mut history = History::default();
+        let mut solids = Vec::new();
+        for x in [0.0, 128.0] {
+            let solid = crate::build::box_solid(
+                DVec3::new(x, 0.0, 0.0),
+                DVec3::new(x + 64.0, 64.0, 64.0),
+                "BRICK/BRICKWALL001A",
+                &mut ids,
+            )
+            .unwrap();
+            history
+                .apply(
+                    &mut vmf,
+                    &Edit::AddSolid {
+                        entity: 1,
+                        index: None,
+                        solid: solid.clone(),
+                    },
+                )
+                .unwrap();
+            solids.push(solid);
+        }
+        let original = vmf.to_text();
+        let retextured = |solid: &Solid, material: &str| {
+            let mut solid = solid.clone();
+            for side in solid.sides_mut() {
+                side.material = material.to_owned();
+            }
+            solid
+        };
+        let steps = [
+            vec![retextured(&solids[0], "A")],
+            vec![retextured(&solids[0], "B"), retextured(&solids[1], "B")],
+        ];
+        for step in steps {
+            history.apply_grouped(&mut vmf, &Edit::ReplaceSolids(step), 3).unwrap();
+        }
+        assert!(history.undo(&mut vmf).unwrap());
+        assert_eq!(
+            vmf.to_text(),
+            original,
+            "the second brush, first reached by the second step, is restored too"
+        );
     }
 
     #[test]

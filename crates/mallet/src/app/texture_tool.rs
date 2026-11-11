@@ -34,6 +34,8 @@ pub(super) struct FaceEditState {
     action: ReplaceAction,
     mark_only: bool,
     rescale: bool,
+    /// The Displacement tab's attribute values.
+    displacement: super::displacement_tool::DisplacementDrafts,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,6 +81,9 @@ impl MalletApp {
                     ui.selectable_value(&mut state.tab, FaceTab::Material, "Material");
                     ui.selectable_value(&mut state.tab, FaceTab::Displacement, "Displacement");
                 });
+                if state.tab != FaceTab::Displacement {
+                    editor.displacement.mode = crate::editor::DisplacementMode::Select;
+                }
                 ui.separator();
                 match state.tab {
                     FaceTab::Material => {
@@ -108,7 +113,9 @@ impl MalletApp {
                             .color(MUTED),
                         );
                     }
-                    FaceTab::Displacement => displacement_section(ui),
+                    FaceTab::Displacement => {
+                        super::displacement_tool::displacement_tab(ui, editor, &faces, &mut state.displacement)
+                    }
                 }
             });
         if browse {
@@ -691,55 +698,6 @@ fn current_texture_row(ui: &mut egui::Ui, editor: &mut Editor, preview: Option<&
             .on_hover_text("Recently used textures");
         });
     });
-}
-
-/// The Displacement tab: Hammer's tools, waiting for displacement support.
-fn displacement_section(ui: &mut egui::Ui) {
-    ui.label(RichText::new("Tools").strong());
-    ui.add_enabled_ui(false, |ui| {
-        egui::Grid::new("displacement_tools")
-            .num_columns(5)
-            .spacing([4.0, 4.0])
-            .show(ui, |ui| {
-                for (index, name) in [
-                    "Select",
-                    "Paint Geometry",
-                    "Paint Alpha",
-                    "Invert Alpha",
-                    "Sculpt",
-                    "Create",
-                    "Destroy",
-                    "Subdivide",
-                    "Noise",
-                    "Sew",
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    let _ = ui.add(egui::Button::new(name).min_size(egui::vec2(64.0, 40.0)));
-                    if index % 5 == 4 {
-                        ui.end_row();
-                    }
-                }
-            });
-        ui.add_space(6.0);
-        ui.label(RichText::new("Attributes").strong());
-        egui::Grid::new("displacement_attributes")
-            .num_columns(2)
-            .spacing([8.0, 4.0])
-            .show(ui, |ui| {
-                for name in ["Power", "Elevation", "Scale"] {
-                    ui.label(name);
-                    ui.add(egui::TextEdit::singleline(&mut String::new()).desired_width(60.0));
-                    ui.end_row();
-                }
-            });
-    });
-    ui.add_space(6.0);
-    ui.label(
-        RichText::new("Displacements are next on the roadmap: these tools turn on once Mallet can draw and edit them.")
-            .color(MUTED),
-    );
 }
 
 /// A side with default values, so the fields can show while no face is selected.

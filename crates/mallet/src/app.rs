@@ -7,6 +7,7 @@ mod compile_window;
 mod context_menu;
 mod brush_tools;
 mod decal_tools;
+mod displacement_tool;
 mod entity_report;
 mod entity_tools;
 pub(crate) use compile_window::count;
@@ -241,6 +242,10 @@ pub struct MalletApp {
     vertex_drag: Option<vertex_tool::VertexPointer>,
     /// The overlay corner being dragged with the Overlay tool.
     overlay_drag: Option<decal_tools::CornerPointer>,
+    /// The displacement paint stroke in progress, if any.
+    paint_stroke: Option<displacement_tool::PaintStroke>,
+    /// Where the displacement paint brush sits under the mouse.
+    brush_spot: Option<displacement_tool::BrushSpot>,
     /// The Paste Special dialog's settings, kept between pastes as Hammer does.
     paste_options: editor::PasteOptions,
     /// The modifiers held on their own and when they went down, for the key hints.
@@ -301,6 +306,8 @@ impl MalletApp {
             context_menu: context_menu::ContextMenuState::default(),
             vertex_drag: None,
             overlay_drag: None,
+            paint_stroke: None,
+            brush_spot: None,
             paste_options: editor::PasteOptions::default(),
             hint_modifiers: None,
             status_bar_top: 0.0,
@@ -980,10 +987,12 @@ impl MalletApp {
         }
         let looking = editor.camera.mouse_look();
         let picking = editor.active_face_pick().is_some();
+        let painting = !picking && self.paint_displacements_3d(slot, rect, response, editor, pointer);
         let gizmo_hot = !picking
             && (self.use_gizmo(slot, rect, response, editor, pointer)
                 || self.vertex_tool_3d(slot, rect, response, editor, pointer)
-                || self.overlay_tool_3d(slot, rect, response, editor, pointer));
+                || self.overlay_tool_3d(slot, rect, response, editor, pointer)
+                || painting);
         if picking && response.hovered() && !looking {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -1051,7 +1060,7 @@ impl MalletApp {
             };
             self.selection_context_menu(response, hit, editor);
         }
-        if editor.tool == Tool::Texture {
+        if editor.tool == Tool::Texture && !painting {
             let applied = if looking {
                 ui.input(|input| input.pointer.secondary_pressed())
             } else {
@@ -1087,6 +1096,14 @@ impl MalletApp {
                     self.draw_gizmo(&painter, slot, rect, response, editor);
                 }
                 vertex_tool::draw_vertex_3d(&painter, &editor.camera, rect, editor);
+                displacement_tool::draw_brush(
+                    &painter,
+                    &editor.camera,
+                    rect,
+                    slot,
+                    self.brush_spot,
+                    editor.displacement.radius,
+                );
                 decal_tools::draw_overlay_handles(&painter, &editor.camera, rect, editor);
                 if style == CameraStyle::Lit {
                     lighting_notice(&painter, rect, editor);
