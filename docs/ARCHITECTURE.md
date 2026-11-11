@@ -22,8 +22,9 @@ window, menu bar, About window and MCP server's `serverInfo` the same picture.
 ## Lossless loading and saving
 
 A VMF is parsed into `Vmf`, whose world, entities, solids and sides are typed while every
-block Mallet does not understand yet (`versioninfo`, `visgroups`, `dispinfo`, `connections`,
-`hidden`, cordons and so on) is kept verbatim. Saving writes the same structure back, so
+other block (`versioninfo`, `visgroups`, `connections`, `hidden`, cordons and so on) is kept
+verbatim, as is a face's `dispinfo` until a displacement tool changes it (see
+[Displacements](#displacements)). Saving writes the same structure back, so
 opening and saving a map changes nothing except number formatting that parses back to the
 same values. Files that are not valid UTF-8 are read byte-for-byte and written back the same
 way.
@@ -82,6 +83,11 @@ inverse, and `History` keeps undo and redo stacks of those inverses. The keyboar
 MCP tools all go through this one path, so an edit made by an agent can be undone with
 Ctrl+Z and the other way round. New editing features add `Edit` variants rather than
 mutating the map directly.
+
+`History::apply_grouped` makes the steps of a drag one undo step by keeping only the first
+step's inverse. When the steps replace brushes, a brush that a later step changes first is
+added to that inverse, so a paint stroke that reaches more displacements as it goes still
+undoes at once.
 
 Edits that add brushes or entities carry them with ids already assigned by
 `IdAllocator`, which starts above every id in the map, including ids inside blocks kept
@@ -392,6 +398,57 @@ rebuilds. A drag rebuilds from the meshes it started with on every grid step and
 whole drag undoes at once; a refused shape is drawn red and leaves the last good one in
 place. `app/vertex_tool.rs` does the picking, the 3D drag planes and the merge question.
 
+## Displacements
+
+`mallet_vmf::displacement` holds Hammer's displacements, tested on its own. A face's
+`dispinfo` block stays verbatim in `Side::extra` until a tool changes it. `Displacement::read`
+turns it into typed rows (normals, distances, offsets, offset normals, alphas, triangle tags
+and allowed vertices), and `to_block` writes it back in Hammer's order with the keys and
+blocks it does not know where they were, so an untouched displacement saves byte for byte
+and an edited one as Hammer would write it.
+
+`Surface::new` builds the surface the way VBSP's `CCoreDispInfo` does. The face's four
+corners are put in VBSP's winding (clockwise seen from in front) and turned so the one
+nearest `startposition` comes first. Rows run from it towards the next corner and each row
+towards the corner before the start, so vertex `row * size + column` is the one a VMF's
+`rowN` lists at place `column`. A vertex is its spot on the flat face, plus the face normal
+times `elevation`, its normal times its distance and its offset. The diagonals of the grid
+squares follow VBSP's rule (`index % 2`), which makes Source's diamond pattern, and triangles
+are wound counter-clockwise seen from in front, as the renderer wants them. After every edit
+`update_tags` tags triangles walkable (normal height at least 0.7) and buildable (at least
+0.8), keeping the bits that force a tag.
+
+Edits work on `Patch`es, a side's id with its data and surface. `paint` applies one `Dab`: a
+centre and radius with a soft (cosine) or hard falloff, and Raise, Raise To or Smooth, on
+positions along the face normal or an axis, or on alpha. A vertex moves by turning the offset
+it needs into a direction and a distance that is never negative, as Hammer stores them. `sew`
+finds the corners and edges patches share by welding corner positions, moves their vertices
+to the average, and lays the in-between vertices of a finer edge on the coarser one.
+`subdivide` takes the patches' faces as one mesh of quads joined at their corners and runs
+Catmull-Clark subdivision once per power, with boundary edges as creases and lone corners
+fixed, so each face becomes its displacement's vertex grid; the result goes into the offsets
+and offset normals, under any painted distances. `noise` adds fractal Perlin noise read at
+each vertex's flat spot, so patches still meet where they share an edge.
+
+In the scene, a brush with displacements shows only them, as VBSP turns its other faces into
+nodraw. Its `SceneFace`s are the displacement faces, each carrying its `Surface`; its edges
+are their triangles, which the 2D views draw as a wireframe; and it has no planes, so every
+ray test (selection, the texture tool, placing entities, overlays and decals, sprite glows)
+uses the triangles instead. The renderer draws the grid with each vertex's own normal and the
+texture coordinates of its flat spot, as the game does. A blended material's `$basetexture2`
+loads under the key `<material>#blend`; where alpha is painted, the triangles are drawn again
+with it as a translucent layer, each vertex as opaque as its alpha, with texture coordinates
+divided by the first texture's size as in the game. The lighting preview lights displacements
+per pixel instead of from luxels laid out on the flat face.
+
+`editor/displacements.rs` holds the commands, which the Face Edit sheet and the MCP tools
+share. They read the target faces' patches from the map, change them and write the brushes
+back with `Edit::ReplaceSolids`. `Scene::retexture` then rebuilds only those brushes' meshes
+and records their old bounds, so the renderer rebuilds the chunks a reshaped brush left as
+well as the ones it is in. `app/displacement_tool.rs` is the Displacement tab and the 3D
+view's strokes: a stroke applies the brush when the button goes down, whenever the brush has
+moved a quarter of its radius, and every 60 ms while it is held still, all in one undo group.
+
 ## Compiling
 
 `compile` turns a `Preset` (a list of `Step`s with options from a per-tool catalog,
@@ -623,6 +680,9 @@ Tools:
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |
 | `create_entity` | Point entity of any class at a position, with extra keyvalues, like the Entity tool |
 | `create_overlay`, `create_decal` | Place an overlay or decal on a brush face, like the Overlay and Decal tools; overlays get their basis and the faces they reach filled in |
+| `create_displacement`, `destroy_displacement`, `get_displacement` | Hammer's Create and Destroy on brush faces, and a displacement's power, corners, bounds and, on request, every vertex's position and alpha |
+| `paint_displacement` | Paint Geometry and Paint Alpha: a stroke of brush dabs at world points, one undo step |
+| `edit_displacements` | Sew, Subdivide, Noise, Invert Alpha, and the elevation and scale attributes |
 | `undo`, `redo` | Step the shared history |
 | `set_grid`, `center_views` | Grid size, Snap to Grid and Show Grid, and framing |
 | `set_viewport_type` | Switch a viewport slot between 3D (textured, wireframe, lighting preview) and 2D types |

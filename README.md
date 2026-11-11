@@ -12,11 +12,12 @@ Selection, Block and Entity tools with scale, rotate and skew handles and a Hamm
 3D transform gizmo, Overlay and Decal tools that show posters, stains and graffiti where the
 game will, Object Properties driven by the game's FGD, map tabs,
 a CompilePal-style compile window with presets, SourceCubemap and leak lines,
-Hammer's texture tool with a texture browser that loads every mounted game's materials, a
+Hammer's texture tool with a texture browser that loads every mounted game's materials,
+Hammer's displacements with painting, sewing and blended textures, a
 model browser with thumbnails and a preview you can turn, and
 a Hammer++-style 3D Lighting Preview that lights the map with every Source light entity. A
 built-in MCP server lets AI agents inspect and edit maps, compile them and take
-screenshots. It is a work in progress: displacements are next.
+screenshots. It is a work in progress: see the [roadmap](docs/ROADMAP.md) for what comes next.
 
 ## Running
 
@@ -307,6 +308,41 @@ textures", Mark, Replace, Open Source and the Opaque, Translucent, Selfillum, En
 error filters. The "per row" slider sets how many textures fit across, and they resize with
 the window. Thumbnails load in the background while you scroll. Mounted games can be
 turned off one by one in Edit > Mallet Options > Game.
+
+## Displacements
+
+Displacements turn a four-sided brush face into a grid of vertices you can sculpt into
+terrain, as in Hammer. They show in every view: textured, lit and in wireframe in 3D, and as
+their triangles in the 2D views. The rest of a displacement's brush is hidden, as the game
+leaves it out. Materials that blend two textures, such as `nature/blenddirtgrass001a`, fade
+into their second texture where the displacement's alpha is painted.
+
+Open the Face Edit Sheet (Shift+A), select faces in the 3D view and switch to its
+Displacement tab:
+
+- **Create** makes each selected four-sided face a flat displacement of the chosen power: 2,
+  3 or 4, for 5, 9 or 17 vertices a side. **Destroy** turns displacements back into plain
+  faces. Elevation lifts a whole displacement off its face, and Scale multiplies how far
+  every vertex is moved.
+- **Paint Geometry** sculpts the selected displacements: drag over them in the 3D view, the
+  left button raising and the right lowering, with the yellow circle showing the brush.
+  Raise To moves vertices to the distance from their face, and Smooth evens them out. The
+  axis is the face normal or the X, Y or Z axis, and the brush has a soft or hard edge, a
+  distance and a radius. Autosew keeps the edges of neighbouring selected displacements
+  joined while you paint. Each stroke is one undo step.
+- **Paint Alpha** paints the blend of a two-texture material in the same way: the left
+  button brings in the second texture, the right takes it away, and Raise To sets an exact
+  value from 0 to 255. **Invert Alpha** swaps the two textures.
+- **Sew** joins the edges and corners that the selected displacements share, so no gaps
+  open between them; an edge next to a displacement of lower power follows its vertices.
+- **Subdivide** smooths the selected displacements as one surface: Create on all six
+  faces of a box, then Subdivide, and it becomes a rounded boulder. Painted heights stay on
+  top. **Noise** raises every vertex by a smooth random amount between Min and Max, rougher
+  as Rockiness goes up.
+
+Displacements move, rotate, copy and paste with their brushes and keep their painted
+shape and alpha. Clipping, Carve, Make Hollow and the vertex tool refuse displacement
+brushes.
 
 ## Models
 
