@@ -114,6 +114,7 @@ These follow Hammer++'s default keybindings.
 | Shift+T | Apply Current Texture: put the current texture on every face of the selected brushes, or on the faces the texture tool selected (also the paint roller in the tool palette and Edit > Apply Current Texture) |
 | Ctrl+T | Tie to Entity: make the selected brushes a `func_detail` and open Object Properties to choose another class, such as `func_door`; changing the class adds its default keyvalues. With a brush entity in the selection, asks whether to add the other brushes to it instead (also toEntity in the side panel) |
 | H / Ctrl+H / U | QuickHide, as in Hammer: hide the selection / hide everything else / show every hidden object again (View menu). Hidden objects stay in the map, saved the way Hammer saves them, and each change is one undo step |
+| Ctrl+W | Switch the selection mode at the top of the side panel: Groups (a click picks a whole group or entity), Objects (one brush, or one whole entity, even inside a group) and Solids (one brush, even inside a brush entity) |
 | Ctrl+G / Ctrl+U | Group the selected objects / break up the groups the selection is in, as in Hammer (also on the Tools and right-click menus) |
 | Ctrl+Shift+C | Carve: cut the shape of the selected brushes out of the brushes they overlap, as in Hammer; the new faces take the carving brush's textures |
 | Tools > Make Hollow... | Turn the selected brushes into walls of the width asked for (32 at first; negative builds the walls outside), one per face, grouped, as in Hammer; also on the right-click menu |

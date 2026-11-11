@@ -123,6 +123,39 @@ pub enum SelectMode {
     Toggle,
 }
 
+/// What a click on the map picks, Hammer's selection modes in the side panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PickMode {
+    /// Clicking part of a group or an entity selects the whole group or entity.
+    #[default]
+    Groups,
+    /// Clicking selects one object: a brush, or a whole entity, even inside a group.
+    Objects,
+    /// Clicking selects one brush, even one that belongs to a brush entity.
+    Solids,
+}
+
+impl PickMode {
+    pub const ALL: [PickMode; 3] = [PickMode::Groups, PickMode::Objects, PickMode::Solids];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PickMode::Groups => "Groups",
+            PickMode::Objects => "Objects",
+            PickMode::Solids => "Solids",
+        }
+    }
+
+    /// What a click picks in this mode, for the side panel's tooltip.
+    pub fn hint(self) -> &'static str {
+        match self {
+            PickMode::Groups => "Clicking part of a group or entity selects the whole group or entity",
+            PickMode::Objects => "Clicking selects one object, even inside a group",
+            PickMode::Solids => "Clicking selects one brush, even inside a brush entity",
+        }
+    }
+}
+
 pub const MIN_GRID: f64 = 1.0;
 pub const MAX_GRID: f64 = 512.0;
 const DEFAULT_GRID: f64 = 64.0;
@@ -327,6 +360,8 @@ pub struct Editor {
     pub block_faces: u32,
     /// Selected world brushes and entities.
     pub selection: BTreeSet<Owner>,
+    /// What a click picks: whole groups, single objects or single solids.
+    pub pick_mode: PickMode,
     /// Tool previews drawn over the map.
     pub overlay: Overlay,
     /// Material applied to new brushes.
@@ -464,6 +499,7 @@ impl Default for Editor {
             block_shape: mallet_vmf::primitive::Shape::Block,
             block_faces: DEFAULT_FACES,
             selection: BTreeSet::new(),
+            pick_mode: PickMode::default(),
             overlay: Overlay::default(),
             material: DEFAULT_MATERIAL.to_owned(),
             input_queue: VecDeque::new(),
@@ -999,12 +1035,100 @@ impl Editor {
                 }
             }
         }
+        self.drop_covered_solids();
         if self.selection != before {
             self.overlay.handle_mode = crate::transform::HandleMode::for_gizmo(self.config.transform.gizmo_mode);
             self.overlay.pivot = None;
             self.refresh_clip_preview();
         }
         self.scene.mark_selected(&self.selection);
+    }
+
+    /// Changes the selection with what a click or a box picked: in Groups mode each owner
+    /// brings its whole group along. Other callers pass owners as they are, through
+    /// [`Editor::select`].
+    pub fn select_picked(&mut self, owners: impl IntoIterator<Item = Owner>, mode: SelectMode) {
+        let owners: Vec<Owner> = owners.into_iter().flat_map(|owner| self.group_members(owner)).collect();
+        self.select(owners, mode);
+    }
+
+    /// Drops solids whose entity is selected too, so an entity's brushes are never listed
+    /// twice, once as the entity and once as a solid.
+    fn drop_covered_solids(&mut self) {
+        let covered: Vec<u32> = self
+            .scene
+            .meshes
+            .iter()
+            .filter(|mesh| {
+                matches!(mesh.owner, Some(Owner::Entity(_)))
+                    && mesh.owner.is_some_and(|owner| self.selection.contains(&owner))
+            })
+            .filter_map(|mesh| mesh.solid)
+            .collect();
+        for id in covered {
+            self.selection.remove(&Owner::Solid(id));
+        }
+    }
+
+    /// Everything a click on `owner` selects: in Groups mode, the whole Hammer group the
+    /// owner is in (world brushes and entities that share its `groupid`); otherwise, or
+    /// when the owner is in no group, the owner alone.
+    fn group_members(&self, owner: Owner) -> Vec<Owner> {
+        let Some(document) = self.document.as_ref().filter(|_| self.pick_mode == PickMode::Groups) else {
+            return vec![owner];
+        };
+        let vmf = &document.vmf;
+        let group = match owner {
+            Owner::Entity(id) => vmf
+                .all_entities()
+                .find(|entity| entity.id() == Some(id))
+                .and_then(|entity| entity.editor()?.get("groupid").map(str::to_owned)),
+            Owner::Solid(id) => vmf
+                .all_entities()
+                .flat_map(|entity| entity.solids())
+                .find(|solid| solid.id() == Some(id))
+                .and_then(|solid| solid.editor()?.get("groupid").map(str::to_owned)),
+        };
+        let Some(group) = group else {
+            return vec![owner];
+        };
+        let in_group = |editor: Option<&str>| editor == Some(group.as_str());
+        let mut members = Vec::new();
+        for entity in vmf.all_entities() {
+            if entity.classname().eq_ignore_ascii_case("worldspawn") {
+                members.extend(
+                    entity
+                        .solids()
+                        .filter(|solid| in_group(solid.editor().and_then(|block| block.get("groupid"))))
+                        .filter_map(|solid| solid.id().map(Owner::Solid)),
+                );
+            } else if in_group(entity.editor().and_then(|block| block.get("groupid"))) {
+                members.extend(entity.id().map(Owner::Entity));
+            }
+        }
+        members
+    }
+
+    /// Whether clicks pick single brush solids, even inside brush entities.
+    pub fn solid_picks(&self) -> bool {
+        self.pick_mode == PickMode::Solids
+    }
+
+    pub fn set_pick_mode(&mut self, mode: PickMode) {
+        if self.pick_mode != mode {
+            self.pick_mode = mode;
+            self.message = format!("Select mode: {}", mode.label());
+        }
+    }
+
+    /// Ctrl+W: cycles the selection mode, Groups, then Objects, then Solids, then Groups.
+    pub fn cycle_pick_mode(&mut self) {
+        let mode = match self.pick_mode {
+            PickMode::Groups => PickMode::Objects,
+            PickMode::Objects => PickMode::Solids,
+            PickMode::Solids => PickMode::Groups,
+        };
+        self.set_pick_mode(mode);
     }
 
     pub fn clear_selection(&mut self) {
@@ -1830,4 +1954,94 @@ pub fn quad_rects(full: Rect, gap: f32) -> [Rect; 4] {
         Rect::from_min_max(Pos2::new(full.min.x, mid.y + half), Pos2::new(mid.x - half, full.max.y)),
         Rect::from_min_max(Pos2::new(mid.x + half, mid.y + half), full.max),
     ]
+}
+
+#[cfg(test)]
+mod pick_mode_tests {
+    use super::*;
+
+    /// Two brushes pasted as one Hammer group, selected.
+    fn editor_with_group() -> (Editor, Vec<Owner>) {
+        let mut editor = Editor::default();
+        editor.new_map();
+        editor.create_block(DVec3::splat(-64.0), DVec3::splat(64.0)).unwrap();
+        editor.create_block(DVec3::splat(128.0), DVec3::splat(192.0)).unwrap();
+        editor.select_all();
+        editor.copy_selection().unwrap();
+        let options = PasteOptions {
+            copies: 1,
+            offset: DVec3::new(0.0, 512.0, 0.0),
+            start_at_original: true,
+            group: true,
+            ..PasteOptions::default()
+        };
+        editor.paste(PasteAt::Original, &options).unwrap();
+        let pasted: Vec<Owner> = editor.selection.iter().copied().collect();
+        assert_eq!(pasted.len(), 2);
+        (editor, pasted)
+    }
+
+    #[test]
+    fn groups_mode_selects_the_whole_group() {
+        let (mut editor, pasted) = editor_with_group();
+        editor.select_picked([pasted[0]], SelectMode::Replace);
+        assert_eq!(editor.selection.len(), 2, "the click brings the whole group along");
+        assert!(editor.scene.meshes.iter().filter(|mesh| mesh.selected).count() >= 2);
+    }
+
+    #[test]
+    fn objects_and_solids_modes_select_one_object() {
+        let (mut editor, pasted) = editor_with_group();
+        editor.set_pick_mode(PickMode::Objects);
+        editor.select_picked([pasted[0]], SelectMode::Replace);
+        assert_eq!(editor.selection.len(), 1);
+        editor.set_pick_mode(PickMode::Solids);
+        editor.select_picked([pasted[1]], SelectMode::Replace);
+        assert_eq!(editor.selection.len(), 1);
+        assert!(editor.solid_picks());
+    }
+
+    #[test]
+    fn ctrl_w_cycles_through_the_three_modes() {
+        let (mut editor, _) = editor_with_group();
+        assert_eq!(editor.pick_mode, PickMode::Groups);
+        editor.cycle_pick_mode();
+        assert_eq!(editor.pick_mode, PickMode::Objects);
+        editor.cycle_pick_mode();
+        assert_eq!(editor.pick_mode, PickMode::Solids);
+        editor.cycle_pick_mode();
+        assert_eq!(editor.pick_mode, PickMode::Groups);
+    }
+}
+
+#[cfg(test)]
+mod hide_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_objects_leave_the_views_and_return_when_shown() {
+        let mut editor = Editor::default();
+        editor.new_map();
+        let first = editor.create_block(DVec3::splat(-64.0), DVec3::splat(64.0)).unwrap();
+        let _second = editor.create_block(DVec3::splat(128.0), DVec3::splat(192.0)).unwrap();
+        let entity = editor.create_entity("info_target", DVec3::ZERO, &[]).unwrap();
+
+        editor.select([Owner::Solid(first)], SelectMode::Replace);
+        assert_eq!(editor.hide_selection().unwrap(), 1);
+        assert!(!editor.scene.owners().contains(&Owner::Solid(first)));
+        assert!(editor.selection.is_empty(), "a hidden object leaves the selection");
+
+        // Everything else is visible and unselected, so hiding the unselected hides it all.
+        assert_eq!(editor.hide_unselected().unwrap(), 2);
+        assert!(editor.scene.owners().is_empty());
+
+        assert_eq!(editor.show_all_hidden().unwrap(), 3);
+        let owners = editor.scene.owners();
+        assert!(owners.contains(&Owner::Solid(first)));
+        assert!(owners.contains(&Owner::Entity(entity)));
+
+        // Undo hides them again, the way every other edit undoes.
+        assert!(editor.step_history(false).unwrap());
+        assert!(editor.scene.owners().is_empty());
+    }
 }

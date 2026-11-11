@@ -292,6 +292,7 @@ impl Editor {
             bounds,
             planes: Vec::new(),
             owner: None,
+            solid: None,
             selected: false,
             model: None,
             sprite: None,

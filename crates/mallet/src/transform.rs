@@ -350,14 +350,14 @@ impl Editor {
         self.scene
             .meshes
             .iter()
-            .find(|mesh| mesh.owner == Some(owner))
+            .find(|mesh| mesh.selects(owner))
             .and_then(|mesh| mesh.origin)
             .unwrap_or_else(|| self.owner_bounds(owner).min)
     }
 
     pub fn owner_bounds(&self, owner: Owner) -> Bounds {
         let mut bounds = Bounds::EMPTY;
-        for mesh in self.scene.meshes.iter().filter(|mesh| mesh.owner == Some(owner)) {
+        for mesh in self.scene.meshes.iter().filter(|mesh| mesh.selects(owner)) {
             bounds.add_bounds(&mesh.bounds);
         }
         bounds

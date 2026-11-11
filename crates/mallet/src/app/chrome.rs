@@ -10,7 +10,7 @@ use mallet_vmf::light::{LightingGroup, CATALOGUE};
 use mallet_vmf::primitive::Shape;
 
 use super::{run, save_as_dialog, MalletApp};
-use crate::editor::{Editor, Tool};
+use crate::editor::{Editor, PickMode, Tool};
 use crate::keymap::Action;
 use crate::transform::{GizmoMode, HandleMode};
 
@@ -410,12 +410,11 @@ impl MalletApp {
                 ui.add_space(6.0);
                 ui.label(RichText::new("Select").strong());
                 ui.horizontal(|ui| {
-                    let _ = ui
-                        .add(egui::Button::new("Groups").selected(true))
-                        .on_hover_text("Clicking part of an entity selects the whole entity");
-                    for mode in ["Objects", "Solids"] {
-                        ui.add_enabled(false, egui::Button::new(mode))
-                            .on_disabled_hover_text(format!("{mode} selection mode (coming soon)"));
+                    for mode in PickMode::ALL {
+                        let button = egui::Button::new(mode.label()).selected(editor.pick_mode == mode);
+                        if ui.add(button).on_hover_text(mode.hint()).clicked() {
+                            editor.set_pick_mode(mode);
+                        }
                     }
                 });
                 ui.separator();

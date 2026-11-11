@@ -239,7 +239,7 @@ impl Editor {
     /// Selects the entity a ray hits first when it is of class `classname`. Returns
     /// whether it did.
     fn select_class_under(&mut self, origin: DVec3, direction: DVec3, classname: &str) -> bool {
-        let Some(Owner::Entity(id)) = self.scene.pick_ray(origin, direction, &self.models) else {
+        let Some(Owner::Entity(id)) = self.scene.pick_ray(origin, direction, &self.models, false) else {
             return false;
         };
         let matches = self

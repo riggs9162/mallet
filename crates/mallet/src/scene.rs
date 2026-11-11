@@ -379,6 +379,11 @@ pub fn entity_marker_edges(point: DVec3) -> Vec<[DVec3; 2]> {
 }
 
 impl WireMesh {
+    /// Whether selecting `owner` covers this mesh: it is the owner, or a solid it draws.
+    pub fn selects(&self, owner: Owner) -> bool {
+        self.owner == Some(owner) || matches!(owner, Owner::Solid(id) if self.solid == Some(id))
+    }
+
     /// Colour to draw this mesh with and where to move it, given the current overlay.
     pub fn appearance(&self, overlay: &Overlay) -> (Color32, Option<Remap>) {
         if self.selected {
@@ -467,6 +472,9 @@ pub struct WireMesh {
     pub planes: Vec<Plane>,
     /// `None` when the brush or entity has no id and cannot be selected.
     pub owner: Option<Owner>,
+    /// The id of the brush this mesh draws, world or entity alike. Solids mode selects by
+    /// it, where `owner` would select the whole entity.
+    pub solid: Option<u32>,
     pub selected: bool,
     /// The prop model drawn for this entity in the 3D view, instead of `faces`.
     pub model: Option<ModelInstance>,
@@ -603,6 +611,7 @@ impl Scene {
                     planes: box_planes(&bounds),
                     bounds,
                     owner: entity_owner,
+                    solid: None,
                     selected: false,
                     model: Some(ModelInstance {
                         key,
@@ -633,6 +642,7 @@ impl Scene {
                     bounds,
                     planes: box_planes(&bounds),
                     owner: entity_owner,
+                    solid: None,
                     selected: false,
                     model: None,
                     sprite: entity_sprite(entity, class),
@@ -767,13 +777,15 @@ impl Scene {
 
     /// Whether any mesh belongs to `owner`.
     pub fn contains(&self, owner: Owner) -> bool {
-        self.meshes.iter().any(|mesh| mesh.owner == Some(owner))
+        self.meshes.iter().any(|mesh| mesh.selects(owner))
     }
 
-    /// Flags the meshes whose owner is in the selection.
+    /// Flags the meshes the selection covers: those whose owner is selected, and brushes
+    /// whose own solid is selected, as in Solids mode.
     pub fn mark_selected(&mut self, selection: &BTreeSet<Owner>) {
         for mesh in &mut self.meshes {
-            mesh.selected = mesh.owner.is_some_and(|owner| selection.contains(&owner));
+            mesh.selected = mesh.owner.is_some_and(|owner| selection.contains(&owner))
+                || mesh.solid.is_some_and(|id| selection.contains(&Owner::Solid(id)));
         }
         self.selection_generation = next_generation();
     }
@@ -808,9 +820,10 @@ impl Scene {
     /// first, then its outline. Clicking empty space inside a brush picks nothing, so a
     /// selection rectangle can start there. Among several hits the smallest brush wins.
     /// `tolerance` is how close, in world units, the point must be.
-    pub fn pick_2d(&self, axis: Axis2D, point: DVec2, tolerance: f64) -> Option<Owner> {
+    /// With `solids`, a brush of an entity picks its own solid rather than the entity.
+    pub fn pick_2d(&self, axis: Axis2D, point: DVec2, tolerance: f64, solids: bool) -> Option<Owner> {
         let smallest = |hits: &mut dyn Iterator<Item = &WireMesh>| {
-            hits.filter_map(|mesh| Some((mesh.owner?, projected_area(axis, &mesh.bounds))))
+            hits.filter_map(|mesh| Some((picked(mesh, solids)?, projected_area(axis, &mesh.bounds))))
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(owner, _)| owner)
         };
@@ -834,7 +847,8 @@ impl Scene {
     /// ray meets its model's triangles, so clicking through a gap in a fence picks what is
     /// behind it. Only when the ray hits nothing at all is a prop picked by its bounding
     /// box, so thin or hollow models can still be clicked.
-    pub fn pick_ray(&self, origin: DVec3, direction: DVec3, models: &ModelCache) -> Option<Owner> {
+    /// With `solids`, a brush of an entity picks its own solid rather than the entity.
+    pub fn pick_ray(&self, origin: DVec3, direction: DVec3, models: &ModelCache, solids: bool) -> Option<Owner> {
         let nearest = |hits: &mut dyn Iterator<Item = (Owner, f64)>| {
             hits.min_by(|a, b| a.1.total_cmp(&b.1)).map(|(owner, _)| owner)
         };
@@ -842,7 +856,7 @@ impl Scene {
             &mut self
                 .meshes
                 .iter()
-                .filter_map(|mesh| Some((mesh.owner?, mesh_hit(mesh, origin, direction, models)?))),
+                .filter_map(|mesh| Some((picked(mesh, solids)?, mesh_hit(mesh, origin, direction, models)?))),
         )
         .or_else(|| {
             nearest(
@@ -850,7 +864,7 @@ impl Scene {
                     .meshes
                     .iter()
                     .filter(|mesh| mesh.model.is_some())
-                    .filter_map(|mesh| Some((mesh.owner?, ray_box(origin, direction, &mesh.bounds)?))),
+                    .filter_map(|mesh| Some((picked(mesh, solids)?, ray_box(origin, direction, &mesh.bounds)?))),
             )
         })
     }
@@ -1037,7 +1051,8 @@ impl Scene {
     /// Owners with a centre cross inside a 2D rectangle, the way Hammer's selection
     /// rectangle picks brushes. For an entity made of several brushes, any one of their
     /// centres counts.
-    pub fn owners_inside(&self, axis: Axis2D, corner_a: DVec2, corner_b: DVec2) -> BTreeSet<Owner> {
+    /// With `solids`, brushes of entities count as their own solids rather than entities.
+    pub fn owners_inside(&self, axis: Axis2D, corner_a: DVec2, corner_b: DVec2, solids: bool) -> BTreeSet<Owner> {
         let (min, max) = (corner_a.min(corner_b), corner_a.max(corner_b));
         self.meshes
             .iter()
@@ -1045,8 +1060,18 @@ impl Scene {
                 let centre = axis.project(mesh.bounds.center());
                 centre.cmpge(min).all() && centre.cmple(max).all()
             })
-            .filter_map(|mesh| mesh.owner)
+            .filter_map(|mesh| picked(mesh, solids))
             .collect()
+    }
+}
+
+/// The owner a click on `mesh` selects: the mesh's own solid when `solids` is set and it
+/// has one, otherwise its owner. A mesh without an owner cannot be picked.
+fn picked(mesh: &WireMesh, solids: bool) -> Option<Owner> {
+    let owner = mesh.owner?;
+    match mesh.solid {
+        Some(id) if solids => Some(Owner::Solid(id)),
+        _ => Some(owner),
     }
 }
 
@@ -1251,6 +1276,7 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
         bounds: faces_bounds(&faces),
         planes,
         owner,
+        solid: solid.id(),
         selected: false,
         model: None,
         sprite: None,
@@ -1379,6 +1405,7 @@ fn decal_mesh(
         bounds,
         planes,
         owner: entity.id().map(Owner::Entity),
+        solid: None,
         selected: false,
         model: None,
         sprite: None,
@@ -1518,6 +1545,7 @@ mod tests {
             planes: box_planes(&bounds),
             bounds,
             owner: Some(owner),
+            solid: None,
             selected: false,
             model: None,
             sprite: None,
@@ -1578,10 +1606,10 @@ mod tests {
         };
         let along_x = DVec3::X;
         // Through the model's triangle: the prop, even though the wall is behind it.
-        let on_model = scene.pick_ray(DVec3::new(0.0, -20.0, 8.0), along_x, &models);
+        let on_model = scene.pick_ray(DVec3::new(0.0, -20.0, 8.0), along_x, &models, false);
         assert_eq!(on_model, Some(Owner::Entity(7)));
         // Through the empty part of its box: the wall behind it.
-        let through_gap = scene.pick_ray(DVec3::new(0.0, 20.0, 40.0), along_x, &models);
+        let through_gap = scene.pick_ray(DVec3::new(0.0, 20.0, 40.0), along_x, &models, false);
         assert_eq!(through_gap, Some(Owner::Solid(1)));
         // Nothing behind it: the box still picks the prop.
         let alone = Scene {
@@ -1589,9 +1617,9 @@ mod tests {
             ..Scene::default()
         };
         assert_eq!(
-            alone.pick_ray(DVec3::new(0.0, 20.0, 40.0), along_x, &models),
+            alone.pick_ray(DVec3::new(0.0, 20.0, 40.0), along_x, &models, false),
             Some(Owner::Entity(7))
         );
-        assert_eq!(alone.pick_ray(DVec3::new(0.0, 200.0, 40.0), along_x, &models), None);
+        assert_eq!(alone.pick_ray(DVec3::new(0.0, 200.0, 40.0), along_x, &models, false), None);
     }
 }

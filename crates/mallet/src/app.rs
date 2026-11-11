@@ -102,6 +102,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::CompileAgain,
     Action::SelectAll,
     Action::ClearSelection,
+    Action::IgnoreGroups,
     Action::DeleteSelection,
     Action::HideSelection,
     Action::HideUnselected,
@@ -494,6 +495,7 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Delete", Action::DeleteSelection, &mut chosen);
                     menu_item(ui, &self.keymap, "Select All", Action::SelectAll, &mut chosen);
                     menu_item(ui, &self.keymap, "Select None", Action::ClearSelection, &mut chosen);
+                    menu_item(ui, &self.keymap, "Cycle Select Mode", Action::IgnoreGroups, &mut chosen);
                     menu_item(ui, &self.keymap, "Find Entities...", Action::FindEntities, &mut chosen);
                     ui.separator();
                     menu_item(
@@ -994,7 +996,7 @@ impl MalletApp {
             let (origin, direction) = editor.camera.ray(rect, aim);
             match editor.tool {
                 Tool::Select => {
-                    let hit = editor.scene.pick_ray(origin, direction, &editor.models);
+                    let hit = editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks());
                     pick(editor, hit, pointer.modifiers);
                     // Double-clicking opens the properties of what was picked, as in Hammer.
                     if response.double_clicked_by(PointerButton::Primary) && !editor.selection.is_empty() {
@@ -1023,7 +1025,7 @@ impl MalletApp {
                     None => editor.message = "Click on a brush face to place a clip point".to_owned(),
                 },
                 Tool::Vertex => {
-                    if let Some(owner) = editor.scene.pick_ray(origin, direction, &editor.models) {
+                    if let Some(owner) = editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks()) {
                         pick(editor, Some(owner), pointer.modifiers);
                     }
                 }
@@ -1039,7 +1041,7 @@ impl MalletApp {
             let hit = match (response.secondary_clicked(), pointer.position) {
                 (true, Some(position)) => {
                     let (origin, direction) = editor.camera.ray(rect, position);
-                    editor.scene.pick_ray(origin, direction, &editor.models)
+                    editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks())
                 }
                 _ => None,
             };
@@ -1283,7 +1285,7 @@ impl MalletApp {
                 let hit = match (response.secondary_clicked(), pointer.position) {
                     (true, Some(position)) => {
                         let tolerance = pick_tolerance(editor) / view.scale;
-                        editor.scene.pick_2d(view.axis, view.to_world(rect, position), tolerance)
+                        editor.scene.pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks())
                     }
                     _ => None,
                 };
@@ -1548,7 +1550,7 @@ impl MalletApp {
                     let tolerance = pick_tolerance(editor) / view.scale;
                     let hit = editor
                         .scene
-                        .pick_2d(view.axis, view.to_world(rect, position), tolerance);
+                        .pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks());
                     editor.texture_click_2d(hit, pointer.modifiers);
                 }
             }
@@ -1581,7 +1583,7 @@ impl MalletApp {
                     let tolerance = pick_tolerance(editor) / view.scale;
                     let hit = editor
                         .scene
-                        .pick_2d(view.axis, view.to_world(rect, position), tolerance);
+                        .pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks());
                     match hit {
                         Some(owner) if editor.selection.contains(&owner) && !pointer.modifiers.ctrl => {
                             editor.overlay.handle_mode = editor.overlay.handle_mode.next();
@@ -1706,13 +1708,13 @@ fn finish_drag(drag: Drag, editor: &mut Editor, modifiers: Modifiers) -> Result<
         Drag::Pivot { .. } | Drag::ClipPoint { .. } => Ok(()),
         Drag::Marquee { .. } => {
             if let Some((axis, a, b)) = editor.overlay.marquee.take() {
-                let owners = editor.scene.owners_inside(axis, a, b);
+                let owners = editor.scene.owners_inside(axis, a, b, editor.solid_picks());
                 let mode = if modifiers.ctrl {
                     SelectMode::Add
                 } else {
                     SelectMode::Replace
                 };
-                editor.select(owners, mode);
+                editor.select_picked(owners, mode);
             }
             Ok(())
         }
@@ -2351,8 +2353,8 @@ fn snap(point: DVec2, grid: f64) -> DVec2 {
 /// without Ctrl clears the selection.
 fn pick(editor: &mut Editor, hit: Option<crate::scene::Owner>, modifiers: Modifiers) {
     match (hit, modifiers.ctrl) {
-        (Some(owner), true) => editor.select([owner], SelectMode::Toggle),
-        (Some(owner), false) => editor.select([owner], SelectMode::Replace),
+        (Some(owner), true) => editor.select_picked([owner], SelectMode::Toggle),
+        (Some(owner), false) => editor.select_picked([owner], SelectMode::Replace),
         (None, true) => {}
         (None, false) => editor.clear_selection(),
     }
@@ -2445,6 +2447,7 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::SplitFace => report(editor.split_vertex_face(), editor),
         Action::SelectAll => editor.select_all(),
+        Action::IgnoreGroups => editor.cycle_pick_mode(),
         Action::ClearSelection if editor.stop_face_pick() => {}
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()

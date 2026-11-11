@@ -82,6 +82,8 @@ pub enum Action {
     Options,
     SelectAll,
     ClearSelection,
+    /// Cycle the selection mode: groups, objects, solids.
+    IgnoreGroups,
     DeleteSelection,
     /// Hide the selected objects, as Hammer's Hide Selection does.
     HideSelection,
@@ -345,6 +347,7 @@ impl KeyMap {
                 (Action::Compile, Chord::key(Key::F9)),
                 (Action::CompileAgain, Chord::shift(Key::F9)),
                 (Action::SelectAll, Chord::ctrl_shift(Key::A)),
+                (Action::IgnoreGroups, Chord::ctrl(Key::W)),
                 (Action::ClearSelection, Chord::shift(Key::Q)),
                 (Action::ClearSelection, Chord::key(Key::Escape)),
                 (Action::DeleteSelection, Chord::key(Key::Delete)),

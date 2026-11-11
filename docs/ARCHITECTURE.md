@@ -111,9 +111,13 @@ scale; the result goes through the same commands as the 2D handles.
 
 ## Selection
 
-World brushes are selected one by one; clicking any part of an entity selects the whole
-entity, like Hammer's default "groups" mode. The selection lives in `Editor` as a set of
-`Owner`s, so the window and MCP tools share it. 2D clicks pick, like Hammer, a brush's
+The side panel's selection mode (`PickMode`) decides what a click picks, as in Hammer.
+Groups, the default, picks the whole VMF group a brush or entity is in (its `groupid`),
+and clicking any part of an entity selects the whole entity. Objects picks one brush, or one whole entity, even inside a group. Solids picks one brush
+even inside a brush entity. Ctrl+W cycles the three modes. `Scene::pick_2d`, `pick_ray` and `owners_inside` take a
+`solids` flag for Solids mode; `Editor::select_picked` expands groups in Groups mode, and
+`select` keeps an entity's brushes out of the selection while the entity is selected. The
+selection lives in `Editor` as a set of `Owner`s, so the window and MCP tools share it. 2D clicks pick, like Hammer, a brush's
 centre × first and then its outline, preferring the smallest brush; empty space inside a
 brush picks nothing. 3D clicks cast a ray against each brush's planes, skipping a brush
 the camera is inside; in mouselook the ray goes through the crosshair. Props are tested

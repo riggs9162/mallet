@@ -131,7 +131,7 @@ impl MalletApp {
         let tolerance = pick_tolerance(editor) / view.scale;
         match editor
             .scene
-            .pick_2d(view.axis, view.to_world(rect, position), tolerance)
+            .pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks())
         {
             Some(owner) if !editor.selection.contains(&owner) || pointer.modifiers.ctrl => {
                 pick(editor, Some(owner), pointer.modifiers)
