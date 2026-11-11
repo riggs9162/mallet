@@ -27,7 +27,7 @@ const PAN_UNITS_PER_POINT: f64 = 1.0;
 /// Default for how quickly the camera reaches its target speed, per second; higher is
 /// snappier.
 pub const DEFAULT_ACCELERATION: f64 = 14.0;
-/// The default share of the camera speed flown while crouching (Ctrl in mouselook), like
+/// The default share of the camera speed flown while crouching (Alt in mouselook), like
 /// Source's crouch speed.
 pub const DEFAULT_CROUCH_SPEED: f64 = 1.0 / 3.0;
 /// Below this speed, in units per second, a coasting camera stops.
@@ -67,7 +67,7 @@ pub struct Camera3D {
     pub acceleration: f64,
     /// Units one mouse wheel notch moves the camera.
     pub wheel_step: f64,
-    /// The share of [`Self::move_speed`] flown while crouching, from 0.05 to 1.
+    /// The share of [`Self::move_speed`] flown while crouching (Alt in mouselook), from 0.05 to 1.
     pub crouch_speed: f64,
     /// Frames of mouse movement mouselook averages over, from 1 to [`MAX_LOOK_FRAMES`].
     pub look_frames: usize,
@@ -191,8 +191,8 @@ impl Camera3D {
     /// frames, like Source's `m_filter`. The camera also eases towards the speed the keys
     /// ask for instead of jumping to it.
     ///
-    /// In mouselook, holding Ctrl crouches: the camera flies at a third of its speed, and
-    /// Ctrl with a movement key moves instead of starting a shortcut.
+    /// In mouselook, holding Alt crouches: the camera flies at a third of its speed, and
+    /// Alt with a movement key moves instead of starting a shortcut.
     pub fn update(&mut self, ctx: &egui::Context, hovered: bool, keymap: &KeyMap) -> bool {
         // Watch every key event, even while another view is hovered, so a shortcut's key
         // never turns into movement later.
@@ -208,8 +208,9 @@ impl Camera3D {
                 {
                     if !pressed {
                         self.shortcut_keys.remove(key);
-                    } else if modifiers.alt
-                        || ((modifiers.ctrl || modifiers.command) && !(self.mouse_look && keymap.is_movement_key(*key)))
+                    } else if (modifiers.alt && !(self.mouse_look && keymap.is_movement_key(*key)))
+                        || modifiers.ctrl
+                        || modifiers.command
                     {
                         self.shortcut_keys.insert(*key);
                     }
@@ -232,7 +233,7 @@ impl Camera3D {
         let mut active = self.mouse_look;
         let looking = self.mouse_look;
         ctx.input(|input| {
-            let crouching = looking && input.modifiers.ctrl;
+            let crouching = looking && input.modifiers.alt;
             let measured = f64::from(input.unstable_dt);
             if self.frame_time == 0.0 {
                 self.frame_time = measured.clamp(0.001, MAX_FRAME_SECONDS);

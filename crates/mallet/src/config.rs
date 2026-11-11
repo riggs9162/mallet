@@ -785,7 +785,7 @@ pub struct ViewOptions {
     pub camera_acceleration: f64,
     /// Units one mouse wheel notch moves the 3D camera.
     pub wheel_step: f64,
-    /// The share of the camera speed flown while holding Ctrl in mouselook.
+    /// The share of the camera speed flown while holding Alt in mouselook.
     pub crouch_speed: f64,
     /// Frames of mouse movement mouselook averages over; 1 turns smoothing off.
     pub look_smoothing: usize,

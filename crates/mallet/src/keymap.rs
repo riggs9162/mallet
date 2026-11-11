@@ -439,23 +439,25 @@ impl KeyMap {
         })
     }
 
-    /// Whether a movement action's key is held. Alt suppresses it, Ctrl does too unless
-    /// `crouch` is set, and so does a key in `blocked`: one that went down as part of a
-    /// shortcut such as Ctrl+S, which must not move the camera when Ctrl is let go first.
-    pub fn held(&self, input: &InputState, action: Action, blocked: &HashSet<Key>, crouch: bool) -> bool {
-        (crouch || !input.modifiers.ctrl)
-            && !input.modifiers.alt
+    /// Whether a movement action's key is held. Ctrl suppresses it, Alt does too unless
+    /// `mouselook` is set (there Alt is crouch), and so does a key in `blocked`: one that
+    /// went down as part of a shortcut such as Ctrl+S, which must not move the camera when
+    /// Ctrl is let go first.
+    pub fn held(&self, input: &InputState, action: Action, blocked: &HashSet<Key>, mouselook: bool) -> bool {
+        (mouselook || !input.modifiers.alt)
+            && !input.modifiers.ctrl
             && self
                 .bindings
                 .iter()
                 .any(|(bound, chord)| *bound == action && input.key_down(chord.key) && !blocked.contains(&chord.key))
     }
 
-    /// Whether an action is a Ctrl shortcut on a movement key, such as Ctrl+S. In
-    /// mouselook Ctrl is crouch, so these chords slow the camera instead of firing.
+    /// Whether an action has an Alt chord on a movement key, such as Alt+S for a larger
+    /// grid. In mouselook Alt is crouch, so these chords slow the camera instead of firing.
     pub fn is_crouch_chord(&self, action: Action) -> bool {
-        self.chord(action)
-            .is_some_and(|chord| chord.ctrl && !chord.alt && self.is_movement_key(chord.key))
+        self.bindings
+            .iter()
+            .any(|(bound, chord)| *bound == action && chord.alt && !chord.ctrl && self.is_movement_key(chord.key))
     }
 
     /// Whether a key is bound to moving or turning the 3D camera.

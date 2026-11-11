@@ -146,7 +146,7 @@ These follow Hammer++'s default keybindings.
 | Z | Toggle mouselook in the 3D view (Escape leaves it); the cursor stays in the view and returns afterwards |
 | Click a viewport's label | Switch that viewport between 3D Textured, 3D Wireframe, 3D Lighting Preview and the 2D Top, Front and Side views |
 | W A S D, arrow keys | Move the 3D camera; the arrow keys strafe left, right, up and down. A key pressed with Ctrl or Alt, such as the S of Ctrl+S, does not move it until released |
-| Ctrl (in mouselook) | Crouch: fly at a third of the camera speed. Ctrl with W A S D moves instead of saving |
+| Alt (in mouselook) | Crouch: fly at a third of the camera speed. Alt with W A S D moves instead of starting a shortcut |
 
 View > Net Graph toggles a frame timing overlay in the 3D view's bottom-right corner:
 frame rate, CPU time per frame, how many chunks and props culling left to draw, how many viewports

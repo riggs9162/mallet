@@ -420,8 +420,10 @@ impl MalletApp {
             }
             self.dispatch(action, editor);
         }
+        let alt = ctx.input(|input| input.modifiers.alt);
         for action in triggered {
-            if editor.camera.mouse_look() && (action == Action::ClearSelection || self.keymap.is_crouch_chord(action)) {
+            let crouching = alt && self.keymap.is_crouch_chord(action);
+            if editor.camera.mouse_look() && (action == Action::ClearSelection || crouching) {
                 continue;
             }
             self.dispatch(action, editor);
