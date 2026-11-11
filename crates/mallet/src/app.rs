@@ -75,6 +75,9 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleShowGrid,
     Action::SelectionTool,
     Action::CameraTool,
+    Action::MagnifyTool,
+    Action::PreviousCamera,
+    Action::NextCamera,
     Action::BlockTool,
     Action::EntityTool,
     Action::TextureTool,
@@ -238,6 +241,8 @@ pub struct MalletApp {
     arch: brush_tools::ArchDialog,
     /// Go to Brush Number, Go to Coordinates and Show Information.
     map_dialogs: map_dialogs::MapDialogs,
+    /// The Camera tool's drag in a 2D view, if any.
+    camera_drag: Option<camera_tool::CameraDrag>,
 }
 
 impl MalletApp {
@@ -281,6 +286,7 @@ impl MalletApp {
             hollow: brush_tools::HollowDialog::default(),
             arch: brush_tools::ArchDialog::default(),
             map_dialogs: map_dialogs::MapDialogs::default(),
+            camera_drag: None,
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -546,6 +552,7 @@ impl MalletApp {
                     }
                     ui.separator();
                     menu_item(ui, &self.keymap, "Selection Tool", Action::SelectionTool, &mut chosen);
+                    menu_item(ui, &self.keymap, "Magnify Tool", Action::MagnifyTool, &mut chosen);
                     menu_item(ui, &self.keymap, "Camera Tool", Action::CameraTool, &mut chosen);
                     menu_item(ui, &self.keymap, "Block Tool", Action::BlockTool, &mut chosen);
                     menu_item(ui, &self.keymap, "Entity Tool", Action::EntityTool, &mut chosen);
@@ -990,7 +997,7 @@ impl MalletApp {
                 }
                 Tool::Overlay => editor.overlay_tool_click(origin, direction, pointer.modifiers.ctrl),
                 Tool::Decal => editor.decal_tool_click(origin, direction),
-                Tool::Block | Tool::Clip | Tool::Camera => {}
+                Tool::Block | Tool::Clip | Tool::Camera | Tool::Magnify => {}
             }
         }
         if editor.tool == Tool::Camera && !looking {
@@ -1226,7 +1233,7 @@ impl MalletApp {
                 view_keys(ui, view_index, editor);
             }
             // Zooming here, before the view is cloned below, lets this frame draw the new zoom.
-            if editor.tool == Tool::Camera && !space_held {
+            if editor.tool == Tool::Magnify && !space_held {
                 editor.views[view_index].handle_click_zoom(response, rect, zoom_step);
             }
         }
@@ -1266,6 +1273,7 @@ impl MalletApp {
             }
             None => view.draw(canvas, rect, &editor.scene, editor.shown_grid(), response.hovered(), &overlay),
         }
+        camera_tool::draw_cameras(&painter, &view, rect, editor);
         if let Some(position) = response.hover_pos() {
             let point = snap(view.to_world(rect, position), editor.snap_step());
             self.cursor = Some(point);
@@ -1375,7 +1383,14 @@ impl MalletApp {
                 bounds,
             },
             (
-                Tool::Entity | Tool::Texture | Tool::Clip | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera,
+                Tool::Entity
+                | Tool::Texture
+                | Tool::Clip
+                | Tool::Vertex
+                | Tool::Overlay
+                | Tool::Decal
+                | Tool::Camera
+                | Tool::Magnify,
                 ..,
             ) => Drag::Marquee { view: index, start },
             (Tool::Block, ..) => Drag::NewBlock {
@@ -1483,7 +1498,11 @@ impl MalletApp {
     ) {
         let grid = editor.snap_step();
         if editor.tool == Tool::Camera {
-            // The Camera tool's clicks zoom the view, which view_slot handled already.
+            self.camera_tool_2d(index, view, rect, response, editor, pointer);
+            return;
+        }
+        if editor.tool == Tool::Magnify {
+            // The Magnify tool's clicks zoom the view, which view_slot handled already.
             return;
         }
         if editor.tool == Tool::Vertex {
@@ -2326,10 +2345,18 @@ fn run(action: Action, editor: &mut Editor) {
         Action::SelectionTool => editor.set_tool(Tool::Select),
         Action::CameraTool => {
             editor.set_tool(Tool::Camera);
-            editor.message =
-                "Camera tool: drag in a 3D view to look (left) or move (right); click a 2D view to zoom in, right-click to zoom out"
-                    .to_owned();
+            editor.message = "Camera tool: drag in a 2D view to place the camera (Shift adds one); Page Up and Page Down switch cameras; drag in 3D to look (left) or move (right)"
+                .to_owned();
         }
+        Action::MagnifyTool => {
+            editor.set_tool(Tool::Magnify);
+            editor.message = "Magnify tool: click a 2D view to zoom in, right-click to zoom out".to_owned();
+        }
+        Action::PreviousCamera | Action::NextCamera if editor.tool == Tool::Camera => {
+            editor.step_camera(action == Action::NextCamera);
+        }
+        Action::PreviousCamera | Action::NextCamera => {}
+        Action::DeleteSelection if editor.tool == Tool::Camera => report(editor.delete_camera(), editor),
         Action::BlockTool => editor.set_tool(Tool::Block),
         Action::EntityTool => editor.set_tool(Tool::Entity),
         Action::TextureTool => editor.set_tool(Tool::Texture),
@@ -2378,7 +2405,13 @@ fn run(action: Action, editor: &mut Editor) {
                 Tool::Block => editor.commit_block().map(|_| ()),
                 Tool::Entity => editor.commit_entity().map(|_| ()),
                 Tool::Clip => editor.apply_clip().map(|_| ()),
-                Tool::Select | Tool::Texture | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera => Ok(()),
+                Tool::Select
+                | Tool::Texture
+                | Tool::Vertex
+                | Tool::Overlay
+                | Tool::Decal
+                | Tool::Camera
+                | Tool::Magnify => Ok(()),
             };
             if let Err(error) = result {
                 editor.message = error;

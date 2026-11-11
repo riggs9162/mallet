@@ -1817,6 +1817,7 @@ fn status_json(editor: &Editor) -> Value {
         "tool": match editor.tool {
             Tool::Select => "selection",
             Tool::Camera => "camera",
+            Tool::Magnify => "magnify",
             Tool::Block => "block",
             Tool::Entity => "entity",
             Tool::Texture => "texture",

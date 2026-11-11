@@ -70,8 +70,8 @@ The tools a mapper reaches for every few minutes.
 - [x] Center Views on Selection (Ctrl+E) and Center 3D View on Selection (Ctrl+Shift+E). Hammer
 - [x] 3D view clipping plane on 1 and 2. Hammer
 - [x] Go to Coordinates and Go to Brush Number (Ctrl+Shift+G). Hammer
-- [ ] Camera tool (Shift+C): several cameras, switched with Page Up and Page Down. Hammer
-- [ ] Magnify tool (Shift+G). Hammer
+- [x] Camera tool (Shift+C): several cameras, switched with Page Up and Page Down. Hammer
+- [x] Magnify tool (Shift+G). Hammer
 - [ ] Drag select: Ctrl+click and drag selects everything under the crosshair. H++
 - [ ] Selection size information and selected brush numbers in the status bar. Hammer
 - [ ] Local or global gizmo space (Ctrl+J), gizmo axis locks, and X cycling box, gizmo and none. H++

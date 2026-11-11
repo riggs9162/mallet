@@ -56,6 +56,42 @@ impl Vmf {
         set_pair(block, "look", format_bracketed(camera.look));
     }
 
+    /// Every valid camera of the `cameras` block, in order, with the index of the active
+    /// one among them when it is valid.
+    pub fn cameras(&self) -> (Vec<SavedCamera>, Option<usize>) {
+        let Some(cameras) = self.block("cameras") else {
+            return (Vec::new(), None);
+        };
+        let list: Vec<SavedCamera> = cameras
+            .blocks_named("camera")
+            .filter_map(|camera| {
+                Some(SavedCamera {
+                    position: parse_bracketed(camera.get("position")?)?,
+                    look: parse_bracketed(camera.get("look")?)?,
+                })
+            })
+            .collect();
+        let active = cameras
+            .get("activecamera")
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|active| *active < list.len());
+        (list, active)
+    }
+
+    /// Replaces the `cameras` block with these cameras, `active` being the one the 3D
+    /// view shows, as Hammer's Camera tool keeps several.
+    pub fn set_cameras(&mut self, cameras: &[SavedCamera], active: usize) {
+        let block = self.block_mut_or_insert("cameras", &["cordons"], true);
+        block.items.clear();
+        set_pair(block, "activecamera", active.min(cameras.len().saturating_sub(1)).to_string());
+        for camera in cameras {
+            let mut entry = Block::new("camera");
+            set_pair(&mut entry, "position", format_bracketed(camera.position));
+            set_pair(&mut entry, "look", format_bracketed(camera.look));
+            block.push_block(entry);
+        }
+    }
+
     /// The grid size Hammer saved, from `viewsettings`.
     pub fn grid_spacing(&self) -> Option<f64> {
         self.block("viewsettings")?
@@ -241,5 +277,15 @@ cameras
         assert_eq!(cameras.len(), 2);
         assert_eq!(cameras[0].get("position"), Some("[1 2 3]"));
         assert_eq!(cameras[1].get("position"), Some("[100 100 100]"));
+        let (list, active) = vmf.cameras();
+        assert_eq!((list.len(), active), (2, Some(1)));
+        let mut more = list.clone();
+        more.push(SavedCamera {
+            position: DVec3::splat(-5.0),
+            look: DVec3::ZERO,
+        });
+        vmf.set_cameras(&more, 2);
+        assert_eq!(vmf.cameras(), (more, Some(2)));
+        assert_eq!(vmf.active_camera().unwrap().position, DVec3::splat(-5.0));
     }
 }

@@ -35,6 +35,12 @@ pub enum Action {
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,
+    /// Switch to the Magnify tool.
+    MagnifyTool,
+    /// With the Camera tool, show the previous camera.
+    PreviousCamera,
+    /// With the Camera tool, show the next camera.
+    NextCamera,
     BlockTool,
     EntityTool,
     TextureTool,
@@ -301,6 +307,9 @@ impl KeyMap {
                 (Action::ToggleShowGrid, Chord::shift(Key::R)),
                 (Action::SelectionTool, Chord::shift(Key::S)),
                 (Action::CameraTool, Chord::shift(Key::C)),
+                (Action::MagnifyTool, Chord::shift(Key::G)),
+                (Action::PreviousCamera, Chord::key(Key::PageUp)),
+                (Action::NextCamera, Chord::key(Key::PageDown)),
                 (Action::BlockTool, Chord::shift(Key::B)),
                 (Action::EntityTool, Chord::shift(Key::E)),
                 (Action::TextureTool, Chord::shift(Key::A)),

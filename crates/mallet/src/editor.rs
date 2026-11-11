@@ -35,6 +35,7 @@ use crate::view3d::Camera3D;
 
 mod agent;
 mod brush_entities;
+mod cameras;
 mod carve;
 mod clipboard;
 mod hollow;
@@ -62,8 +63,11 @@ pub enum Tool {
     /// Hammer's Selection tool (Shift+S).
     Select,
     /// Hammer's Camera tool (Shift+C): drag in a 3D view to look around or move the
-    /// camera, and click in a 2D view to zoom in, or right-click to zoom out.
+    /// camera, and in a 2D view place, add, move and aim the map's cameras.
     Camera,
+    /// Hammer's Magnify tool (Shift+G): click a 2D view to zoom in, or right-click to zoom
+    /// out.
+    Magnify,
     /// Hammer's Block tool (Shift+B).
     Block,
     /// Hammer's Entity tool (Shift+E).
@@ -1111,9 +1115,14 @@ impl Editor {
     pub fn handle_box(&self) -> Option<Bounds> {
         match self.tool {
             Tool::Block => self.overlay.block,
-            Tool::Entity | Tool::Texture | Tool::Clip | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera => {
-                None
-            }
+            Tool::Entity
+            | Tool::Texture
+            | Tool::Clip
+            | Tool::Vertex
+            | Tool::Overlay
+            | Tool::Decal
+            | Tool::Camera
+            | Tool::Magnify => None,
             Tool::Select => {
                 let bounds = self.scene.selection_bounds();
                 (!bounds.is_empty()).then(|| self.overlay.transform.map_or(bounds, |remap| remap.map_bounds(&bounds)))

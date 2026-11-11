@@ -48,7 +48,11 @@ const PALETTE: [PaletteEntry; 12] = [
         "Selection tool",
         PaletteKind::Tool(Tool::Select, Action::SelectionTool),
     ),
-    (icon::MAGNIFYING_GLASS_PLUS, "Magnify tool", PaletteKind::Missing),
+    (
+        icon::MAGNIFYING_GLASS_PLUS,
+        "Magnify tool",
+        PaletteKind::Tool(Tool::Magnify, Action::MagnifyTool),
+    ),
     (
         icon::CAMERA,
         "Camera tool",
