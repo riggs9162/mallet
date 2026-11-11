@@ -236,6 +236,9 @@ pub struct MaterialLoader {
 #[derive(Debug, Default, Clone)]
 struct Properties {
     texture: Option<String>,
+    /// The second texture of a blended material (`$basetexture2`), which displacements
+    /// fade into by their vertex alpha.
+    second_texture: Option<String>,
     translucent: Option<bool>,
     additive: Option<bool>,
     alpha_test: Option<bool>,
@@ -404,6 +407,10 @@ impl Properties {
                 .get("%tooltexture")
                 .or_else(|| block.get("$basetexture"))
                 .map(|name| normalize(name).trim_end_matches(".vtf").to_owned()),
+            second_texture: block
+                .get("$basetexture2")
+                .map(|name| normalize(name).trim_end_matches(".vtf").to_owned())
+                .filter(|name| !name.is_empty()),
             translucent: flag("$translucent"),
             additive: flag("$additive"),
             alpha_test: flag("$alphatest"),
@@ -455,6 +462,7 @@ impl Properties {
     fn overridden_by(self, other: Self) -> Self {
         Self {
             texture: other.texture.or(self.texture),
+            second_texture: other.second_texture.or(self.second_texture),
             translucent: other.translucent.or(self.translucent),
             additive: other.additive.or(self.additive),
             alpha_test: other.alpha_test.or(self.alpha_test),
@@ -792,6 +800,15 @@ impl MaterialLoader {
         (material, mips)
     }
 
+    /// The second texture of a blended material (`$basetexture2`), as
+    /// [`MaterialLoader::load_mips`] loads the first; `None` when the material has none.
+    /// Displacements show it where their vertex alpha is high.
+    pub fn load_second_mips(&self, material: &str, blocks: bool) -> Option<Mips> {
+        let properties = self.properties(&material_key(material), 0)?;
+        let file = self.texture_file(properties.second_texture.as_ref()?)?;
+        vtf::load_mips(|start, length| file.read(start, length), MAX_TEXTURE_SIDE, blocks).ok()
+    }
+
     /// Animation frame `frame` of a sprite material's texture, as [`MaterialLoader::load_mips`]
     /// loads the first. `None` for a frame the texture does not have, and for materials
     /// that are not sprites, whose frames the editor never shows.
@@ -1044,6 +1061,20 @@ mod tests {
 
         let above = properties_of("LightmappedGeneric { \"$abovewater\" \"1\" }").material();
         assert_eq!(above.water.map(|water| water.tint), Some(DEFAULT_WATER_TINT));
+    }
+
+    #[test]
+    fn blended_materials_name_their_second_texture() {
+        let blend = properties_of(
+            "WorldVertexTransition { \"$basetexture\" \"nature/grass\" \"$basetexture2\" \"Nature/Dirt.vtf\" }",
+        );
+        assert_eq!(blend.texture.as_deref(), Some("nature/grass"));
+        assert_eq!(blend.second_texture.as_deref(), Some("nature/dirt"));
+        let patched = Properties::default().overridden_by(blend);
+        assert_eq!(patched.second_texture.as_deref(), Some("nature/dirt"));
+        assert!(properties_of("LightmappedGeneric { \"$basetexture\" \"brick/brick\" }")
+            .second_texture
+            .is_none());
     }
 
     #[test]

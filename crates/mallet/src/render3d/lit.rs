@@ -721,7 +721,9 @@ struct LuxelFace {
 
 impl LuxelFace {
     /// Every face of the scene the game lightmaps: faces with a lit material that is not
-    /// sky, nodraw or a tool texture. Returns them and how many faces the scene has.
+    /// sky, nodraw or a tool texture. Displacements are left out: their luxels would lie
+    /// on the flat face, so they are lit per pixel where their surface is. Returns them
+    /// and how many faces the scene has.
     fn gather(scene: &Scene, renderer: &Renderer3D) -> (Vec<Self>, usize) {
         let total = scene.meshes.iter().map(|mesh| mesh.faces.len()).sum::<usize>();
         let mut faces = Vec::new();
@@ -730,7 +732,8 @@ impl LuxelFace {
                 continue;
             };
             for (index, face) in mesh.faces.iter().enumerate() {
-                let Some(material) = face.material.as_ref().filter(|_| !face.decal) else {
+                let lightmapped = !face.decal && face.displacement.is_none();
+                let Some(material) = face.material.as_ref().filter(|_| lightmapped) else {
                     continue;
                 };
                 let texture = renderer.texture_for(&material_key(material));

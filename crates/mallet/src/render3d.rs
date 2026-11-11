@@ -27,6 +27,7 @@ use eframe::wgpu::{self, util::DeviceExt};
 use glam::{DVec3, Mat4, Vec3, Vec4};
 use mallet_content::vtf::{Encoding, Level, Mips};
 use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, Water};
+use mallet_vmf::displacement::Surface as DisplacementSurface;
 
 use crate::lighting::TextureLights;
 use crate::scene::{
@@ -104,6 +105,14 @@ struct FaceVertex {
 
 /// The face number of a face the lighting preview keeps nothing for.
 const NO_FACE: u32 = u32::MAX;
+/// What a material's key ends with to name its second texture (`$basetexture2`), which
+/// displacements fade into by their alpha.
+const BLEND_SUFFIX: &str = "#blend";
+
+/// The key of the second texture of the material with key `key`.
+fn blend_key(key: &str) -> String {
+    format!("{key}{BLEND_SUFFIX}")
+}
 /// How far the pieces of overlays and decals are lifted off the faces they lie on, in
 /// world units. The blended pipelines' depth bias does the rest at a distance.
 const DECAL_LIFT: f64 = 0.0625;
@@ -1637,11 +1646,20 @@ impl Renderer3D {
             .iter()
             .filter_map(|mesh| models.get(&mesh.model.as_ref()?.key)?.as_ref())
             .flat_map(|model| model.meshes.iter().map(|mesh| mesh.material.as_str()));
+        let blends: Vec<String> = scene
+            .meshes
+            .iter()
+            .flat_map(|mesh| &mesh.faces)
+            .filter(|face| face.displacement.is_some())
+            .filter_map(|face| face.material.as_deref())
+            .map(|material| blend_key(&material_key(material)))
+            .collect();
         let wanted: HashSet<String> = scene
             .meshes
             .iter()
             .flat_map(|mesh| &mesh.faces)
             .filter_map(|face| face.material.as_deref())
+            .chain(blends.iter().map(String::as_str))
             .chain(model_materials)
             .chain(
                 scene
@@ -1670,7 +1688,8 @@ impl Renderer3D {
     }
 
     /// Loads the textures of `keys` on background threads. A key such as
-    /// `sprites/fire#3` names an animation frame of a sprite.
+    /// `sprites/fire#3` names an animation frame of a sprite, and one such as
+    /// `nature/blendgrass#blend` the second texture of a blended material.
     fn spawn_loads(&mut self, keys: Vec<String>, loader: MaterialLoader) {
         self.loading.extend(keys.iter().cloned());
         let (sender, receiver) = mpsc::sync_channel(LOADED_QUEUE);
@@ -1686,6 +1705,15 @@ impl Renderer3D {
                 .name("mallet textures".to_owned())
                 .spawn(move || {
                     while let Some(key) = keys.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        if let Some(material) = key.strip_suffix(BLEND_SUFFIX) {
+                            let loaded = loader
+                                .load_second_mips(material, blocks)
+                                .map(|mips| (mips, MaterialFacts::opaque()));
+                            if sender.send((key.clone(), loaded)).is_err() {
+                                return;
+                            }
+                            continue;
+                        }
                         let loaded = match sprites::split_frame_key(key) {
                             Some((material, frame)) => sprites::load_frame(&loader, material, frame, blocks)
                                 .map(|mips| (mips, MaterialFacts::opaque())),
@@ -1791,9 +1819,11 @@ impl Renderer3D {
             // Follow the retexture steps from what was last drawn to now.
             let mut generation = faces.generation;
             let mut changed = Vec::new();
+            let mut previous = Vec::new();
             for step in &scene.retextures {
                 if step.from == generation {
                     changed.extend_from_slice(&step.meshes);
+                    previous.extend_from_slice(&step.previous);
                     generation = step.to;
                 }
             }
@@ -1802,6 +1832,7 @@ impl Renderer3D {
                     .iter()
                     .filter_map(|at| scene.meshes.get(*at))
                     .map(|mesh| chunk_cell(&mesh.bounds))
+                    .chain(previous.iter().map(chunk_cell))
                     .collect();
                 self.rebuild_cells(&mut faces, scene, &dirty);
                 faces.generation = scene.geometry_generation;
@@ -1864,8 +1895,13 @@ impl Renderer3D {
             return;
         };
         let uses_stale = |cell: &CellFaces| {
-            cell.by_texture.keys().any(|key| stale.contains(key))
-                || cell.translucent.iter().any(|face| stale.contains(&face.key))
+            cell.by_texture
+                .keys()
+                .any(|key| stale.contains(key) || stale.contains(&blend_key(key)))
+                || cell
+                    .translucent
+                    .iter()
+                    .any(|face| stale.contains(&face.key) || stale.contains(&blend_key(&face.key)))
         };
         let mut dirty: HashSet<[i32; 3]> = faces
             .cells
@@ -2007,6 +2043,9 @@ impl Renderer3D {
                     .as_deref()
                     .map_or_else(|| WHITE_KEY.to_owned(), material_key);
                 let texture = self.texture_for(&key);
+                if let Some(layer) = self.blend_layer(face, &key, texture, tint, highlight, remap, mesh.owner) {
+                    chunk.translucent.push(layer);
+                }
                 if face.decal || texture.alpha.see_through() {
                     let mut vertices = Vec::new();
                     triangulate(face, (id, texture), tint, highlight, remap, &mut vertices);
@@ -2028,6 +2067,45 @@ impl Renderer3D {
             }
         }
         chunks
+    }
+
+    /// The second layer of a displacement whose material blends two textures: its
+    /// triangles again with the second texture, each vertex as opaque as its alpha, drawn
+    /// over the first like a decal. `None` for other faces, for displacements without
+    /// alpha, and while the second texture is loading or when the material has none.
+    #[allow(clippy::too_many_arguments)]
+    fn blend_layer(
+        &self,
+        face: &SceneFace,
+        key: &str,
+        base: &GpuTexture,
+        tint: [f32; 3],
+        highlight: f32,
+        remap: Option<&Remap>,
+        owner: Option<Owner>,
+    ) -> Option<TranslucentFace> {
+        let surface = face.displacement.as_ref()?;
+        if surface.alphas.iter().all(|alpha| *alpha <= 0.0) {
+            return None;
+        }
+        let layer = blend_key(key);
+        if self.loading.contains(&layer) {
+            return None;
+        }
+        let second = self.textures.get(&layer)?.as_ref()?;
+        let mut vertices = Vec::new();
+        let look = Layer {
+            texture: second,
+            size: [base.width, base.height],
+            blend: true,
+        };
+        displacement_triangles(face, surface, (NO_FACE, look), tint, highlight, remap, &mut vertices);
+        if vertices.is_empty() {
+            return None;
+        }
+        let center = surface.bounds.center();
+        let center = remap.map_or(center, |remap| remap.apply(center));
+        Some(TranslucentFace::new(center.as_vec3(), layer, vertices, owner))
     }
 
     /// Puts every chunk's triangles into one vertex buffer, batched by texture. They are
@@ -2490,6 +2568,14 @@ fn triangulate(
         water,
         face: if face.decal { NO_FACE } else { id },
     };
+    if let Some(surface) = &face.displacement {
+        let look = Layer {
+            texture,
+            size: [texture.width, texture.height],
+            blend: false,
+        };
+        return displacement_triangles(face, surface, (id, look), tint, highlight, remap, out);
+    }
     let points = &face.vertices;
     if points.len() < 3 {
         return;
@@ -2504,6 +2590,73 @@ fn triangulate(
         out.push(vertex(points[0]));
         out.push(vertex(points[second]));
         out.push(vertex(points[third]));
+    }
+}
+
+/// How a layer of a displacement is drawn: its texture, the size its texture coordinates
+/// are divided by, which is the first texture's for both layers as in the game, and
+/// whether it is the second layer of a blended material.
+struct Layer<'a> {
+    texture: &'a GpuTexture,
+    size: [f32; 2],
+    blend: bool,
+}
+
+/// The triangles of a displacement, as [`triangulate`] makes those of a flat face: each
+/// vertex is shaded by its own normal and takes its texture coordinates from where it
+/// sits on the flat face. The second layer of a blended material gives every vertex
+/// its alpha as opacity, ignores the texture's own alpha, and leaves out triangles with
+/// no alpha at all.
+fn displacement_triangles(
+    face: &SceneFace,
+    surface: &DisplacementSurface,
+    (id, layer): (u32, Layer<'_>),
+    tint: [f32; 3],
+    highlight: f32,
+    remap: Option<&Remap>,
+    out: &mut Vec<FaceVertex>,
+) {
+    let color = [tint[0], tint[1], tint[2], 1.0];
+    let water = layer.texture.facts.water.map_or([0.0; 4], |water| {
+        [water.tint[0], water.tint[1], water.tint[2], water.reflectivity]
+    });
+    let coordinate = |point: DVec3, axis: &mallet_vmf::TexAxis, size: f32| {
+        let scale = if axis.scale == 0.0 { 1.0 } else { axis.scale };
+        ((point.dot(axis.axis) / scale + axis.offset) / f64::from(size)) as f32
+    };
+    let opaque = alpha_uniform(layer.texture.alpha);
+    let vertex = |index: usize| {
+        let normal = surface.normals[index];
+        let normal = remap.map_or(normal, |remap| {
+            remap.matrix.transform_vector3(normal).normalize_or(normal)
+        });
+        let point = surface.positions[index];
+        let alpha = if layer.blend {
+            [-1.0, ((surface.alphas[index] / 255.0) as f32).clamp(f32::EPSILON, 1.0)]
+        } else {
+            opaque
+        };
+        FaceVertex {
+            position: remap.map_or(point, |remap| remap.apply(point)).as_vec3().to_array(),
+            normal: normal.as_vec3().to_array(),
+            uv: [
+                coordinate(surface.flat[index], &face.uaxis, layer.size[0]),
+                coordinate(surface.flat[index], &face.vaxis, layer.size[1]),
+            ],
+            color,
+            highlight,
+            alpha,
+            water,
+            face: id,
+        }
+    };
+    for [a, b, c] in surface.triangles() {
+        if layer.blend && [a, b, c].iter().all(|index| surface.alphas[*index] <= 0.0) {
+            continue;
+        }
+        out.push(vertex(a));
+        out.push(vertex(b));
+        out.push(vertex(c));
     }
 }
 
@@ -2551,13 +2704,7 @@ fn selected_face_meshes(scene: &Scene) -> Vec<WireMesh> {
         .filter(|mesh| !mesh.selected && mesh.faces.iter().any(|face| face.selected))
         .map(|mesh| {
             let faces: Vec<SceneFace> = mesh.faces.iter().filter(|face| face.selected).cloned().collect();
-            let edges = faces
-                .iter()
-                .flat_map(|face| {
-                    let count = face.vertices.len();
-                    (0..count).map(move |index| [face.vertices[index], face.vertices[(index + 1) % count]])
-                })
-                .collect();
+            let edges = faces.iter().flat_map(SceneFace::edges).collect();
             WireMesh {
                 faces,
                 edges,

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use eframe::egui::Color32;
 use glam::{DMat3, DMat4, DVec2, DVec3};
 use mallet_content::{EntityClass, GameData, Model};
+use mallet_vmf::displacement::Surface;
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds, Plane};
 use mallet_vmf::light::MapLighting;
 use mallet_vmf::overlay::{self, Piece};
@@ -425,6 +426,25 @@ pub struct SceneFace {
     /// across the picture whatever the texture's size, and it is drawn over the brush
     /// face it lies on, blended by the picture's alpha, without a lightmap of its own.
     pub decal: bool,
+    /// The surface of a displacement face, which is drawn and picked in place of the flat
+    /// polygon in `vertices`. Its texture coordinates come from where each vertex sits on
+    /// the flat face, as the game's do.
+    pub displacement: Option<Arc<Surface>>,
+}
+
+impl SceneFace {
+    /// The face's edges: its displacement's triangles, or its polygon's sides.
+    pub fn edges(&self) -> Vec<[DVec3; 2]> {
+        match &self.displacement {
+            Some(surface) => surface.edges(),
+            None => {
+                let count = self.vertices.len();
+                (0..count)
+                    .map(|index| [self.vertices[index], self.vertices[(index + 1) % count]])
+                    .collect()
+            }
+        }
+    }
 }
 
 /// A face hit by a ray, for the texture tool.
@@ -520,6 +540,9 @@ pub struct Retexture {
     pub from: u64,
     pub to: u64,
     pub meshes: Vec<usize>,
+    /// Each mesh's bounds before the change, in the order of `meshes`, so a renderer
+    /// also rebuilds where a reshaped mesh was.
+    pub previous: Vec<Bounds>,
 }
 
 /// How many retexture steps a scene remembers; a renderer further behind rebuilds all.
@@ -904,6 +927,9 @@ impl Scene {
                 if mesh.sprite.is_some() || mesh.faces.iter().all(|face| face.side.is_none()) {
                     return false;
                 }
+                if let Some((distance, face)) = displacement_hit(mesh, from, direction) {
+                    return distance < length && drawn(&mesh.faces[face]);
+                }
                 ray_convex_face(from, direction, &mesh.planes).is_some_and(|(distance, plane)| {
                     distance < length && plane.and_then(|plane| mesh.faces.get(plane)).is_none_or(&drawn)
                 })
@@ -921,6 +947,9 @@ impl Scene {
                 if mesh.model.is_some() {
                     return Some((mesh, mesh_hit(mesh, origin, direction, models)?, None));
                 }
+                if let Some((distance, face)) = displacement_hit(mesh, origin, direction) {
+                    return Some((mesh, distance, Some(face)));
+                }
                 let (distance, plane) = ray_convex_face(origin, direction, &mesh.planes)?;
                 Some((mesh, distance, plane))
             })
@@ -933,9 +962,9 @@ impl Scene {
         })
     }
 
-    /// Rebuilds the meshes of brushes whose materials or texture alignment changed, keeping
-    /// everything else, and notes them in [`Scene::retextures`]. Returns `false` when a
-    /// brush has no mesh, so the caller should rebuild the whole scene.
+    /// Rebuilds the meshes of brushes whose materials, texture alignment or displacements
+    /// changed, keeping everything else, and notes them in [`Scene::retextures`]. Returns
+    /// `false` when a brush has no mesh, so the caller should rebuild the whole scene.
     pub fn retexture(&mut self, solids: &[Solid]) -> bool {
         let index: HashMap<u32, usize> = self
             .meshes
@@ -944,6 +973,7 @@ impl Scene {
             .filter_map(|(at, mesh)| Some((mesh.faces.first()?.solid?, at)))
             .collect();
         let mut changed = Vec::with_capacity(solids.len());
+        let mut previous = Vec::with_capacity(solids.len());
         for solid in solids {
             let Some(&at) = solid.id().and_then(|id| index.get(&id)) else {
                 return false;
@@ -952,8 +982,16 @@ impl Scene {
             let Some(mut mesh) = brush_mesh(solid, old.color, old.owner) else {
                 return false;
             };
+            if mesh.faces.len() != old.faces.len() {
+                return false;
+            }
             mesh.selected = old.selected;
-            mesh.first_face = old.first_face.filter(|_| mesh.faces.len() == old.faces.len());
+            mesh.first_face = old.first_face;
+            for (face, old_face) in mesh.faces.iter_mut().zip(&old.faces) {
+                face.selected = old_face.selected;
+            }
+            previous.push(old.bounds);
+            self.bounds.add_bounds(&mesh.bounds);
             self.meshes[at] = mesh;
             changed.push(at);
         }
@@ -963,6 +1001,7 @@ impl Scene {
             from,
             to: self.geometry_generation,
             meshes: changed,
+            previous,
         });
         if self.retextures.len() > MAX_RETEXTURES {
             self.retextures.remove(0);
@@ -984,7 +1023,11 @@ impl Scene {
         self.meshes
             .iter()
             .filter(|mesh| mesh.model.is_none() && !mesh.decal && mesh.faces.iter().any(|face| face.material.is_some()))
-            .filter_map(|mesh| ray_convex(origin, direction, &mesh.planes))
+            .filter_map(|mesh| {
+                displacement_hit(mesh, origin, direction)
+                    .map(|(distance, _)| distance)
+                    .or_else(|| ray_convex(origin, direction, &mesh.planes))
+            })
             .min_by(f64::total_cmp)
             .map(|distance| origin + direction * distance)
     }
@@ -997,17 +1040,26 @@ impl Scene {
             .iter()
             .filter(|mesh| mesh.model.is_none() && !mesh.decal && mesh.faces.iter().any(|face| face.side.is_some()))
             .filter_map(|mesh| {
+                if let Some((distance, face)) = displacement_hit(mesh, origin, direction) {
+                    return Some((mesh, distance, face));
+                }
                 let (distance, plane) = ray_convex_face(origin, direction, &mesh.planes)?;
                 Some((mesh, distance, plane?))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))?;
         let face = mesh.faces.get(plane)?;
+        let point = origin + direction * distance;
         let hit = FaceHit {
             side: face.side?,
             solid: face.solid?,
-            point: origin + direction * distance,
+            point,
         };
-        Some((hit, face.normal))
+        let normal = face
+            .displacement
+            .as_ref()
+            .and_then(|surface| Some(surface.normals[surface.nearest_vertex(point)?]))
+            .unwrap_or(face.normal);
+        Some((hit, normal))
     }
 
     /// The brush face nearest to a point and no further than `reach` from it, passing
@@ -1101,8 +1153,20 @@ fn mesh_hit(mesh: &WireMesh, origin: DVec3, direction: DVec3, models: &ModelCach
         .and_then(|instance| Some((instance, models.get(&instance.key)?.as_deref()?)));
     match loaded {
         Some((instance, model)) => ray_model(origin, direction, &mesh.bounds, instance, model),
-        None => ray_convex(origin, direction, &mesh.planes),
+        None => displacement_hit(mesh, origin, direction)
+            .map(|(distance, _)| distance)
+            .or_else(|| ray_convex(origin, direction, &mesh.planes)),
     }
+}
+
+/// The nearest displacement surface of a mesh that a ray meets: how far along the ray,
+/// and the face's index among the mesh's faces.
+fn displacement_hit(mesh: &WireMesh, origin: DVec3, direction: DVec3) -> Option<(f64, usize)> {
+    mesh.faces
+        .iter()
+        .enumerate()
+        .filter_map(|(index, face)| Some((face.displacement.as_ref()?.ray_hit(origin, direction)?, index)))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
 /// Distance along a ray to the nearest triangle of a placed model, from either side.
@@ -1228,31 +1292,55 @@ fn quantize(point: DVec3) -> [i64; 3] {
     (point * EDGE_QUANTIZE).round().as_i64vec3().to_array()
 }
 
+/// The mesh of a brush. A brush with displacements shows only them, as VBSP leaves its
+/// other faces out of the game: their surfaces are its faces, their triangles its edges,
+/// and rays are tested against the triangles instead of the brush's planes.
 fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<WireMesh> {
     let faces = solid_faces(solid);
     if faces.is_empty() {
         return None;
     }
+    let sides: Vec<&Side> = solid.sides().collect();
+    let surfaces: Vec<Option<Arc<Surface>>> = faces
+        .iter()
+        .map(|face| {
+            let displacement = sides.get(face.side)?.displacement()?;
+            Surface::new(&displacement, &face.vertices, face.plane.normal).map(Arc::new)
+        })
+        .collect();
+    let displaced = surfaces.iter().any(Option::is_some);
     let mut seen = HashSet::new();
     let mut edges = Vec::new();
-    for face in &faces {
-        let count = face.vertices.len();
-        for index in 0..count {
-            let a = face.vertices[index];
-            let b = face.vertices[(index + 1) % count];
-            let (qa, qb) = (quantize(a), quantize(b));
-            let key = if qa <= qb { (qa, qb) } else { (qb, qa) };
-            if seen.insert(key) {
-                edges.push([a, b]);
+    let mut add_edge = |[a, b]: [DVec3; 2]| {
+        let (qa, qb) = (quantize(a), quantize(b));
+        let key = if qa <= qb { (qa, qb) } else { (qb, qa) };
+        if seen.insert(key) {
+            edges.push([a, b]);
+        }
+    };
+    if displaced {
+        for surface in surfaces.iter().flatten() {
+            surface.edges().into_iter().for_each(&mut add_edge);
+        }
+    } else {
+        for face in &faces {
+            let count = face.vertices.len();
+            for index in 0..count {
+                add_edge([face.vertices[index], face.vertices[(index + 1) % count]]);
             }
         }
     }
-    let sides: Vec<&Side> = solid.sides().collect();
+    let mut bounds = faces_bounds(&faces);
+    for surface in surfaces.iter().flatten() {
+        bounds.add_bounds(&surface.bounds);
+    }
     // Faces and planes stay in the same order, so the plane a ray enters through names
     // the face it hit.
     let (scene_faces, planes): (Vec<SceneFace>, Vec<Plane>) = faces
         .iter()
-        .filter_map(|face| {
+        .zip(surfaces)
+        .filter(|(_, surface)| !displaced || surface.is_some())
+        .filter_map(|(face, surface)| {
             let side = sides.get(face.side)?;
             let scene_face = SceneFace {
                 material: Some(side.material.clone()),
@@ -1265,6 +1353,7 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
                 selected: false,
                 lightmap_scale: f64::from(side.lightmap_scale.unwrap_or(16).max(1)),
                 decal: false,
+                displacement: surface,
             };
             Some((scene_face, face.plane))
         })
@@ -1273,8 +1362,8 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
         color,
         edges,
         faces: scene_faces,
-        bounds: faces_bounds(&faces),
-        planes,
+        bounds,
+        planes: if displaced { Vec::new() } else { planes },
         owner,
         solid: solid.id(),
         selected: false,
@@ -1396,6 +1485,7 @@ fn decal_mesh(
             selected: false,
             lightmap_scale: 16.0,
             decal: true,
+            displacement: None,
         })
         .collect();
     WireMesh {
@@ -1470,6 +1560,7 @@ fn box_faces(bounds: &Bounds) -> Vec<SceneFace> {
                 selected: false,
                 lightmap_scale: 16.0,
                 decal: false,
+                displacement: None,
             }
         })
         .collect()
