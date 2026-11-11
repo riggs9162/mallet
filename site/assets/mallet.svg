@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Mallet</title>
+  <circle cx="128" cy="128" r="128" fill="#000"/>
+  <g fill="#fff" transform="rotate(45 128 128)">
+    <rect x="65.02" y="47.26" width="17.76" height="54.90" rx="5.65"/>
+    <rect x="173.22" y="47.26" width="17.76" height="54.90" rx="5.65"/>
+    <rect x="87.63" y="52.91" width="80.74" height="43.60" rx="4.84"/>
+    <rect x="118.31" y="96.51" width="19.38" height="109.00" rx="9.69"/>
+    <rect x="115.08" y="163.53" width="25.84" height="45.22" rx="12.92"/>
+  </g>
+</svg>

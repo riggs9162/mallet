@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mallet: a Hammer-style level editor for Source engine maps</title>
+  <meta name="description" content="Mallet is a free, Hammer-style level editor for Source engine VMF maps, written in Rust. Four viewports, Hammer++ tools and keys, a lighting preview, a compile window and an MCP server for AI agents. For Windows and Linux.">
+  <meta name="theme-color" content="#0e0e0e">
+  <link rel="canonical" href="https://riggs9162.github.io/mallet/">
+  <link rel="icon" href="assets/mallet.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Mallet">
+  <meta property="og:title" content="Mallet: a Hammer-style level editor for Source engine maps">
+  <meta property="og:description" content="Hammer's four viewports and Hammer++'s tools, a lighting preview, a compile window and an MCP server for AI agents. Free, for Windows and Linux.">
+  <meta property="og:url" content="https://riggs9162.github.io/mallet/">
+  <meta property="og:image" content="https://riggs9162.github.io/mallet/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the content</a>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="Mallet, back to the top">
+        <img src="assets/mallet.svg" alt="" width="28" height="28">
+        <span>Mallet</span>
+      </a>
+      <nav aria-label="Sections">
+        <ul class="nav-links">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#lighting">Lighting</a></li>
+          <li><a href="#agents">AI agents</a></li>
+          <li><a href="#roadmap">Roadmap</a></li>
+          <li><a href="https://github.com/riggs9162/mallet">GitHub</a></li>
+        </ul>
+      </nav>
+      <a class="button button-small nav-download" href="#download">Download</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero grid-bg" id="top" data-coords>
+      <div class="wrap hero-inner">
+        <div class="selection hero-lockup">
+          <span class="handle" data-at="nw"></span><span class="handle" data-at="n"></span><span class="handle" data-at="ne"></span>
+          <span class="handle" data-at="w"></span><span class="handle" data-at="e"></span>
+          <span class="handle" data-at="sw"></span><span class="handle" data-at="s"></span><span class="handle" data-at="se"></span>
+          <img class="hero-icon" src="assets/mallet.svg" alt="Mallet's icon: a white mallet on a black circle" width="132" height="132">
+          <div>
+            <h1>Mallet</h1>
+            <p class="tagline">A Hammer-style level editor for Source engine maps</p>
+          </div>
+        </div>
+
+        <p class="lede">
+          Hammer's four viewports and Hammer++'s tools and keys, in a fast editor written in Rust.
+          Mallet opens and saves VMF files without losing anything, lights your map the way VRAD will,
+          compiles it, and lets AI agents help.
+        </p>
+
+        <div class="cta">
+          <a class="button" href="#download" data-primary-download>Download for Windows</a>
+          <a class="button button-ghost" href="https://github.com/riggs9162/mallet">View the source</a>
+        </div>
+        <p class="meta" data-release-line>Free, for Windows and Linux.</p>
+      </div>
+      <div class="statusbar" aria-hidden="true">
+        <span>Grid: 16</span>
+        <span>Snap: on</span>
+        <span data-coord-readout>x 0 &nbsp;y 0</span>
+      </div>
+    </section>
+
+    <section class="shot-section">
+      <div class="wrap">
+        <figure class="viewports">
+          <div class="viewports-frame">
+            <img src="assets/four-views.webp" width="2264" height="1248" alt="Mallet's four viewports showing Half-Life 2's d1_trainstation_02: the station hall textured in 3D, and the map's brushes and entities as wireframe in the top, front and side views" fetchpriority="high">
+            <span class="vp-label" style="left:0;top:0">3D Textured</span>
+            <span class="vp-label" style="left:50%;top:0">Top (x/y)</span>
+            <span class="vp-label" style="left:0;top:50%">Front (y/z)</span>
+            <span class="vp-label" style="left:50%;top:50%">Side (x/z)</span>
+          </div>
+          <figcaption>Half-Life 2's <code>d1_trainstation_02</code> in Mallet's four viewports.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="wrap">
+        <p class="eyebrow">Features</p>
+        <h2>Everything you reach for in Hammer, where you expect it</h2>
+        <p class="section-lede">
+          The window follows Hammer++: menus over an icon toolbar, map tabs, the tool palette on the left,
+          four viewports and the object panel on the right. Keys follow Hammer++'s defaults, so your hands
+          already know it.
+        </p>
+
+        <ul class="features">
+          <li class="card selectable">
+            <h3>Lossless VMF</h3>
+            <p>Open a VMF and save it again without losing anything, so every Source tool still reads what Mallet writes.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Selection, Block and Entity tools</h3>
+            <p>Scale, rotate and skew handles in the 2D views, and a Hammer++-style move, rotate and scale gizmo in 3D. Primitives include wedges, cylinders, spikes, spheres and arches.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Clipping and vertex editing</h3>
+            <p>Two- and three-point clipping, vertex and edge dragging with grid snapping, face splitting, Carve and Make Hollow.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Textures from every mounted game</h3>
+            <p>A texture browser that loads every mounted game's materials, and Hammer++'s Face Edit Sheet with Lift, Apply, Justify and texture lock.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Models, textured in 3D</h3>
+            <p>Props show their real models, skins and scales. The model browser has thumbnails, a sidebar of games and addons, and a preview you can turn.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Overlays and decals as the game draws them</h3>
+            <p>Posters, stains and graffiti lie on the faces they cover, cut to their shape, and ride along with texture lock.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Object Properties from your FGD</h3>
+            <p>Keyvalues, flags and outputs driven by the game's FGD, with face pickers and Paste Special for copies, spirals and numbered names.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Compile without leaving</h3>
+            <p>Hammer's Run Map dialog, plus a CompilePal-style window with presets for VBSP, VVIS, VRAD, cubemaps and BSPZip. Leaks show as a line through the map.</p>
+          </li>
+          <li class="card selectable">
+            <h3>Tabs that keep their place</h3>
+            <p>Every map tab has its own views, camera, selection and undo history. Copy between maps with fresh ids and kept names.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="lighting">
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">3D Lighting Preview</p>
+          <h2>See the light before you compile</h2>
+          <p>
+            Switch the camera to 3D Lighting Preview and Mallet lights the map with every Source light
+            entity, following VRAD's own rules: colours and brightness, falloff, spotlight cones,
+            sunlight through sky faces, sky light and shadows.
+          </p>
+          <p>
+            Drag across the picture to compare the textured view with the lit one.
+          </p>
+        </div>
+        <figure class="compare" data-compare>
+          <img src="assets/lighting.webp" width="1131" height="623" alt="The station hall lit by the lighting preview: sunlight pours in through the windows and casts shadows" loading="lazy">
+          <div class="compare-top">
+            <img src="assets/textured.webp" width="1131" height="623" alt="The same view of the station hall in the plain textured view" loading="lazy">
+          </div>
+          <span class="vp-label">3D Textured</span>
+          <span class="vp-label vp-label-right">3D Lighting Preview</span>
+          <input class="compare-range" type="range" min="0" max="100" value="50" aria-label="How much of the textured view to show">
+          <span class="compare-line" aria-hidden="true"></span>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="format">
+      <div class="wrap split split-reverse">
+        <div>
+          <p class="eyebrow">The .mallet format</p>
+          <h2>Big maps open fast</h2>
+          <p>
+            Save as VMF for every Source tool, or as <code>.mallet</code>, Mallet's own binary format. It holds
+            exactly the same map, but stores planes and texture axes as numbers and every repeated
+            string once. Compiling a <code>.mallet</code> map writes a VMF copy for the compilers first.
+          </p>
+        </div>
+        <dl class="stats">
+          <div class="stat selectable">
+            <dt>On disk</dt>
+            <dd><span class="stat-big">2.8 MB</span> <span class="stat-small">for a 28.5 MB VMF</span></dd>
+          </div>
+          <div class="stat selectable">
+            <dt>Opening</dt>
+            <dd><span class="stat-big">3&times;</span> <span class="stat-small">faster than the VMF</span></dd>
+          </div>
+          <div class="stat selectable">
+            <dt>Saving</dt>
+            <dd><span class="stat-big">4&times;</span> <span class="stat-small">faster than the VMF</span></dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="agents">
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">AI agents</p>
+          <h2>An editor that agents can use too</h2>
+          <p>
+            While Mallet runs, its built-in MCP server lets AI agents inspect and edit the map, compile it
+            and take screenshots. The screenshots on this page were taken that way.
+          </p>
+          <p>
+            Agents work in their own view: their own tab, camera, grid and selection. Their edits show in
+            your viewports straight away, while your camera stays where you left it.
+          </p>
+        </div>
+        <div class="code-block selectable">
+          <div class="code-title">.mcp.json</div>
+<pre><code>{
+  "mcpServers": {
+    "mallet": {
+      "type": "http",
+      "url": "http://127.0.0.1:7414/mcp"
+    }
+  }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="section grid-bg" id="download">
+      <div class="wrap">
+        <p class="eyebrow">Download</p>
+        <h2>Get Mallet</h2>
+        <p class="section-lede" data-release-summary>Each release has a Windows program and a Linux build.</p>
+
+        <div class="downloads">
+          <div class="card download selectable" data-os="windows">
+            <h3>Windows</h3>
+            <p>One program, nothing to install. 64-bit Windows.</p>
+            <a class="button" href="https://github.com/riggs9162/mallet/releases/latest" data-asset="windows-x64.exe">Download for Windows</a>
+            <p class="small"><a href="https://github.com/riggs9162/mallet/releases/latest" data-asset="windows-x64.exe.sha256">SHA-256 checksum</a></p>
+          </div>
+          <div class="card download selectable" data-os="linux">
+            <h3>Linux</h3>
+            <p>x86-64, glibc 2.35 or later, X11 or Wayland. Needs a Vulkan driver.</p>
+            <a class="button" href="https://github.com/riggs9162/mallet/releases/latest" data-asset="linux-x64.tar.gz">Download for Linux</a>
+            <p class="small"><a href="https://github.com/riggs9162/mallet/releases/latest" data-asset="linux-x64.tar.gz.sha256">SHA-256 checksum</a></p>
+          </div>
+          <div class="card download selectable">
+            <h3>From source</h3>
+            <p>With a recent Rust toolchain:</p>
+<pre class="inline-code"><code>git clone https://github.com/riggs9162/mallet
+cd mallet
+cargo run --release -p mallet</code></pre>
+          </div>
+        </div>
+
+        <div class="getting-started">
+          <h3>First start</h3>
+          <ol>
+            <li>Mallet looks for Garry's Mod, Half-Life 2, the Source SDK Base 2013 games or Counter-Strike: Source in your Steam libraries. Pick another with <kbd>Tools</kbd> &rsaquo; <kbd>Game Folder...</kbd>, the folder that holds <code>gameinfo.txt</code>.</li>
+            <li>Open a map with <kbd>File</kbd> &rsaquo; <kbd>Open</kbd>, or drop a <code>.vmf</code> or <code>.mallet</code> file onto the window.</li>
+            <li>Press <kbd>F9</kbd> to compile with the game's own tools. On Linux, install the Tools++ compilers (<code>vbsp++</code>, <code>vvis++</code>, <code>vrad++</code>) and Mallet finds them on your <code>PATH</code>.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap">
+      <div class="wrap">
+        <p class="eyebrow">Roadmap</p>
+        <h2>Where Mallet is going</h2>
+        <p class="section-lede">
+          Mallet is a work in progress, working towards everything Hammer and Hammer++ do.
+          Displacements are next. Progress below is read live from the
+          <a href="https://github.com/riggs9162/mallet/blob/main/docs/ROADMAP.md">roadmap</a>.
+        </p>
+        <ol class="milestones" data-roadmap>
+          <li class="milestone"><span class="milestone-name">Loading the roadmap...</span></li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand">
+        <img src="assets/mallet.svg" alt="" width="24" height="24">
+        <span>Mallet</span>
+      </div>
+      <p>
+        Mallet is not made by or affiliated with Valve. Half-Life 2, Source and Hammer are Valve's.
+        Screenshots show Valve's published Half-Life 2 map sources.
+      </p>
+      <ul class="footer-links">
+        <li><a href="https://github.com/riggs9162/mallet">Source code</a></li>
+        <li><a href="https://github.com/riggs9162/mallet/releases">Releases</a></li>
+        <li><a href="https://github.com/riggs9162/mallet/issues">Report a problem</a></li>
+        <li><a href="https://github.com/riggs9162/mallet/tree/main/branding">Brand assets</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>
