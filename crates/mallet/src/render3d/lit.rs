@@ -584,7 +584,7 @@ impl Casters {
         for cell in renderer.faces.iter().flat_map(|faces| faces.cells.values()) {
             for (texture_key, vertices) in &cell.by_texture {
                 let texture = renderer.texture_for(texture_key);
-                let passes = texture.surface == Surface::Tool || matches!(texture.alpha, AlphaMode::Blend(_));
+                let passes = texture.surface == Surface::Tool || texture.alpha.see_through();
                 if texture_key == WHITE_KEY || passes {
                     continue;
                 }
@@ -2788,7 +2788,7 @@ impl LitState {
             pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
             for (material, range) in &model.meshes {
                 let texture = renderer.texture_for(material);
-                if matches!(texture.alpha, AlphaMode::Blend(_)) != translucent || hidden(material) {
+                if texture.alpha.see_through() != translucent || hidden(material) {
                     continue;
                 }
                 pass.set_bind_group(1, &texture.bind_group, &[]);
@@ -3425,7 +3425,7 @@ fn draw_casters(
 
 /// Whether a texture's faces block light: all but sky, tool and translucent ones.
 fn blocks(texture: &GpuTexture) -> bool {
-    !matches!(texture.surface, Surface::Sky | Surface::Tool) && !matches!(texture.alpha, AlphaMode::Blend(_))
+    !matches!(texture.surface, Surface::Sky | Surface::Tool) && !texture.alpha.see_through()
 }
 
 /// Draws one whole shadow map layer from `matrix`.

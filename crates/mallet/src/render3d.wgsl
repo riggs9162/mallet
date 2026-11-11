@@ -7,7 +7,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(0) var face_texture: texture_2d<f32>;
 @group(1) @binding(1) var face_sampler: sampler;
-// x: alpha-test reference (0 for none); y: blend opacity (0 for opaque). Used by models,
+// x: alpha-test reference; y: opacity, as `premultiplied` reads them. Used by models,
 // whose vertices are shared by many materials.
 @group(1) @binding(2) var<uniform> material_alpha: vec4<f32>;
 
@@ -42,7 +42,15 @@ fn vs_face(input: FaceIn) -> FaceOut {
     return out;
 }
 
-// alpha.x is the alpha-test reference (0 for none); alpha.y the blend opacity (0 for opaque).
+// Colour multiplied by opacity, with alpha the share of what is behind that is hidden:
+// none for added materials. alpha.x is the alpha-test reference (0 for none, below 0 when
+// the texture's alpha is ignored); alpha.y the opacity (0 for opaque, below 0 for added).
+fn premultiplied(rgb: vec3<f32>, coverage: f32, alpha: vec2<f32>) -> vec4<f32> {
+    let texture_alpha = select(coverage, 1.0, alpha.x < 0.0);
+    let opacity = select(1.0, texture_alpha * abs(alpha.y), alpha.y != 0.0);
+    return vec4<f32>(rgb * opacity, select(opacity, 0.0, alpha.y < 0.0));
+}
+
 @fragment
 fn fs_face(input: FaceOut) -> @location(0) vec4<f32> {
     let base = textureSample(face_texture, face_sampler, input.uv) * input.color;
@@ -50,8 +58,7 @@ fn fs_face(input: FaceOut) -> @location(0) vec4<f32> {
         discard;
     }
     let rgb = mix(base.rgb, vec3<f32>(1.0, 0.0, 0.0), input.highlight);
-    let opacity = select(1.0, base.a * input.alpha.y, input.alpha.y > 0.0);
-    return vec4<f32>(rgb, opacity);
+    return premultiplied(rgb, base.a, input.alpha);
 }
 
 struct ModelIn {

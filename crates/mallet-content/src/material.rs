@@ -30,6 +30,18 @@ pub enum AlphaMode {
     /// Blended over what is behind, with the texture's alpha times this opacity
     /// (`$translucent`, or `$alpha` below 1).
     Blend(f32),
+    /// Added onto what is behind (`$additive`), so black is clear and bright parts glow,
+    /// scaled by `opacity` and, when `texture_alpha` is set (`$translucent` as well), by
+    /// the texture's alpha.
+    Add { opacity: f32, texture_alpha: bool },
+}
+
+impl AlphaMode {
+    /// Whether the material lets what is behind it show through, blended or added, so
+    /// its faces are drawn after the rest, back to front, without hiding what follows.
+    pub fn see_through(self) -> bool {
+        matches!(self, Self::Blend(_) | Self::Add { .. })
+    }
 }
 
 /// What a material's faces are to the compilers, from its `%compile` keys.
@@ -125,6 +137,7 @@ pub struct MaterialLoader {
 struct Properties {
     texture: Option<String>,
     translucent: Option<bool>,
+    additive: Option<bool>,
     alpha_test: Option<bool>,
     alpha_test_reference: Option<f32>,
     alpha: Option<f32>,
@@ -165,6 +178,7 @@ impl Properties {
                 .or_else(|| block.get("$basetexture"))
                 .map(|name| normalize(name).trim_end_matches(".vtf").to_owned()),
             translucent: flag("$translucent"),
+            additive: flag("$additive"),
             alpha_test: flag("$alphatest"),
             alpha_test_reference: number("$alphatestreference"),
             alpha: number("$alpha"),
@@ -206,6 +220,7 @@ impl Properties {
         Self {
             texture: other.texture.or(self.texture),
             translucent: other.translucent.or(self.translucent),
+            additive: other.additive.or(self.additive),
             alpha_test: other.alpha_test.or(self.alpha_test),
             alpha_test_reference: other.alpha_test_reference.or(self.alpha_test_reference),
             alpha: other.alpha.or(self.alpha),
@@ -228,7 +243,12 @@ impl Properties {
 
     fn alpha_mode(&self) -> AlphaMode {
         let opacity = self.alpha.unwrap_or(1.0).clamp(0.0, 1.0);
-        if self.translucent == Some(true) || opacity < 1.0 || self.modulates() {
+        if self.additive == Some(true) && !self.modulates() {
+            AlphaMode::Add {
+                opacity,
+                texture_alpha: self.translucent == Some(true),
+            }
+        } else if self.translucent == Some(true) || opacity < 1.0 || self.modulates() {
             AlphaMode::Blend(opacity)
         } else if self.alpha_test == Some(true) {
             AlphaMode::Test(self.alpha_test_reference.unwrap_or(DEFAULT_ALPHA_TEST_REFERENCE))

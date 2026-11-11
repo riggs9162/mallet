@@ -210,7 +210,7 @@ pub fn render(model: &LoadedModel, orbit: Orbit, width: u32, height: u32, sample
         })
         .collect();
 
-    let blended = |paint: &MeshPaint| matches!(paint.alpha, AlphaMode::Blend(_));
+    let blended = |paint: &MeshPaint| paint.alpha.see_through();
     for see_through in [false, true] {
         for (mesh, paint) in model.model.meshes.iter().zip(&model.paints) {
             if blended(paint) != see_through {
@@ -279,8 +279,9 @@ impl Canvas {
         let (cutoff, opacity, writes_depth) = match paint.alpha {
             AlphaMode::Opaque => (None, 1.0, true),
             AlphaMode::Test(reference) => (Some(reference), 1.0, true),
-            AlphaMode::Blend(opacity) => (Some(FAINTEST_ALPHA), opacity, false),
+            AlphaMode::Blend(opacity) | AlphaMode::Add { opacity, .. } => (Some(FAINTEST_ALPHA), opacity, false),
         };
+        let added = matches!(paint.alpha, AlphaMode::Add { .. });
         for row in first_row..=last_row as usize {
             for column in first_column..=last_column as usize {
                 let pixel = Vec2::new(column as f32 + 0.5, row as f32 + 0.5);
@@ -307,7 +308,10 @@ impl Canvas {
                 let alpha = match paint.alpha {
                     AlphaMode::Opaque => 1.0,
                     AlphaMode::Test(_) => alpha,
-                    AlphaMode::Blend(_) => alpha * opacity,
+                    AlphaMode::Add {
+                        texture_alpha: false, ..
+                    } => opacity,
+                    AlphaMode::Blend(_) | AlphaMode::Add { .. } => alpha * opacity,
                 };
                 if cutoff.is_some_and(|cutoff| alpha < cutoff) {
                     continue;
@@ -323,12 +327,16 @@ impl Canvas {
                     self.depth[slot] = near;
                 } else {
                     let under = self.color[slot];
-                    let keep = 1.0 - alpha;
+                    let (keep, cover) = if added {
+                        (1.0, lit.into_iter().fold(0.0, f32::max) * alpha)
+                    } else {
+                        (1.0 - alpha, alpha)
+                    };
                     self.color[slot] = [
                         lit[0] * alpha + under[0] * keep,
                         lit[1] * alpha + under[1] * keep,
                         lit[2] * alpha + under[2] * keep,
-                        alpha + under[3] * keep,
+                        (cover + under[3] * (1.0 - cover)).min(1.0),
                     ];
                 }
             }

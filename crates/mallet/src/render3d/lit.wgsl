@@ -8,7 +8,7 @@ struct View {
     view_proj: mat4x4<f32>,
 };
 
-// Per material: x alpha-test reference (0 for none), y blend opacity (0 for opaque),
+// Per material: x alpha-test reference and y opacity, as `premultiplied` reads them,
 // z flags (1 self-illum, 2 sky, 4 unlit, 8 texture light); then the self-illum tint and
 // the texture light's colour.
 struct Material {
@@ -576,11 +576,23 @@ fn fs_lit(input: LitOut, @builtin(front_facing) front: bool) -> @location(0) vec
             }
             color = tonemap(color);
         }
-        color = fogged(color, input.world);
+        if (input.alpha.y < 0.0) {
+            color = fogged(color, input.world) - fogged(vec3<f32>(0.0), input.world);
+        } else {
+            color = fogged(color, input.world);
+        }
     }
     color = mix(color, vec3<f32>(1.0, 0.0, 0.0), input.highlight);
-    let opacity = select(1.0, texel.a * input.alpha.y, input.alpha.y > 0.0);
-    return vec4<f32>(color, opacity);
+    return premultiplied(color, texel.a, input.alpha);
+}
+
+// Colour multiplied by opacity, with alpha the share of what is behind that is hidden:
+// none for added materials. alpha.x is the alpha-test reference (0 for none, below 0 when
+// the texture's alpha is ignored); alpha.y the opacity (0 for opaque, below 0 for added).
+fn premultiplied(rgb: vec3<f32>, coverage: f32, alpha: vec2<f32>) -> vec4<f32> {
+    let texture_alpha = select(coverage, 1.0, alpha.x < 0.0);
+    let opacity = select(1.0, texture_alpha * abs(alpha.y), alpha.y != 0.0);
+    return vec4<f32>(rgb * opacity, select(opacity, 0.0, alpha.y < 0.0));
 }
 
 @vertex

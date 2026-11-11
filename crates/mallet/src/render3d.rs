@@ -203,15 +203,11 @@ impl MaterialFacts {
         }
     }
 
-    /// The material uniform the shaders read: alpha-test reference, blend opacity and
+    /// The material uniform the shaders read: the alpha mode as [`alpha_uniform`] puts it,
     /// lighting flags (1 self-illum, 2 sky, 4 unlit, 8 texture light), the self-illum
     /// tint, and the colour of the texture light it is, if any.
     fn uniform(&self, emissive: Option<DVec3>) -> [f32; 12] {
-        let (test, blend) = match self.alpha {
-            AlphaMode::Opaque => (0.0, 0.0),
-            AlphaMode::Test(reference) => (reference, 0.0),
-            AlphaMode::Blend(opacity) => (0.0, opacity.max(f32::EPSILON)),
-        };
+        let [test, blend] = alpha_uniform(self.alpha);
         let flags = u32::from(self.self_illum.is_some())
             | (u32::from(self.surface == Surface::Sky) << 1)
             | (u32::from(self.unlit) << 2)
@@ -234,6 +230,20 @@ impl MaterialFacts {
             glow[2],
             0.0,
         ]
+    }
+}
+
+/// How the shaders read a material's alpha mode. The first number is the alpha-test
+/// reference: 0 for none, and below 0 when the texture's alpha is ignored. The second
+/// is the opacity: 0 for opaque, above 0 for blended and below 0 for added.
+fn alpha_uniform(alpha: AlphaMode) -> [f32; 2] {
+    match alpha {
+        AlphaMode::Opaque => [0.0, 0.0],
+        AlphaMode::Test(reference) => [reference, 0.0],
+        AlphaMode::Blend(opacity) => [0.0, opacity.max(f32::EPSILON)],
+        AlphaMode::Add { opacity, texture_alpha } => {
+            [if texture_alpha { 0.0 } else { -1.0 }, -opacity.max(f32::EPSILON)]
+        }
     }
 }
 
@@ -288,6 +298,8 @@ enum Depth {
     /// For passes without a depth buffer.
     None,
     /// Blended translucent faces: tested against the depth buffer but not written to it.
+    /// Their shaders give colour already multiplied by opacity, and an alpha of 0 for
+    /// added materials, so one blend serves both and the image stays opaque.
     Translucent,
 }
 
@@ -1206,7 +1218,7 @@ impl Renderer3D {
             pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
             for (material, range) in &model.meshes {
                 let texture = self.texture_for(material);
-                if matches!(texture.alpha, AlphaMode::Blend(_)) != translucent {
+                if texture.alpha.see_through() != translucent {
                     continue;
                 }
                 pass.set_bind_group(1, &texture.bind_group, &[]);
@@ -1747,7 +1759,7 @@ impl Renderer3D {
                     .as_deref()
                     .map_or_else(|| WHITE_KEY.to_owned(), material_key);
                 let texture = self.texture_for(&key);
-                if face.decal || matches!(texture.alpha, AlphaMode::Blend(_)) {
+                if face.decal || texture.alpha.see_through() {
                     let mut vertices = Vec::new();
                     triangulate(face, (id, texture), tint, highlight, remap, &mut vertices);
                     let center = face.vertices.iter().sum::<DVec3>() / face.vertices.len().max(1) as f64;
@@ -2180,11 +2192,7 @@ fn triangulate(
         ],
         color,
         highlight,
-        alpha: match texture.alpha {
-            AlphaMode::Opaque => [0.0, 0.0],
-            AlphaMode::Test(reference) => [reference, 0.0],
-            AlphaMode::Blend(opacity) => [0.0, opacity.max(f32::EPSILON)],
-        },
+        alpha: alpha_uniform(texture.alpha),
         face: if face.decal { NO_FACE } else { id },
     };
     let points = &face.vertices;
@@ -2314,7 +2322,7 @@ fn pipeline(
             entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: COLOR_FORMAT,
-                blend: (depth == Depth::Translucent).then_some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: (depth == Depth::Translucent).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: Default::default(),
