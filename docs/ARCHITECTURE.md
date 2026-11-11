@@ -123,6 +123,11 @@ nothing at all does a prop's bounding box count, so thin or hollow models can st
 picked. The texture tool uses the same test, so props block it only where they are. The camera smooths
 raw mouse movement over two frames and eases its speed, using real frame times.
 
+QuickHide (H, Ctrl+H and U) hides objects the way Hammer saves them: `Edit::SetHidden` wraps a
+brush or entity in a `hidden` block where it stands, so the map keeps and saves it while the scene,
+the views and the selection skip it, and unwraps it again to show it. Each hide or show is one undo
+step, and `edit::hidden_ids` finds the hidden objects again.
+
 ## Map tabs
 
 Several maps can be open at once, one per tab. The active tab's map state (document and
@@ -604,6 +609,7 @@ Tools:
 | `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, or an arch as the Arch Properties dialog makes it |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
 | `group_selection`, `ungroup_selection` | Hammer's Group and Ungroup |
+| `hide_selection`, `hide_unselected`, `show_all_hidden` | Hammer's QuickHide: hide the selection or everything else, and show all again |
 | `check_for_problems` | Hammer's Check for Problems, optionally fixing what it can |
 | `make_hollow`, `carve` | Hammer's Make Hollow and Carve: walls of a set width in place of the selected brushes, and their shape cut out of the brushes they overlap |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |

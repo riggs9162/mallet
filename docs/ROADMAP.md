@@ -94,7 +94,8 @@ or edit it yet.
 
 ## Milestone 3: map organisation
 
-- [ ] QuickHide: H, Ctrl+H and U, and Convert QuickHide Objects to VisGroup. Hammer
+- [x] QuickHide: H, Ctrl+H and U. Hammer
+- [ ] Convert QuickHide Objects to VisGroup. Hammer
 - [ ] VisGroups panel in the side panel (it shows "Coming soon" today), with show, hide and auto VisGroups (world, entities, displacements, tool brushes). Hammer
 - [ ] Edit VisGroups and New VisGroup dialogs, and Move Selection to VisGroup. Hammer
 - [ ] VisGroup tab of Object Properties, for brushes and entities. Hammer

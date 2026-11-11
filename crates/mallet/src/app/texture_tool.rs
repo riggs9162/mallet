@@ -165,7 +165,7 @@ impl MalletApp {
                                 .on_hover_text("The selected faces, or every face of the selected brushes");
                             ui.radio_value(&mut state.marked_only, false, "Everything");
                             ui.add_enabled(false, egui::Checkbox::new(&mut false, "Hidden objects too"))
-                                .on_disabled_hover_text("Mallet cannot hide objects yet");
+                                .on_disabled_hover_text("Hidden objects are left out. Show them to replace textures on them.");
                         });
                     });
                     egui::Frame::group(ui.style()).show(ui, |ui| {

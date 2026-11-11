@@ -333,6 +333,25 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "hide_selection",
+            "Hide the selected brushes and entities, as Hammer's Hide Selection does. Hidden objects leave \
+             the views and the selection until show_all_hidden. Undoable.",
+            json!({}),
+            &[]
+        ),
+        tool(
+            "hide_unselected",
+            "Hide every brush and entity that is not selected, as Hammer's Hide Unselected does. Undoable.",
+            json!({}),
+            &[]
+        ),
+        tool(
+            "show_all_hidden",
+            "Show every hidden brush and entity again, as Hammer's Show All does. Undoable.",
+            json!({}),
+            &[]
+        ),
+        tool(
             "create_block",
             "Create a brush in the world filling the box between two corners, like the Block tool, and select \
              it: a box, or one of Hammer's primitives (a wedge rising to the north, or an upright cylinder, \
@@ -1590,6 +1609,24 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             let count = editor.delete_selection()?;
             Ok(ToolResult::text(format!(
                 "Deleted {count} objects. Undo with the undo tool or Ctrl+Z."
+            )))
+        }
+        "hide_selection" => {
+            let count = editor.hide_selection()?;
+            Ok(ToolResult::text(format!(
+                "Hid {count} objects. Show them with show_all_hidden. Undo with the undo tool or Ctrl+Z."
+            )))
+        }
+        "hide_unselected" => {
+            let count = editor.hide_unselected()?;
+            Ok(ToolResult::text(format!(
+                "Hid {count} objects. Show them with show_all_hidden. Undo with the undo tool or Ctrl+Z."
+            )))
+        }
+        "show_all_hidden" => {
+            let count = editor.show_all_hidden()?;
+            Ok(ToolResult::text(format!(
+                "Showed {count} hidden objects. Undo with the undo tool or Ctrl+Z."
             )))
         }
         "clip_selection" => {

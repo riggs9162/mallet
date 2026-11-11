@@ -103,6 +103,9 @@ const KEY_ACTIONS: &[Action] = &[
     Action::SelectAll,
     Action::ClearSelection,
     Action::DeleteSelection,
+    Action::HideSelection,
+    Action::HideUnselected,
+    Action::ShowAllHidden,
     Action::CreateBlock,
     Action::CenterViews2D,
     Action::CenterView3D,
@@ -543,6 +546,10 @@ impl MalletApp {
                     menu_item(ui, keymap, "Center 3D Views on Selection", Action::CenterView3D, &mut chosen);
                     menu_item(ui, keymap, "Go to Coordinates...", Action::GoToCoordinates, &mut chosen);
                     menu_item(ui, keymap, "Go to Brush Number...", Action::GoToBrush, &mut chosen);
+                    ui.separator();
+                    menu_item(ui, keymap, "QuickHide Objects", Action::HideSelection, &mut chosen);
+                    menu_item(ui, keymap, "QuickHide Unselected Objects", Action::HideUnselected, &mut chosen);
+                    menu_item(ui, keymap, "Unhide QuickHide Objects", Action::ShowAllHidden, &mut chosen);
                     ui.separator();
                     if ui.checkbox(&mut show_net_graph, "Net Graph").clicked() {
                         ui.close_menu();
@@ -2452,6 +2459,15 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::DeleteSelection => {
             let _ = editor.delete_selection();
+        }
+        Action::HideSelection => {
+            let _ = editor.hide_selection();
+        }
+        Action::HideUnselected => {
+            let _ = editor.hide_unselected();
+        }
+        Action::ShowAllHidden => {
+            let _ = editor.show_all_hidden();
         }
         Action::CreateBlock => {
             let result = match editor.tool {

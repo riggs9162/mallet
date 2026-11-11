@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use eframe::egui::{Color32, Pos2, Rect, Vec2};
 use glam::{DVec2, DVec3};
 use mallet_vmf::build::box_solid;
-use mallet_vmf::edit::Edit;
+use mallet_vmf::edit::{hidden_ids, Edit};
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::overlay::DECAL_CLASS;
 use mallet_vmf::sides::{CopiedSides, OtherFaces};
@@ -1196,6 +1196,81 @@ impl Editor {
         self.message = format!("Cloned {} objects", copies.len());
         self.select(copies, SelectMode::Replace);
         Ok(())
+    }
+
+    /// Hides the selected brushes and entities, as Hammer's Hide Selection does. Hidden
+    /// objects leave the views and the selection until shown again. Undoable. Returns how
+    /// many were hidden.
+    pub fn hide_selection(&mut self) -> Result<usize, String> {
+        if self.selection.is_empty() {
+            return Err("nothing is selected".to_owned());
+        }
+        let (solids, entities) = Self::split_owners(self.selection.iter().copied());
+        let count = solids.len() + entities.len();
+        self.apply_edit(&Edit::SetHidden {
+            solids,
+            entities,
+            hidden: true,
+        })?;
+        self.message = format!("Hid {count} objects");
+        Ok(count)
+    }
+
+    /// Hides every brush and entity that is not selected, as Hammer's Hide Unselected does.
+    /// Undoable. Returns how many were hidden.
+    pub fn hide_unselected(&mut self) -> Result<usize, String> {
+        let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
+        let mut owners = Vec::new();
+        if let Some(world) = vmf.world() {
+            owners.extend(world.solids().filter_map(|solid| solid.id()).map(Owner::Solid));
+        }
+        owners.extend(vmf.entities().filter_map(Entity::id).map(Owner::Entity));
+        owners.retain(|owner| !self.selection.contains(owner));
+        let (solids, entities) = Self::split_owners(owners);
+        let count = solids.len() + entities.len();
+        if count == 0 {
+            self.message = "Nothing to hide".to_owned();
+            return Ok(0);
+        }
+        self.apply_edit(&Edit::SetHidden {
+            solids,
+            entities,
+            hidden: true,
+        })?;
+        self.message = format!("Hid {count} objects");
+        Ok(count)
+    }
+
+    /// Shows every hidden brush and entity again, as Hammer's Show All does. Undoable.
+    /// Returns how many were shown.
+    pub fn show_all_hidden(&mut self) -> Result<usize, String> {
+        let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
+        let (solids, entities) = hidden_ids(vmf);
+        let count = solids.len() + entities.len();
+        if count == 0 {
+            self.message = "No objects are hidden".to_owned();
+            return Ok(0);
+        }
+        self.apply_edit(&Edit::SetHidden {
+            solids,
+            entities,
+            hidden: false,
+        })?;
+        self.message = format!("Showed {count} hidden objects");
+        Ok(count)
+    }
+
+    /// Splits owners into the ids of brushes and the ids of entities.
+    fn split_owners(owners: impl IntoIterator<Item = Owner>) -> (Vec<u32>, Vec<u32>) {
+        let mut solids = Vec::new();
+        let mut entities = Vec::new();
+        for owner in owners {
+            match owner {
+                Owner::Solid(id) => solids.push(id),
+                Owner::Entity(id) => entities.push(id),
+            }
+        }
+        (solids, entities)
     }
 
     /// Deletes the selected brushes and entities. Returns how many were removed.

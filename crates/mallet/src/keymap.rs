@@ -83,6 +83,12 @@ pub enum Action {
     SelectAll,
     ClearSelection,
     DeleteSelection,
+    /// Hide the selected objects, as Hammer's Hide Selection does.
+    HideSelection,
+    /// Hide every object that is not selected.
+    HideUnselected,
+    /// Show every hidden object again.
+    ShowAllHidden,
     CreateBlock,
     CenterViews2D,
     CenterView3D,
@@ -342,6 +348,9 @@ impl KeyMap {
                 (Action::ClearSelection, Chord::shift(Key::Q)),
                 (Action::ClearSelection, Chord::key(Key::Escape)),
                 (Action::DeleteSelection, Chord::key(Key::Delete)),
+                (Action::HideSelection, Chord::key(Key::H)),
+                (Action::HideUnselected, Chord::ctrl(Key::H)),
+                (Action::ShowAllHidden, Chord::key(Key::U)),
                 (Action::CreateBlock, Chord::key(Key::Enter)),
                 (Action::CenterViews2D, Chord::ctrl(Key::E)),
                 (Action::CenterView3D, Chord::ctrl(Key::R)),
