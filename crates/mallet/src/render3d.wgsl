@@ -2,6 +2,8 @@
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
+    // xyz: the camera's position; w: 1 when there is a camera, 0 for the 2D views.
+    eye: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -18,6 +20,8 @@ struct FaceIn {
     @location(3) highlight: f32,
     @location(4) alpha: vec2<f32>,
     @location(5) normal: vec3<f32>,
+    // rgb: the water's tint; w: its reflectivity, zero when the face is not water.
+    @location(7) water: vec4<f32>,
 };
 
 struct FaceOut {
@@ -26,6 +30,9 @@ struct FaceOut {
     @location(1) color: vec4<f32>,
     @location(2) highlight: f32,
     @location(3) alpha: vec2<f32>,
+    @location(4) world: vec3<f32>,
+    @location(5) normal: vec3<f32>,
+    @location(6) water: vec4<f32>,
 };
 
 // Faces are shaded by direction like Hammer's textured mode: those facing up are
@@ -39,7 +46,40 @@ fn vs_face(input: FaceIn) -> FaceOut {
     out.color = vec4<f32>(input.color.rgb * shade, input.color.a);
     out.highlight = input.highlight;
     out.alpha = input.alpha;
+    out.world = input.position;
+    out.normal = input.normal;
+    out.water = input.water;
     return out;
+}
+
+// The sky water reflects, from its horizon to straight up.
+const WATER_HORIZON: vec3<f32> = vec3<f32>(0.78, 0.86, 0.92);
+const WATER_ZENITH: vec3<f32> = vec3<f32>(0.32, 0.52, 0.82);
+
+// Shades a water surface the way the game draws it, matching the water thumbnails: the
+// water is its tint, not the texture (whose pixels are a normal map), the surface mirrors
+// the sky by the Fresnel term, and ripples tilt it so the reflection shimmers.
+fn water_shade(shade: vec3<f32>, world: vec3<f32>, normal: vec3<f32>, water: vec4<f32>) -> vec3<f32> {
+    let n0 = normalize(normal);
+    let ripple = vec3<f32>(
+        sin(world.x * 0.11 + world.y * 0.05) + 0.5 * sin(world.y * 0.23 - world.x * 0.07),
+        sin(world.y * 0.13 + world.x * 0.17) + 0.5 * sin(world.x * 0.31 + world.y * 0.09),
+        0.0,
+    ) * 0.07;
+    // Only the part of the ripple lying in the face's plane tilts it.
+    let n = normalize(n0 + ripple - n0 * dot(ripple, n0));
+    // Without a camera, the surface is seen straight on.
+    let view = normalize(select(uniforms.eye.xyz - world, vec3<f32>(0.0, 0.0, 1.0), uniforms.eye.w < 0.5));
+    let facing = clamp(dot(n, view), 0.0, 1.0);
+    let fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
+    let reflected = normalize(-view + 2.0 * facing * n);
+    let sky = mix(WATER_HORIZON, WATER_ZENITH, clamp(reflected.z, 0.0, 1.0));
+    // The sun glint comes from the same direction as the faces' shading.
+    let sun = normalize(vec3<f32>(0.3, 0.5, 1.0));
+    let glint = pow(max(dot(reflected, sun), 0.0), 64.0) * 0.3;
+    let body = shade * water.rgb * 1.5;
+    let amount = clamp(fresnel * (0.5 + water.w), 0.0, 1.0);
+    return mix(body, sky, amount) + vec3<f32>(glint);
 }
 
 // Colour multiplied by opacity, with alpha the share of what is behind that is hidden:
@@ -57,7 +97,11 @@ fn fs_face(input: FaceOut) -> @location(0) vec4<f32> {
     if (input.alpha.x > 0.0 && base.a < input.alpha.x) {
         discard;
     }
-    let rgb = mix(base.rgb, vec3<f32>(1.0, 0.0, 0.0), input.highlight);
+    var rgb = base.rgb;
+    if (input.water.w > 0.0) {
+        rgb = water_shade(input.color.rgb, input.world, input.normal, input.water);
+    }
+    rgb = mix(rgb, vec3<f32>(1.0, 0.0, 0.0), input.highlight);
     return premultiplied(rgb, base.a, input.alpha);
 }
 
@@ -86,6 +130,9 @@ fn vs_model(input: ModelIn) -> FaceOut {
     out.color = vec4<f32>(input.tint.rgb * shade, 1.0);
     out.highlight = input.tint.a;
     out.alpha = material_alpha.xy;
+    out.world = world.xyz;
+    out.normal = normal;
+    out.water = vec4<f32>(0.0);
     return out;
 }
 

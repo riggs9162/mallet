@@ -26,7 +26,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use eframe::wgpu::{self, util::DeviceExt};
 use glam::{DVec3, Mat4, Vec3, Vec4};
 use mallet_content::vtf::{Encoding, Level, Mips};
-use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface};
+use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, Water};
 
 use crate::lighting::TextureLights;
 use crate::scene::{
@@ -94,6 +94,9 @@ struct FaceVertex {
     highlight: f32,
     /// Alpha-test reference (0 for none) and blend opacity (0 for opaque).
     alpha: [f32; 2],
+    /// Water's tint in rgb and its reflectivity in w; all zero for surfaces that are not
+    /// water, so a reflectivity of zero never means water.
+    water: [f32; 4],
     /// The face's number among all the scene's faces, so the lighting preview can find
     /// its luxels; [`NO_FACE`] when it has none, as for a face being dragged.
     face: u32,
@@ -106,7 +109,7 @@ const NO_FACE: u32 = u32::MAX;
 const DECAL_LIFT: f64 = 0.0625;
 
 /// Where each [`FaceVertex`] field goes in the shaders, in field order.
-const FACE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0 => Float32x3, 5 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32x2, 6 => Uint32];
+const FACE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 5 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32x2, 7 => Float32x4, 6 => Uint32];
 const MODEL_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
@@ -196,6 +199,7 @@ struct MaterialFacts {
     sprite: SpriteLook,
     /// How many animation frames its texture has.
     frames: u32,
+    water: Option<Water>,
 }
 
 impl MaterialFacts {
@@ -207,6 +211,7 @@ impl MaterialFacts {
             unlit: false,
             sprite: SpriteLook::default(),
             frames: 1,
+            water: None,
         }
     }
 
@@ -508,7 +513,7 @@ impl Renderer3D {
             label: Some("mallet uniforms"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -1063,8 +1068,11 @@ impl Renderer3D {
         }
         let outline = self.line_mesh(&outline);
         let target = self.targets[slot].as_ref().expect("target was just created");
-        self.queue
-            .write_buffer(&target.uniform_buffer, 0, bytemuck::cast_slice(&matrix.to_cols_array()));
+        self.queue.write_buffer(
+            &target.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&view_uniform(matrix, Some(camera.position.as_vec3()))),
+        );
         {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_bind_group(0, &target.uniform_group, &[]);
@@ -1537,8 +1545,11 @@ impl Renderer3D {
 
         let target = self.targets[slot].as_ref().expect("target was just created");
         let matrix = orthographic(view, points);
-        self.queue
-            .write_buffer(&target.uniform_buffer, 0, bytemuck::cast_slice(&matrix.to_cols_array()));
+        self.queue.write_buffer(
+            &target.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&view_uniform(matrix, None)),
+        );
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("mallet 2d"),
         });
@@ -1687,6 +1698,7 @@ impl Renderer3D {
                                     unlit: material.unlit,
                                     sprite: material.sprite,
                                     frames: mips.as_ref().map_or(1, |mips| mips.frames.max(1)),
+                                    water: material.water,
                                 };
                                 mips.map(|mips| (mips, facts))
                             }
@@ -1741,6 +1753,7 @@ impl Renderer3D {
                     color: [1.0; 4],
                     highlight,
                     alpha: [0.0, 1.0],
+                    water: [0.0; 4],
                     face: NO_FACE,
                 };
                 let quad = [
@@ -2160,7 +2173,7 @@ fn ensure_target(
     });
     let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("mallet viewport matrix"),
-        size: std::mem::size_of::<[[f32; 4]; 4]>() as u64,
+        size: std::mem::size_of::<[f32; VIEW_UNIFORM_LEN]>() as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -2439,6 +2452,10 @@ fn triangulate(
     out: &mut Vec<FaceVertex>,
 ) {
     let color = [tint[0], tint[1], tint[2], 1.0];
+    let water = texture
+        .facts
+        .water
+        .map_or([0.0; 4], |water| [water.tint[0], water.tint[1], water.tint[2], water.reflectivity]);
     let normal = remap
         .map_or(face.normal, |remap| {
             remap.matrix.transform_vector3(face.normal).normalize_or(face.normal)
@@ -2468,6 +2485,7 @@ fn triangulate(
         color,
         highlight,
         alpha: alpha_uniform(texture.alpha),
+        water,
         face: if face.decal { NO_FACE } else { id },
     };
     let points = &face.vertices;
@@ -2485,6 +2503,21 @@ fn triangulate(
         out.push(vertex(points[second]));
         out.push(vertex(points[third]));
     }
+}
+
+/// Floats in the view uniform the textured shaders read: the matrix, then the eye.
+const VIEW_UNIFORM_LEN: usize = 20;
+
+/// The view uniform: the matrix, then the camera's position with 1 in w when there is a
+/// camera, so water can work out how it is seen. Without one (the 2D views), w is 0.
+fn view_uniform(matrix: Mat4, eye: Option<Vec3>) -> [f32; VIEW_UNIFORM_LEN] {
+    let mut data = [0.0; VIEW_UNIFORM_LEN];
+    data[..16].copy_from_slice(&matrix.to_cols_array());
+    if let Some(eye) = eye {
+        data[16..19].copy_from_slice(&eye.to_array());
+        data[19] = 1.0;
+    }
+    data
 }
 
 /// The combined view and projection matrix for the camera, with the camera's horizontal

@@ -16,6 +16,17 @@ const MAX_TEXTURE_SIDE: u32 = 512;
 const MAX_PATCH_DEPTH: usize = 8;
 /// Alpha below which `$alphatest` materials are cut out when they set no reference.
 const DEFAULT_ALPHA_TEST_REFERENCE: f32 = 0.5;
+/// The colour water takes on when its material sets no `$fogcolor`: a deep sea green.
+const DEFAULT_WATER_TINT: [f32; 3] = [0.05, 0.22, 0.26];
+/// How much water reflects the sky when its material sets no `$reflectamount`.
+const DEFAULT_WATER_REFLECTIVITY: f32 = 0.5;
+/// The least reflectivity water is given. Faces store it as their water flag, so zero must
+/// mean that a face is not water.
+const MIN_WATER_REFLECTIVITY: f32 = 0.05;
+/// The sky colour water reflects at the horizon and straight up, for thumbnails. The
+/// textured 3D view uses the same colours.
+const WATER_HORIZON: [f32; 3] = [0.78, 0.86, 0.92];
+const WATER_ZENITH: [f32; 3] = [0.32, 0.52, 0.82];
 
 /// A texture ready for display. Shared, because many faces use the same one.
 pub type Texture = Arc<Image>;
@@ -151,6 +162,17 @@ impl Default for SpriteLook {
     }
 }
 
+/// How a water material looks: the colour light takes on in the water, and how much of
+/// the sky its surface reflects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Water {
+    /// The water's colour, from `$fogcolor`; light through the water takes on this tint.
+    pub tint: [f32; 3],
+    /// From 0 to 1, from `$reflectamount`: how strongly the surface mirrors the sky, most
+    /// at grazing angles. Never below [`MIN_WATER_REFLECTIVITY`].
+    pub reflectivity: f32,
+}
+
 /// What the editor needs to draw a material.
 #[derive(Debug, Clone)]
 pub struct Material {
@@ -172,6 +194,8 @@ pub struct Material {
     pub decal_scale: f32,
     /// How the material looks as a sprite.
     pub sprite: SpriteLook,
+    /// Set for water materials, which are shaded as water rather than as plain surfaces.
+    pub water: Option<Water>,
 }
 
 impl Material {
@@ -185,6 +209,7 @@ impl Material {
             unlit: false,
             decal_scale: 1.0,
             sprite: SpriteLook::default(),
+            water: None,
         }
     }
 }
@@ -220,6 +245,13 @@ struct Properties {
     self_illum: Option<bool>,
     self_illum_tint: Option<[f32; 3]>,
     envmap: Option<bool>,
+    /// Water materials: the `Water` shader, or one of the keys only water sets.
+    water: bool,
+    water_tint: Option<[f32; 3]>,
+    reflect_amount: Option<f32>,
+    /// A water material's normal map (`$normalmap`, or `$bumpmap`), which the water's
+    /// ripples come from.
+    normal_map: Option<String>,
     keywords: Option<String>,
     surface: Option<Surface>,
     /// The shader the material uses, lower case, such as `lightmappedgeneric`.
@@ -350,6 +382,8 @@ pub struct MaterialInfo {
     pub self_illum: bool,
     /// Has an `$envmap`, so it reflects.
     pub envmap: bool,
+    /// A water material, shaded as water in the editor.
+    pub water: bool,
     /// The VMT's `%keywords`, for searching.
     pub keywords: String,
     /// The VMT cannot be read or its texture is missing.
@@ -360,6 +394,11 @@ impl Properties {
     fn read(block: &Block) -> Self {
         let number = |key: &str| block.get(key).and_then(|value| value.trim().parse::<f32>().ok());
         let flag = |key: &str| number(key).map(|value| value != 0.0);
+        let shader = (!block.name.eq_ignore_ascii_case("patch")).then(|| block.name.to_ascii_lowercase());
+        let water = shader.as_deref().is_some_and(|shader| shader.starts_with("water"))
+            || ["$abovewater", "$underwater", "$refractamount", "$reflectamount"]
+                .iter()
+                .any(|key| block.get(key).is_some());
         Self {
             texture: block
                 .get("%tooltexture")
@@ -374,9 +413,17 @@ impl Properties {
             self_illum: flag("$selfillum"),
             self_illum_tint: block.get("$selfillumtint").and_then(material_color),
             envmap: block.get("$envmap").map(|value| !value.trim().is_empty()),
+            water,
+            water_tint: block.get("$fogcolor").and_then(material_color),
+            reflect_amount: number("$reflectamount"),
+            normal_map: block
+                .get("$normalmap")
+                .or_else(|| block.get("$bumpmap"))
+                .map(|name| normalize(name).trim_end_matches(".vtf").to_owned())
+                .filter(|name| !name.is_empty()),
             keywords: block.get("%keywords").map(str::to_owned),
             surface: Self::surface(block),
-            shader: (!block.name.eq_ignore_ascii_case("patch")).then(|| block.name.to_ascii_lowercase()),
+            shader,
             rectangle_map: block
                 .get("%rectanglemap")
                 .map(|name| normalize(name).trim_end_matches(".rect").to_owned())
@@ -417,6 +464,10 @@ impl Properties {
             self_illum: other.self_illum.or(self.self_illum),
             self_illum_tint: other.self_illum_tint.or(self.self_illum_tint),
             envmap: other.envmap.or(self.envmap),
+            water: other.water || self.water,
+            water_tint: other.water_tint.or(self.water_tint),
+            reflect_amount: other.reflect_amount.or(self.reflect_amount),
+            normal_map: other.normal_map.or(self.normal_map),
             keywords: other.keywords.or(self.keywords),
             surface: other.surface.or(self.surface),
             shader: other.shader.or(self.shader),
@@ -465,6 +516,13 @@ impl Properties {
             unlit,
             decal_scale: self.decal_scale.unwrap_or(1.0),
             sprite: self.sprite.look(self.shader.as_deref() == Some("sprite"), self.alpha),
+            water: self.water.then(|| Water {
+                tint: self.water_tint.unwrap_or(DEFAULT_WATER_TINT),
+                reflectivity: self
+                    .reflect_amount
+                    .unwrap_or(DEFAULT_WATER_REFLECTIVITY)
+                    .clamp(MIN_WATER_REFLECTIVITY, 1.0),
+            }),
         }
     }
 
@@ -473,6 +531,49 @@ impl Properties {
     /// their animation frames loaded.
     fn animated_sprite(&self, key: &str) -> bool {
         self.shader.as_deref() == Some("sprite") || key.starts_with("sprites/")
+    }
+}
+
+/// How strongly a water normal map's xy tilts the surface, for thumbnails. The textured 3D
+/// view uses the same value in its shader.
+const WATER_RIPPLE: f32 = 2.0;
+/// The direction thumbnails are seen from, towards the viewer: a little above the surface
+/// and a little to one side, like a camera looking down at it.
+const WATER_THUMBNAIL_VIEW: [f32; 3] = [0.0, -0.5, 0.6];
+/// The direction the sun glint comes from, the same as the faces' shading.
+const WATER_SUN: [f32; 3] = [0.3, 0.5, 1.0];
+
+/// Renders a water thumbnail from its normal map, the way the surface looks in the game:
+/// the water is the tint, the surface reflects the sky more at grazing angles, and the
+/// normal map's ripples make the reflection shimmer. The map's pixels are read as normals
+/// and replaced; the image is opaque.
+fn render_water_thumbnail(rgba: &mut [u8], water: Water) {
+    let normalise = |v: [f32; 3]| {
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+        v.map(|c| c / length)
+    };
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let view = normalise(WATER_THUMBNAIL_VIEW);
+    let sun = normalise(WATER_SUN);
+    let body = water.tint.map(|c| c * 1.5);
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let tilt = |value: u8| (f32::from(value) / 255.0 * 2.0 - 1.0) * WATER_RIPPLE;
+        let normal = normalise([tilt(pixel[0]), tilt(pixel[1]), 1.0]);
+        let facing = dot(normal, view).clamp(0.0, 1.0);
+        let fresnel = 0.02 + 0.98 * (1.0 - facing).powi(5);
+        // The view reflected in the surface: -view + 2 (normal . view) normal.
+        let reflected = normalise(std::array::from_fn(|axis| -view[axis] + 2.0 * facing * normal[axis]));
+        let sky: [f32; 3] = std::array::from_fn(|axis| {
+            let t = reflected[2].clamp(0.0, 1.0);
+            WATER_HORIZON[axis] + (WATER_ZENITH[axis] - WATER_HORIZON[axis]) * t
+        });
+        let glint = dot(reflected, sun).max(0.0).powi(64) * 0.3;
+        let amount = (fresnel * (0.5 + water.reflectivity)).clamp(0.0, 1.0);
+        for channel in 0..3 {
+            let shaded = body[channel] + (sky[channel] - body[channel]) * amount + glint;
+            pixel[channel] = (shaded.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        pixel[3] = 255;
     }
 }
 
@@ -735,12 +836,23 @@ impl MaterialLoader {
         vtf::load(|start, length| file.read(start, length), max_side).ok()
     }
 
-    /// Loads a material's texture at most `max_side` pixels across, for thumbnails.
+    /// Loads a material's texture at most `max_side` pixels across, for thumbnails. Water
+    /// is rendered from its normal map as the surface looks in the game, so the browser
+    /// shows what it is rather than the map's blue-grey normals.
     pub fn thumbnail(&self, material: &str, max_side: u32) -> Option<Image> {
         let key = material_key(material);
-        let name = self.properties(&key, 0)?.texture?;
+        let properties = self.properties(&key, 0)?;
+        let water = properties.material().water;
+        let name = match water {
+            Some(_) => properties.normal_map.clone().or_else(|| properties.texture.clone()),
+            None => properties.texture.clone(),
+        }?;
         let file = self.texture_file(&name)?;
-        vtf::load(|start, length| file.read(start, length), max_side).ok()
+        let mut image = vtf::load(|start, length| file.read(start, length), max_side).ok()?;
+        if let Some(water) = water {
+            render_water_thumbnail(&mut image.rgba, water);
+        }
+        Some(image)
     }
 
     /// Every material in the game, such as `brick/brickwall001a`: the `.vmt` files under
@@ -806,6 +918,7 @@ impl MaterialLoader {
             translucent: !matches!(properties.alpha_mode(), AlphaMode::Opaque),
             self_illum: properties.self_illum.unwrap_or(false),
             envmap: properties.envmap.unwrap_or(false),
+            water: properties.water,
             keywords: properties.keywords.unwrap_or_default(),
             error: !texture_exists,
         }
@@ -907,5 +1020,44 @@ mod tests {
             started.elapsed()
         );
         assert!(thumbnail.pixel_width <= 128 && thumbnail.pixel_height <= 128);
+    }
+
+    fn properties_of(text: &str) -> Properties {
+        let items = mallet_kv::parse(text).unwrap();
+        match &items[0] {
+            Item::Block(block) => Properties::read(block),
+            Item::Pair(_) => panic!("expected a material block"),
+        }
+    }
+
+    #[test]
+    fn water_materials_take_their_tint_and_reflectivity() {
+        let water = properties_of("Water { \"$fogcolor\" \"{ 51 102 128 }\" \"$reflectamount\" \"2\" }")
+            .material()
+            .water
+            .expect("the Water shader is water");
+        assert!((water.tint[0] - 0.2).abs() < 1e-3 && (water.tint[2] - 0.5020).abs() < 1e-3);
+        assert_eq!(water.reflectivity, 1.0, "reflectivity is clamped to 1");
+
+        let plain = properties_of("LightmappedGeneric { \"$basetexture\" \"brick/brick\" }").material();
+        assert!(plain.water.is_none());
+
+        let above = properties_of("LightmappedGeneric { \"$abovewater\" \"1\" }").material();
+        assert_eq!(above.water.map(|water| water.tint), Some(DEFAULT_WATER_TINT));
+    }
+
+    #[test]
+    fn water_thumbnails_are_opaque_and_follow_the_tint() {
+        let water = Water {
+            tint: [0.0, 0.0, 1.0],
+            reflectivity: 0.5,
+        };
+        // A flat normal (128, 128) and a tilted one must both come out opaque; the flat one
+        // takes the tint, so blue dominates.
+        let mut rgba = vec![128, 128, 255, 37, 40, 200, 255, 9];
+        render_water_thumbnail(&mut rgba, water);
+        assert_eq!((rgba[3], rgba[7]), (255, 255));
+        assert!(rgba[2] > rgba[0], "the blue tint shows through: {rgba:?}");
+        assert_ne!(rgba[4..7], rgba[0..3], "the ripples change the surface");
     }
 }

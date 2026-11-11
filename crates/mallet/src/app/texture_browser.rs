@@ -757,6 +757,9 @@ impl TextureBrowserState {
             if info.envmap {
                 traits.push("reflective");
             }
+            if info.water {
+                traits.push("water");
+            }
             if info.error {
                 traits.push("texture missing");
             }

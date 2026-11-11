@@ -19,7 +19,7 @@ pub use fgd::{default_fgd, Choice, ClassKind, EntityClass, GameData, Port, Prope
 pub use filesystem::{mounted_games, GameFile, GameFs, Source, SourceKind};
 pub use material::{
     parallel_map, AlphaMode, Material, MaterialInfo, MaterialLoader, Materials, SpriteLook, SpriteOrientation, Surface,
-    Texture,
+    Texture, Water,
 };
 pub use model::{
     is_static_prop, load_model, load_model_variant, BodyGroup, Model, ModelDetails, ModelMesh, ModelVariant,
