@@ -79,17 +79,18 @@ The tools a mapper reaches for every few minutes.
 
 ## Milestone 2: displacements
 
-Mallet keeps displacement data intact and transforms it with its brushes, but does not draw
-or edit it yet.
+Mallet draws displacements and has Hammer's main displacement tools; these items are left.
 
-- [ ] Draw displacement surfaces in the 3D and 2D views, with alpha blending of two-texture materials. Hammer
-- [ ] Create and Destroy with power 2, 3 or 4 from the Face Edit sheet. Hammer
-- [ ] Select displacement faces in the texture tool, with the Displacement tab. Hammer
-- [ ] Paint Geometry: raise, lower, smooth and set, along the face normal or an axis, soft or hard edges, distance, radius, autosew. Hammer
-- [ ] Paint Alpha for blended materials, with Invert Alpha. Hammer
+- [x] Draw displacement surfaces in the 3D and 2D views, with alpha blending of two-texture materials. Hammer
+- [x] Create and Destroy with power 2, 3 or 4 from the Face Edit sheet. Hammer
+- [x] Select displacement faces in the texture tool, with the Displacement tab. Hammer
+- [x] Paint Geometry: raise, lower, smooth and set, along the face normal or an axis, soft or hard edges, distance, radius, autosew. Hammer
+- [x] Paint Alpha for blended materials, with Invert Alpha. Hammer
 - [ ] Sculpt mode (push and pull, carve, blend). Hammer
-- [ ] Sew, Subdivide, Noise and Displacement Edge Collapse. Hammer
-- [ ] Attributes and masks: no physics, no hull, no ray collision, and showing walkable surfaces. Hammer
+- [x] Sew, Subdivide and Noise. Hammer
+- [ ] Displacement Edge Collapse. Hammer
+- [x] Elevation and Scale attributes. Hammer
+- [ ] Collision masks: no physics, no hull, no ray collision, and showing walkable surfaces. Hammer
 - [ ] Toggle displacements on and off and a displacement selection mask on the toolbar. Hammer
 - [ ] Discard power 0 and 1 displacements on load, with a warning. H++
 
