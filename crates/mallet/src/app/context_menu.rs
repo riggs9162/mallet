@@ -85,6 +85,9 @@ impl MalletApp {
             ui.add_enabled_ui(selected, |ui| {
                 menu_item(ui, keymap, "Transform...", Action::Transform, &mut chosen);
                 menu_item(ui, keymap, "Snap Selected to Grid", Action::SnapToGrid, &mut chosen);
+                menu_item(ui, keymap, "Make Hollow...", Action::MakeHollow, &mut chosen);
+                menu_item(ui, keymap, "Tie to Entity", Action::TieToEntity, &mut chosen);
+                menu_item(ui, keymap, "Move to World", Action::MoveToWorld, &mut chosen);
                 menu_item(ui, keymap, "Delete", Action::DeleteSelection, &mut chosen);
                 menu_item(ui, keymap, "Select None", Action::ClearSelection, &mut chosen);
                 ui.separator();

@@ -438,7 +438,7 @@ fn rename_entity(entity: &mut Entity, renames: &HashMap<String, String>) {
 }
 
 /// A world `group` block, as Hammer writes one.
-fn group_block(id: u32) -> Block {
+pub(super) fn group_block(id: u32) -> Block {
     let mut editor = Block::new("editor");
     editor.push_pair("color", "0 100 100");
     editor.push_pair("visgroupshown", "1");
@@ -450,7 +450,7 @@ fn group_block(id: u32) -> Block {
 }
 
 /// A brush's `editor` block, added when it has none.
-fn solid_editor(solid: &mut Solid) -> &mut Block {
+pub(super) fn solid_editor(solid: &mut Solid) -> &mut Block {
     let index = match solid
         .items
         .iter()
@@ -489,7 +489,7 @@ fn entity_editor(entity: &mut Entity) -> &mut Block {
 
 /// Puts an object in a group, or takes it out of the group it was copied from, which
 /// may not exist in the map it is pasted into.
-fn set_group(editor: &mut Block, group: Option<u32>) {
+pub(super) fn set_group(editor: &mut Block, group: Option<u32>) {
     editor
         .items
         .retain(|item| !matches!(item, Item::Pair(pair) if pair.key.eq_ignore_ascii_case("groupid")));

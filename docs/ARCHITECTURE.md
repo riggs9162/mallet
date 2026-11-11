@@ -595,6 +595,7 @@ Tools:
 | `set_pivot` | Place or reset the pivot rotations turn around |
 | `create_block` | Box brush between two corners, like the Block tool |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
+| `make_hollow` | Hammer's Make Hollow: walls of a set width in place of the selected brushes |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |
 | `create_entity` | Point entity of any class at a position, with extra keyvalues, like the Entity tool |
 | `create_overlay`, `create_decal` | Place an overlay or decal on a brush face, like the Overlay and Decal tools; overlays get their basis and the faces they reach filled in |

@@ -5,6 +5,7 @@ mod camera_tool;
 mod chrome;
 mod compile_window;
 mod context_menu;
+mod brush_tools;
 mod decal_tools;
 mod entity_tools;
 pub(crate) use compile_window::count;
@@ -219,6 +220,8 @@ pub struct MalletApp {
     status_bar_top: f32,
     /// Tie to Entity's question when the selection already holds a brush entity.
     tie_prompt: Option<entity_tools::TiePrompt>,
+    /// The Make Hollow dialog and the wall width it remembers.
+    hollow: brush_tools::HollowDialog,
 }
 
 impl MalletApp {
@@ -259,6 +262,7 @@ impl MalletApp {
             hint_modifiers: None,
             status_bar_top: 0.0,
             tie_prompt: None,
+            hollow: brush_tools::HollowDialog::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -517,6 +521,7 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Split Face", Action::SplitFace, &mut chosen);
                     menu_item(ui, &self.keymap, "Create Block", Action::CreateBlock, &mut chosen);
                     ui.separator();
+                    menu_item(ui, &self.keymap, "Make Hollow...", Action::MakeHollow, &mut chosen);
                     menu_item(ui, &self.keymap, "Tie to Entity", Action::TieToEntity, &mut chosen);
                     menu_item(ui, &self.keymap, "Move to World", Action::MoveToWorld, &mut chosen);
                     ui.separator();
@@ -1638,6 +1643,7 @@ impl eframe::App for MalletApp {
         self.side_panel(ctx, &mut editor);
         self.close_dialog(ctx, &mut editor);
         self.tie_prompt_window(ctx, &mut editor);
+        self.hollow_window(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);
         self.face_edit_window(ctx, &mut editor);

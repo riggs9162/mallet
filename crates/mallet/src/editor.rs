@@ -36,9 +36,11 @@ use crate::view3d::Camera3D;
 mod agent;
 mod brush_entities;
 mod clipboard;
+mod hollow;
 
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
+pub use hollow::DEFAULT_HOLLOW_WIDTH;
 
 pub use clipboard::{Clipboard, PasteAt, PasteOptions, MAX_COPIES};
 

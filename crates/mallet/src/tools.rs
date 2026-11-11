@@ -292,6 +292,12 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "make_hollow",
+            "Hammer's Make Hollow: turn every selected brush into one wall per face, thickness units deep              (default 32), around the space it filled, or outside it when thickness is negative. The walls of              a world brush are grouped, as in Hammer, and selected. Undoable.",
+            json!({ "thickness": { "type": "number", "description": "Wall width in units; negative builds the walls outside." } }),
+            &[],
+        ),
+        tool(
             "move_to_world",
             "Hammer's Move to World (Ctrl+Shift+W): put the brushes of the selected brush entities back into the              world and remove those entities. Selects the brushes. Undoable.",
             json!({}),
@@ -1486,6 +1492,11 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 }
             };
             Ok(ToolResult::json(&json!({ "entity": id, "message": editor.message })))
+        }
+        "make_hollow" => {
+            let thickness = optional_number(args, "thickness")?.unwrap_or(crate::editor::DEFAULT_HOLLOW_WIDTH);
+            editor.make_hollow(thickness)?;
+            Ok(ToolResult::json(&selection_json(editor)))
         }
         "move_to_world" => {
             editor.move_to_world()?;

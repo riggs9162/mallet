@@ -593,6 +593,7 @@ impl MalletApp {
             }
             Action::Compile => self.open_compile_window(editor),
             Action::TieToEntity => self.tie_to_entity(editor),
+            Action::MakeHollow => self.open_hollow_dialog(editor),
             Action::CompileAgain => {
                 let preset = editor.config.compile.last_preset.clone();
                 if editor.is_untitled() {

@@ -55,6 +55,9 @@ pub enum Action {
     /// Make the selected brushes a brush entity, or add them to the selected one, as
     /// Hammer's Tie to Entity does.
     TieToEntity,
+    /// Ask for a wall width and turn the selected brushes into walls, as Hammer's Make
+    /// Hollow does.
+    MakeHollow,
     /// Turn the selected brush entities back into world brushes, as Hammer's Move to
     /// World does.
     MoveToWorld,

@@ -7,6 +7,7 @@ pub mod build;
 pub mod clip;
 pub mod edit;
 pub mod geometry;
+pub mod hollow;
 pub mod hull;
 pub mod light;
 pub mod lightmap;
