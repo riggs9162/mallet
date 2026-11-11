@@ -14,6 +14,7 @@ mod model_browser;
 mod new_objects;
 mod options;
 mod paste_special;
+mod problems_window;
 mod properties;
 mod run_map;
 mod texture_browser;
@@ -108,6 +109,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ViewTextured,
     Action::ViewLighting,
     Action::GoToBrush,
+    Action::CheckForProblems,
     Action::Transform,
     Action::SnapToGrid,
     Action::SnapToGridIndividually,
@@ -246,6 +248,8 @@ pub struct MalletApp {
     camera_drag: Option<camera_tool::CameraDrag>,
     /// Whether the normal Run Map dialog is open.
     run_map_open: bool,
+    /// The Check for Problems dialog's list.
+    problems: problems_window::ProblemsDialog,
 }
 
 impl MalletApp {
@@ -291,6 +295,7 @@ impl MalletApp {
             map_dialogs: map_dialogs::MapDialogs::default(),
             camera_drag: None,
             run_map_open: false,
+            problems: problems_window::ProblemsDialog::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -497,6 +502,7 @@ impl MalletApp {
                         menu_item(ui, keymap, "Larger Grid", Action::GridLarger, &mut chosen);
                     });
                     ui.separator();
+                    menu_item(ui, keymap, "Check for Problems...", Action::CheckForProblems, &mut chosen);
                     menu_item(ui, keymap, "Show Information...", Action::MapInformation, &mut chosen);
                     menu_item(ui, keymap, "Map Properties...", Action::MapProperties, &mut chosen);
                 });
@@ -1738,6 +1744,7 @@ impl eframe::App for MalletApp {
         self.hollow_window(ctx, &mut editor);
         self.arch_window(ctx, &mut editor);
         self.map_dialogs(ctx, &mut editor);
+        self.problems_window(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
         self.run_map_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);

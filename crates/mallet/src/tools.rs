@@ -292,6 +292,15 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "check_for_problems",
+            "Hammer's Check for Problems (Alt+P): a missing player start, entities with no class, brush entities \
+             with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused \
+             keyvalues, lightmap scales of 0 and duplicate ids. With fix, also fixes the ones that can be fixed \
+             (as one undo step) and checks again.",
+            json!({ "fix": { "type": "boolean", "description": "Fix what can be fixed first." } }),
+            &[],
+        ),
+        tool(
             "carve",
             "Hammer's Carve (Ctrl+Shift+C): cut the shape of the selected brushes out of every other brush they \
              overlap, in the world and in brush entities. New faces take the carving face's material. Undoable.",
@@ -1520,6 +1529,28 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 }
             };
             Ok(ToolResult::json(&json!({ "entity": id, "message": editor.message })))
+        }
+        "check_for_problems" => {
+            if args.get("fix").and_then(Value::as_bool) == Some(true) {
+                let problems = editor.check_for_problems();
+                editor.fix_problems(&problems)?;
+            }
+            let problems: Vec<Value> = editor
+                .check_for_problems()
+                .iter()
+                .map(|problem| {
+                    json!({
+                        "kind": problem.kind.label(),
+                        "detail": problem.detail,
+                        "fixable": problem.kind.fixable(),
+                        "object": problem.object.map(|owner| match owner {
+                            crate::scene::Owner::Solid(id) => json!({ "solid": id }),
+                            crate::scene::Owner::Entity(id) => json!({ "entity": id }),
+                        }),
+                    })
+                })
+                .collect();
+            Ok(ToolResult::json(&json!({ "problems": problems })))
         }
         "carve" => {
             editor.carve()?;

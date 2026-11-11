@@ -170,7 +170,7 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 
 ## Milestone 6: files, checks and safety
 
-- [ ] Check for Problems (Alt+P) with Go To and Fix, and Fix All. Hammer
+- [x] Check for Problems (Alt+P) with Go To and Fix, and Fix All. Hammer
 - [x] Map Information dialog: counts of solids, faces, entities and textures. Hammer
 - [x] Map Properties shortcut for worldspawn (skybox, detail material, map version). Hammer
 - [ ] Autosave every few minutes into a backup folder, with a number of copies kept. Hammer

@@ -29,6 +29,7 @@ mod lighting;
 mod mcp;
 mod model_render;
 mod netgraph;
+mod problems;
 mod prop_brushes;
 mod properties;
 mod render3d;
