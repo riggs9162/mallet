@@ -198,13 +198,15 @@ the separator the map uses, and change through the undoable `Edit::SetConnection
 ## Object Properties
 
 Alt+Enter, Edit > Properties or a double-click opens one window for the selected entities
-(the world for world brushes). It edits every selected entity at once and shows
-"(different)" where they disagree. Tabs: Keyvalues, with an editor per FGD type
-(choices, colour pickers, target names from the map) and a Raw keys mode; Outputs, with
-named-target checks and pickers for the class's outputs and the target's inputs; Inputs,
-listing the outputs elsewhere that name this entity; and Flags. Help for the hovered key
-shows at the bottom. Text fields commit when they lose focus, and every change is an
-undoable edit, so there is no Apply button.
+(the world for world brushes, and Map > Map Properties always the world). It edits every
+selected entity at once and shows "(different)" where they disagree. Tabs: Keyvalues,
+with an editor per FGD type (choices, colour pickers, target names from the map, a model
+Browse... button, and for angles a compass with Up and Down) and SmartEdit, which turned
+off shows every key as plain text; Outputs, with named-target checks and pickers for the
+class's outputs and the target's inputs; Inputs, listing the outputs elsewhere that name
+this entity; and Flags. Help for the hovered key shows at the bottom. Text fields commit
+when they lose focus, and every change is an undoable edit; Apply commits whatever is
+still being typed, as Hammer's Apply does.
 
 Side list keyvalues (FGD type `sidelist`, such as `sides` and `sides2`) get a Pick button.
 It starts a face pick (`face_pick.rs`): `Editor::face_pick` names the key, the entities and

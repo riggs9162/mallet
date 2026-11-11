@@ -1,7 +1,8 @@
 //! The Object Properties window (Alt+Enter or double-click): Hammer's entity dialog laid
 //! out as one resizable window. Keyvalues get editors that match their FGD type, help for
 //! the hovered key shows at the bottom instead of in a side box, and every change is an
-//! undoable edit applied at once, so there is no Apply button.
+//! undoable edit. A field applies when it loses focus, and Apply at the bottom applies
+//! whatever is still being typed, as Hammer's Apply does.
 
 use std::collections::HashMap;
 
@@ -310,7 +311,7 @@ fn draw(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, cha
     // The help box sits at the bottom; the tab gets the space above it.
     let mut help: Option<(String, String)> = None;
     let help_height = 74.0;
-    let body_height = (ui.available_height() - help_height - 12.0).max(120.0);
+    let body_height = (ui.available_height() - help_height - 40.0).max(120.0);
     egui::ScrollArea::vertical()
         .id_salt(("properties_tab", state.tab as u8))
         .max_height(body_height)
@@ -341,6 +342,16 @@ fn draw(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, cha
             ui.label(RichText::new(title).strong());
             ui.label(RichText::new(text).color(MUTED));
         });
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let pending = !state.drafts.is_empty();
+        if ui
+            .add_enabled(pending, egui::Button::new("Apply"))
+            .on_hover_text("Apply what is still being typed; other changes apply as you make them")
+            .clicked()
+        {
+            apply_drafts(state, changes);
+        }
+    });
 }
 
 /// Class name with a picker, and the entity id.
@@ -413,8 +424,10 @@ fn keyvalues_tab(
                 .desired_width(180.0),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.toggle_value(&mut state.raw, "Raw keys")
-                .on_hover_text("Show every key as plain text, like Hammer with SmartEdit off");
+            let mut smart = !state.raw;
+            ui.toggle_value(&mut smart, "SmartEdit")
+                .on_hover_text("Turn off to show every key as plain text and add keys of your own, as in Hammer");
+            state.raw = !smart;
         });
     });
     ui.add_space(4.0);
@@ -632,7 +645,7 @@ fn property_editor(
                 *channel = (number * scale).round().clamp(0.0, 255.0) as u8;
             }
             ui.horizontal(|ui| {
-                let picker = ui.color_edit_button_srgb(&mut rgb);
+                let picker = ui.color_edit_button_srgb(&mut rgb).on_hover_text("Pick color");
                 if picker.changed() {
                     let mut parts: Vec<String> = rgb
                         .iter()
@@ -657,14 +670,14 @@ fn property_editor(
         }
         "studio" => {
             ui.horizontal(|ui| {
-                let width = (width - 34.0).max(80.0);
+                let width = (width - 92.0).max(80.0);
                 let (response, committed) =
                     text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
                 if let Some(text) = committed {
                     changes.push(Change::SetKey(property.name.clone(), text));
                 }
                 if ui
-                    .button(icon::CUBE_FOCUS)
+                    .button(format!("{} Browse...", icon::CUBE_FOCUS))
                     .on_hover_text("Model browser: pick a model")
                     .clicked()
                 {
@@ -701,6 +714,7 @@ fn property_editor(
             })
             .inner
         }
+        "angle" => angle_editor(ui, state, property, value, changes),
         "target_destination" | "target_name_or_class" => {
             let (response, committed) =
                 target_field(ui, state, draft_key, &current, &hint, &snapshot.targetnames, width);
@@ -715,6 +729,116 @@ fn property_editor(
                 changes.push(Change::SetKey(property.name.clone(), text));
             }
             response
+        }
+    }
+}
+
+/// Hammer's angle editor: the angles as text, a menu with Up, Down and the eight compass
+/// directions, and a compass to click or drag the yaw on, in steps of 15 degrees (whole
+/// degrees with Shift). A key holding one number, such as an old `angle`, stays one
+/// number.
+fn angle_editor(
+    ui: &mut egui::Ui,
+    state: &mut PropertiesState,
+    property: &Property,
+    value: &Value,
+    changes: &mut Vec<Change>,
+) -> egui::Response {
+    let (current, hint) = current_and_hint(value, &property.default);
+    let draft_key = format!("key:{}", property.name);
+    let source = if current.is_empty() {
+        property.default.clone()
+    } else {
+        current.clone()
+    };
+    let numbers: Vec<f64> = source.split_whitespace().filter_map(|number| number.parse().ok()).collect();
+    let single = numbers.len() == 1;
+    let (pitch, yaw, roll) = match numbers.as_slice() {
+        [pitch, yaw, roll] => (*pitch, *yaw, *roll),
+        [yaw] => (0.0, *yaw, 0.0),
+        _ => (0.0, 0.0, 0.0),
+    };
+    let write = |pitch: f64, yaw: f64| {
+        if single {
+            angle_text(yaw)
+        } else {
+            format!("{} {} {}", angle_text(pitch), angle_text(yaw), angle_text(roll))
+        }
+    };
+    ui.horizontal(|ui| {
+        let width = (state.field_width - 64.0).max(80.0);
+        let (response, committed) = text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
+        if let Some(text) = committed {
+            changes.push(Change::SetKey(property.name.clone(), text));
+        }
+        ui.menu_button(icon::CARET_DOWN, |ui| {
+            let mut presets: Vec<(String, f64, f64)> = Vec::new();
+            if !single {
+                presets.push(("Up".to_owned(), -90.0, 0.0));
+                presets.push(("Down".to_owned(), 90.0, 0.0));
+            }
+            presets.extend((0..8).map(|step| (format!("{}\u{b0}", step * 45), 0.0, f64::from(step * 45))));
+            for (label, pitch, yaw) in presets {
+                if ui.button(label).clicked() {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::SetKey(property.name.clone(), write(pitch, yaw)));
+                    ui.close_menu();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Up, Down or a compass direction");
+        let (rect, compass) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click_and_drag());
+        let painter = ui.painter_at(rect.expand(1.0));
+        let centre = rect.center();
+        let radius = rect.width() * 0.5 - 1.0;
+        painter.circle_filled(centre, radius, Color32::BLACK);
+        painter.circle_stroke(centre, radius, egui::Stroke::new(1.0_f32, Color32::from_gray(160)));
+        let vertical = pitch.abs() >= 89.5;
+        if vertical {
+            let marker = if pitch < 0.0 { "U" } else { "D" };
+            painter.text(centre, egui::Align2::CENTER_CENTER, marker, egui::FontId::proportional(11.0), Color32::WHITE);
+        } else {
+            let (sin, cos) = yaw.to_radians().sin_cos();
+            let tip = centre + egui::vec2(cos as f32, -sin as f32) * (radius - 2.0);
+            painter.line_segment([centre, tip], egui::Stroke::new(2.0_f32, Color32::WHITE));
+        }
+        if compass.clicked() || compass.dragged() {
+            if let Some(pointer) = compass.interact_pointer_pos() {
+                let offset = pointer - centre;
+                if offset.length() > 2.0 {
+                    let degrees = f64::from((-offset.y).atan2(offset.x)).to_degrees().rem_euclid(360.0);
+                    let step = if ui.input(|input| input.modifiers.shift) { 1.0 } else { 15.0 };
+                    let snapped = ((degrees / step).round() * step).rem_euclid(360.0);
+                    let pitch = if vertical { 0.0 } else { pitch };
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::SetKey(property.name.clone(), write(pitch, snapped)));
+                }
+            }
+        }
+        compass.on_hover_text("Click or drag to aim; Shift for whole degrees");
+        response
+    })
+    .inner
+}
+
+/// An angle written without a fraction when it is whole, as Hammer writes them.
+fn angle_text(degrees: f64) -> String {
+    let rounded = (degrees * 100.0).round() / 100.0 + 0.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}")
+    } else {
+        rounded.to_string()
+    }
+}
+
+/// Hammer's Apply: every field still being typed in applies now, as if it lost focus.
+fn apply_drafts(state: &mut PropertiesState, changes: &mut Vec<Change>) {
+    for (key, text) in state.drafts.drain() {
+        if key == "classname" {
+            changes.push(Change::SetClass(text));
+        } else if let Some(name) = key.strip_prefix("key:").or_else(|| key.strip_prefix("raw:")) {
+            changes.push(Change::SetKey(name.to_owned(), text));
         }
     }
 }

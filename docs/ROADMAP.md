@@ -116,7 +116,7 @@ or edit it yet.
 - [ ] Browse buttons for model, sound, sprite, material and particle keyvalues. Hammer
 - [ ] Mark, Mark + Add and the eyedropper on target name fields. Hammer
 - [ ] Copy and Paste of keyvalues between entities. Hammer
-- [ ] Angles compass with Up and Down. Hammer
+- [x] Angles compass with Up and Down. Hammer
 - [ ] Help button showing the class's description, keyvalues, inputs and outputs. Hammer
 - [ ] Comments field. Hammer
 - [ ] Right-click a keyvalue to reset it to its default. H++
@@ -205,7 +205,7 @@ left. See the [README](../README.md) for how each one works.
 - Selection, Block, Entity and Texture Application tools; scale, rotate and skew handles; the Hammer++ 3D gizmo and pivot.
 - Overlay (Shift+O) and Decal (Shift+D) tools, with overlays and decals drawn on their faces in 3D and outlined in 2D.
 - Transform dialog, Snap Selected to Grid (and individually), Flip Objects, Align Objects, texture lock and texture scale lock, arrow-key nudging.
-- Object Properties from the FGD: keyvalues with typed editors, Raw keys (SmartEdit off), outputs, inputs and flags, for several entities at once.
+- Object Properties from the FGD: keyvalues with typed editors, SmartEdit, Apply, outputs, inputs and flags, for several entities at once.
 - Picking brush faces for side list keyvalues, such as overlay and cubemap faces, by clicking them in the 3D view.
 - Face Edit sheet with Hammer++'s UV vector editing and hotspot texturing, Apply Nodraw, random shift, justify, smoothing groups and Replace Textures.
 - Texture browser over every mounted game and addon, with Hammer's filters, keywords, Mark and Replace.
