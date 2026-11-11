@@ -76,6 +76,20 @@ pub enum Action {
     CreateBlock,
     CenterViews2D,
     CenterView3D,
+    /// Fill the viewport area with the viewport under the mouse, or bring the four back.
+    MaximizeView,
+    /// Show the top 2D view in the viewport under the mouse.
+    ViewTop,
+    /// Show the side 2D view in the viewport under the mouse.
+    ViewSide,
+    /// Show the front 2D view in the viewport under the mouse.
+    ViewFront,
+    /// Show the textured 3D view in the viewport under the mouse.
+    ViewTextured,
+    /// Show the 3D lighting preview in the viewport under the mouse.
+    ViewLighting,
+    /// Switch the 2D viewport under the mouse to the next 2D view.
+    NextViewType,
     /// Open the Transform dialog.
     Transform,
     /// Move the selection so its corner lands on the grid.
@@ -302,6 +316,14 @@ impl KeyMap {
                 (Action::CreateBlock, Chord::key(Key::Enter)),
                 (Action::CenterViews2D, Chord::ctrl(Key::E)),
                 (Action::CenterView3D, Chord::ctrl(Key::R)),
+                (Action::CenterView3D, Chord::ctrl_shift(Key::E)),
+                (Action::MaximizeView, Chord::shift(Key::Z)),
+                (Action::ViewTop, Chord::key(Key::F2)),
+                (Action::ViewSide, Chord::key(Key::F3)),
+                (Action::ViewFront, Chord::key(Key::F4)),
+                (Action::ViewTextured, Chord::key(Key::F5)),
+                (Action::ViewLighting, Chord::ctrl(Key::F5)),
+                (Action::NextViewType, Chord::key(Key::Tab)),
                 (Action::Transform, Chord::ctrl(Key::M)),
                 (Action::SnapToGrid, Chord::ctrl(Key::B)),
                 (Action::SnapToGridIndividually, Chord::ctrl_shift(Key::B)),

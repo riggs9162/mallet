@@ -63,11 +63,12 @@ The tools a mapper reaches for every few minutes.
 - [ ] Microgrid sizes 0.125, 0.25 and 0.5, and a custom grid size (View > Set Grid Size). H++
 - [ ] 3D grid on brush faces (P). Hammer, overhauled in H++
 - [ ] Shift+arrow keys clone and nudge the selection. Hammer
-- [ ] Maximise and restore a viewport (Shift+Z) and Autosize 4 Views (Ctrl+A). Hammer
-- [ ] F2 to F5 and Shift+F5 switch the active viewport's type; Tab cycles 2D views. Hammer
-- [ ] Preset zoom levels 1 to 9 in 2D, and Ctrl with Numpad +/- zooming every 2D view. Hammer
-- [ ] Center Views on Selection (Ctrl+E) and Center 3D View on Selection (Ctrl+Shift+E). Hammer
-- [ ] 3D view clipping plane on 1 and 2. Hammer
+- [x] Maximise and restore a viewport (Shift+Z). Hammer
+- [ ] Resizable viewports and Autosize 4 Views (Ctrl+A). Hammer
+- [x] F2 to F5 switch the active viewport's type; Tab cycles 2D views. Hammer
+- [x] Preset zoom levels 1 to 9 in 2D, and Ctrl with the mouse wheel zooming every 2D view. Hammer
+- [x] Center Views on Selection (Ctrl+E) and Center 3D View on Selection (Ctrl+Shift+E). Hammer
+- [x] 3D view clipping plane on 1 and 2. Hammer
 - [ ] Go to Coordinates and Go to Brush Number (Ctrl+Shift+G). Hammer
 - [ ] Camera tool (Shift+C): several cameras, switched with Page Up and Page Down. Hammer
 - [ ] Magnify tool (Shift+G). Hammer

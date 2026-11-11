@@ -49,6 +49,8 @@ use crate::{mcp, tools};
 const CLIP_POINT_REACH_PIXELS: f32 = 6.0;
 /// How close, in pixels, a press has to be to the pivot to drag it.
 const PIVOT_REACH_PIXELS: f32 = 7.0;
+/// How far, in pixels, an arrow key pans a 2D view with nothing to nudge.
+const PAN_PIXELS: f64 = 64.0;
 /// How long `send_input` waits for the window to handle its input.
 const INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -94,6 +96,12 @@ const KEY_ACTIONS: &[Action] = &[
     Action::CreateBlock,
     Action::CenterViews2D,
     Action::CenterView3D,
+    Action::MaximizeView,
+    Action::ViewTop,
+    Action::ViewSide,
+    Action::ViewFront,
+    Action::ViewTextured,
+    Action::ViewLighting,
     Action::Transform,
     Action::SnapToGrid,
     Action::SnapToGridIndividually,
@@ -475,8 +483,27 @@ impl MalletApp {
                     });
                 });
                 ui.menu_button("View", |ui| {
-                    menu_item(ui, &self.keymap, "Center 2D Views", Action::CenterViews2D, &mut chosen);
-                    menu_item(ui, &self.keymap, "Center 3D View", Action::CenterView3D, &mut chosen);
+                    let keymap = &self.keymap;
+                    menu_toggle(
+                        ui,
+                        keymap,
+                        "Maximize Active View",
+                        editor.maximized.is_some(),
+                        Action::MaximizeView,
+                        &mut chosen,
+                    );
+                    ui.menu_button("Active View", |ui| {
+                        menu_item(ui, keymap, "2D Top (x/y)", Action::ViewTop, &mut chosen);
+                        menu_item(ui, keymap, "2D Front (y/z)", Action::ViewFront, &mut chosen);
+                        menu_item(ui, keymap, "2D Side (x/z)", Action::ViewSide, &mut chosen);
+                        menu_item(ui, keymap, "Next 2D View", Action::NextViewType, &mut chosen);
+                        ui.separator();
+                        menu_item(ui, keymap, "3D Textured", Action::ViewTextured, &mut chosen);
+                        menu_item(ui, keymap, "3D Lighting Preview", Action::ViewLighting, &mut chosen);
+                    });
+                    ui.separator();
+                    menu_item(ui, keymap, "Center Views on Selection", Action::CenterViews2D, &mut chosen);
+                    menu_item(ui, keymap, "Center 3D Views on Selection", Action::CenterView3D, &mut chosen);
                     ui.separator();
                     if ui.checkbox(&mut show_net_graph, "Net Graph").clicked() {
                         ui.close_menu();
@@ -786,7 +813,11 @@ impl MalletApp {
     }
 
     fn viewports(&mut self, ui: &mut egui::Ui, editor: &mut Editor, frame: &eframe::Frame) {
-        let rects = editor::quad_rects(ui.available_rect_before_wrap(), VIEWPORT_GAP);
+        let area = ui.available_rect_before_wrap();
+        let mut rects = editor::quad_rects(area, VIEWPORT_GAP);
+        if let Some(slot) = editor.maximized {
+            rects[slot] = area;
+        }
         editor.sync_vertex_tool();
         editor.set_layout(rects, ui.ctx().pixels_per_point());
         let pointer = ui.input(|input| PointerState {
@@ -800,8 +831,14 @@ impl MalletApp {
         self.cursor = None;
         editor.paste_cursor = None;
         for (slot, rect) in rects.into_iter().enumerate() {
+            if editor.maximized.is_some_and(|maximized| maximized != slot) {
+                continue;
+            }
             let started = Instant::now();
             let response = ui.interact(rect, Id::new(("viewport", slot)), Sense::click_and_drag());
+            if response.hovered() {
+                editor.active_slot = slot;
+            }
             let mode = editor.layout[slot];
             match (mode.camera_style(), mode.view_index()) {
                 (Some(style), _) => {
@@ -871,6 +908,19 @@ impl MalletApp {
                 if let Some(position) = self.look_return.take() {
                     ctx.send_viewport_cmd(ViewportCommand::CursorPosition(position));
                 }
+            }
+        }
+        if response.hovered() && !typing {
+            let (closer, further) = ui.input(|input| {
+                let plain = !input.modifiers.ctrl && !input.modifiers.alt && !input.modifiers.shift;
+                (
+                    plain && input.key_pressed(egui::Key::Num1),
+                    plain && input.key_pressed(egui::Key::Num2),
+                )
+            });
+            if closer || further {
+                editor.step_draw_distance(further);
+                editor.save_config();
             }
         }
         let looking = editor.camera.mouse_look();
@@ -1162,6 +1212,9 @@ impl MalletApp {
         if !editor.camera.mouse_look() {
             let zoom_step = editor.config.view.zoom_step;
             editor.views[view_index].handle_input(ui, response, rect, zoom_step);
+            if response.hovered() {
+                view_keys(ui, view_index, editor);
+            }
             // Zooming here, before the view is cloned below, lets this frame draw the new zoom.
             if editor.tool == Tool::Camera && !space_held {
                 editor.views[view_index].handle_click_zoom(response, rect, zoom_step);
@@ -1675,12 +1728,30 @@ impl eframe::App for MalletApp {
     }
 
     /// Feeds one frame of queued synthetic input from the `send_input` tool.
+    ///
+    /// A plain Tab is Hammer's next 2D view key. Unless a text field is being typed in,
+    /// it is taken out of the input here, before egui would move the keyboard focus to a
+    /// button of the side panel with it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let mut editor = editor::lock(&self.editor);
         if let Some(frame) = editor.input_queue.pop_front() {
             raw_input.modifiers = frame.modifiers;
             raw_input.events.extend(frame.events);
             ctx.request_repaint();
+        }
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let before = raw_input.events.len();
+        raw_input.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. } if modifiers.is_none()
+            )
+        });
+        if raw_input.events.len() < before {
+            let slot = editor.active_slot;
+            editor.cycle_2d_view(slot);
         }
     }
 }
@@ -2302,8 +2373,15 @@ fn run(action: Action, editor: &mut Editor) {
                 editor.message = error;
             }
         }
-        Action::CenterViews2D => editor.fit_2d(),
-        Action::CenterView3D => editor.fit_3d(),
+        Action::CenterViews2D => editor.center_2d_on_selection(),
+        Action::CenterView3D => editor.center_3d_on_selection(),
+        Action::MaximizeView => editor.toggle_maximized(editor.active_slot),
+        Action::ViewTop => editor.set_slot_mode(editor.active_slot, ViewMode::Top),
+        Action::ViewSide => editor.set_slot_mode(editor.active_slot, ViewMode::Side),
+        Action::ViewFront => editor.set_slot_mode(editor.active_slot, ViewMode::Front),
+        Action::ViewTextured => editor.set_slot_mode(editor.active_slot, ViewMode::Textured),
+        Action::ViewLighting => editor.set_slot_mode(editor.active_slot, ViewMode::Lighting),
+        Action::NextViewType => editor.cycle_2d_view(editor.active_slot),
         Action::Properties => editor.properties_open = true,
         Action::MoveToWorld => report(editor.move_to_world().map(drop), editor),
         Action::Carve => report(editor.carve().map(drop), editor),
@@ -2380,6 +2458,61 @@ fn nudge(ui: &egui::Ui, view: &View2D, editor: &mut Editor) {
     });
     if offset != DVec2::ZERO {
         report(editor.move_selection(view.axis.lift(offset * step)), editor);
+    }
+}
+
+/// Hammer's keys over a 2D view: 1 to 9 and 0 pick a preset zoom, Ctrl with the mouse
+/// wheel zooms every 2D view together, and the arrow keys pan the view when they have no
+/// selection to nudge.
+fn view_keys(ui: &egui::Ui, view_index: usize, editor: &mut Editor) {
+    if ui.ctx().wants_keyboard_input() {
+        return;
+    }
+    let (digit, synced, pan) = ui.input(|input| {
+        let plain = !input.modifiers.ctrl && !input.modifiers.alt && !input.modifiers.shift;
+        let digits = [
+            egui::Key::Num0,
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ];
+        let digit = digits
+            .iter()
+            .position(|key| plain && input.key_pressed(*key))
+            .map(|digit| digit as u32);
+        let synced = input.modifiers.ctrl && input.raw_scroll_delta.y != 0.0;
+        let mut pan = DVec2::ZERO;
+        for (key, direction) in [
+            (egui::Key::ArrowLeft, DVec2::NEG_X),
+            (egui::Key::ArrowRight, DVec2::X),
+            (egui::Key::ArrowUp, DVec2::Y),
+            (egui::Key::ArrowDown, DVec2::NEG_Y),
+        ] {
+            if plain && input.key_pressed(key) {
+                pan += direction;
+            }
+        }
+        (digit, synced, pan)
+    });
+    if let Some(digit) = digit {
+        editor.preset_zoom(view_index, digit);
+    }
+    if synced {
+        let scale = editor.views[view_index].scale;
+        for view in &mut editor.views {
+            view.set_scale(scale);
+        }
+    }
+    let nudges = editor.config.transform.arrow_nudge && editor.tool == Tool::Select && !editor.selection.is_empty();
+    if pan != DVec2::ZERO && !nudges {
+        let view = &mut editor.views[view_index];
+        view.center += pan * PAN_PIXELS / view.scale;
     }
 }
 

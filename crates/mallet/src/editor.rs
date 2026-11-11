@@ -39,6 +39,7 @@ mod carve;
 mod clipboard;
 mod hollow;
 mod primitives;
+mod views;
 
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
@@ -295,6 +296,10 @@ pub struct Editor {
     /// What each of the four viewport slots shows, in the order camera top-left, then
     /// top-right, bottom-left, bottom-right in Hammer's default layout.
     pub layout: [ViewMode; 4],
+    /// The slot filling the whole viewport area, when one is maximized (Shift+Z).
+    pub maximized: Option<usize>,
+    /// The viewport slot the mouse was over last, which the view keys act on.
+    pub active_slot: usize,
     pub camera: Camera3D,
     pub grid: f64,
     /// Whether drags and new points snap to the grid, as Hammer's Map > Snap to Grid.
@@ -437,6 +442,8 @@ impl Default for Editor {
             scene: Scene::default(),
             views: default_views(),
             layout: [ViewMode::Textured, ViewMode::Top, ViewMode::Front, ViewMode::Side],
+            maximized: None,
+            active_slot: 0,
             camera: Camera3D::new(),
             grid: DEFAULT_GRID,
             snap_to_grid: true,

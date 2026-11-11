@@ -104,8 +104,16 @@ impl MalletApp {
                         (icon::ARROW_U_UP_RIGHT, "Redo", Action::Redo),
                     ],
                     &[
-                        (icon::CROSSHAIR, "Center 2D views on the map", Action::CenterViews2D),
-                        (icon::CUBE_FOCUS, "Center the 3D view on the map", Action::CenterView3D),
+                        (
+                            icon::CROSSHAIR,
+                            "Center the 2D views on the selection, or on the map with nothing selected",
+                            Action::CenterViews2D,
+                        ),
+                        (
+                            icon::CUBE_FOCUS,
+                            "Center the 3D view on the selection, or on the map with nothing selected",
+                            Action::CenterView3D,
+                        ),
                     ],
                 ];
                 for group in groups {
