@@ -251,11 +251,32 @@ fn alpha_uniform(alpha: AlphaMode) -> [f32; 2] {
 #[derive(Clone)]
 struct TranslucentFace {
     center: Vec3,
+    /// The corners of the box around the face's triangles, for culling: a face shows
+    /// while any of it is in view, even when its centre is not.
+    min: Vec3,
+    max: Vec3,
     key: String,
     vertices: Vec<FaceVertex>,
     /// What the face belongs to, so a selected brush's cached copy can be left out while
     /// its tinted copy is drawn.
     owner: Option<Owner>,
+}
+
+impl TranslucentFace {
+    fn new(center: Vec3, key: String, vertices: Vec<FaceVertex>, owner: Option<Owner>) -> Self {
+        let (min, max) = vertices.iter().fold((center, center), |(min, max), vertex| {
+            let point = Vec3::from_array(vertex.position);
+            (min.min(point), max.max(point))
+        });
+        Self {
+            center,
+            min,
+            max,
+            key,
+            vertices,
+            owner,
+        }
+    }
 }
 
 /// Every face of the map: opaque and alpha-tested faces in chunked GPU buffers, and
@@ -1056,9 +1077,7 @@ impl Renderer3D {
         planes: &[Vec4; 6],
     ) -> Option<(wgpu::Buffer, Vec<(String, Range<u32>)>)> {
         let eye = camera.position.as_vec3();
-        let mut visible: Vec<&TranslucentFace> = faces
-            .filter(|face| box_visible(planes, face.center, face.center))
-            .collect();
+        let mut visible: Vec<&TranslucentFace> = faces.filter(|face| box_visible(planes, face.min, face.max)).collect();
         if visible.is_empty() {
             return None;
         }
@@ -1516,12 +1535,12 @@ impl Renderer3D {
                     corner(1.0, 1.0),
                     corner(-1.0, 1.0),
                 ];
-                Some(TranslucentFace {
-                    center: center.as_vec3(),
-                    key: material_key(mesh.sprite.as_deref()?),
-                    vertices: vec![quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]],
-                    owner: mesh.owner,
-                })
+                Some(TranslucentFace::new(
+                    center.as_vec3(),
+                    material_key(mesh.sprite.as_deref()?),
+                    vec![quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]],
+                    mesh.owner,
+                ))
             })
             .collect()
     }
@@ -1763,12 +1782,10 @@ impl Renderer3D {
                     let mut vertices = Vec::new();
                     triangulate(face, (id, texture), tint, highlight, remap, &mut vertices);
                     let center = face.vertices.iter().sum::<DVec3>() / face.vertices.len().max(1) as f64;
-                    chunk.translucent.push(TranslucentFace {
-                        center: center.as_vec3(),
-                        owner: mesh.owner,
-                        key,
-                        vertices,
-                    });
+                    let center = remap.map_or(center, |remap| remap.apply(center));
+                    chunk
+                        .translucent
+                        .push(TranslucentFace::new(center.as_vec3(), key, vertices, mesh.owner));
                 } else {
                     triangulate(
                         face,
