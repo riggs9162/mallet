@@ -141,7 +141,7 @@ or edit it yet.
 - [ ] Sprinkle tool with presets. Hammer (CS:GO), H++
 - [ ] Physics tool: drag, explode and shoot props, ragdolls and brushes, keeping their poses. H++
 - [ ] `editor_text`: 3D text placed in the map that never reaches the game. H++
-- [ ] Apply Current Texture to selected brushes (Shift+T). Hammer
+- [x] Apply Current Texture to selected brushes (Shift+T). Hammer
 
 ## Milestone 5: what the viewports show
 

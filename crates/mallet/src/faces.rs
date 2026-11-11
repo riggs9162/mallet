@@ -427,6 +427,17 @@ impl Editor {
         Ok(count)
     }
 
+    /// Hammer's Apply Current Texture (Shift+T): puts the current material on every face
+    /// of the selected brushes, or on the faces the texture tool has selected.
+    pub fn apply_current_texture(&mut self) -> Result<usize, String> {
+        let sides = self.texture_targets();
+        if sides.is_empty() {
+            return Err("select brushes or faces to put the current texture on".to_owned());
+        }
+        let material = self.material.clone();
+        self.apply_material(&sides, &material)
+    }
+
     /// Puts a material on faces, keeping their alignment.
     pub fn apply_material(&mut self, sides: &BTreeSet<u32>, material: &str) -> Result<usize, String> {
         let material = material.trim().to_owned();

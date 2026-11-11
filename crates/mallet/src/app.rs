@@ -72,6 +72,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::BlockTool,
     Action::EntityTool,
     Action::TextureTool,
+    Action::ApplyCurrentTexture,
     Action::ClipTool,
     Action::ClipThreePoint,
     Action::VertexTool,
@@ -436,6 +437,14 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Delete", Action::DeleteSelection, &mut chosen);
                     menu_item(ui, &self.keymap, "Select All", Action::SelectAll, &mut chosen);
                     menu_item(ui, &self.keymap, "Select None", Action::ClearSelection, &mut chosen);
+                    ui.separator();
+                    menu_item(
+                        ui,
+                        &self.keymap,
+                        "Apply Current Texture",
+                        Action::ApplyCurrentTexture,
+                        &mut chosen,
+                    );
                     ui.separator();
                     menu_item(ui, &self.keymap, "Properties", Action::Properties, &mut chosen);
                     ui.separator();
@@ -2219,6 +2228,7 @@ fn run(action: Action, editor: &mut Editor) {
         Action::BlockTool => editor.set_tool(Tool::Block),
         Action::EntityTool => editor.set_tool(Tool::Entity),
         Action::TextureTool => editor.set_tool(Tool::Texture),
+        Action::ApplyCurrentTexture => report(editor.apply_current_texture().map(drop), editor),
         Action::ClipTool if editor.tool == Tool::Clip => editor.cycle_clip_keep(),
         Action::ClipTool => editor.set_tool(Tool::Clip),
         Action::ClipThreePoint if editor.tool == Tool::Clip => editor.toggle_three_point_clip(),

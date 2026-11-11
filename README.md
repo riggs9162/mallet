@@ -110,6 +110,7 @@ These follow Hammer++'s default keybindings.
 | Ctrl+B / Ctrl+Shift+B | Snap the selection to the grid / snap each selected object on its own |
 | Ctrl+L / Ctrl+I | Flip the selection horizontally / vertically in the 2D view used last |
 | Shift+L | Toggle texture lock |
+| Shift+T | Apply Current Texture: put the current texture on every face of the selected brushes, or on the faces the texture tool selected (also the paint roller in the tool palette and Edit > Apply Current Texture) |
 | Entity tool: click in 3D | Create an entity of the class chosen under New entity on the brush face under the cursor |
 | Entity tool: click in 2D views, then Enter | Place the new entity's marker (each view sets its two axes, snapped to the grid), then create it |
 | Drag with the Block tool, then Enter | Create a box brush; drag inside it to move it, drag handles in any view to resize it (its depth starts from the last block) |

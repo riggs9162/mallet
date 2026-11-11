@@ -25,30 +25,63 @@ const INACTIVE_TAB: Color32 = Color32::from_gray(36);
 /// has no texture.
 pub(super) type TexturePreviews = HashMap<String, Option<(egui::TextureHandle, [u32; 2])>>;
 
-/// A tool palette entry: its icon, name, and the tool and shortcut action when it exists.
-type PaletteEntry = (&'static str, &'static str, Option<(Tool, Action)>);
+/// What a tool palette button does.
+#[derive(Clone, Copy)]
+enum PaletteKind {
+    /// Switches to a tool, with the action that does it from the keyboard.
+    Tool(Tool, Action),
+    /// Runs a command once, like Hammer's Apply Current Texture button.
+    Command(Action),
+    /// A tool Mallet does not have yet, shown greyed out.
+    Missing,
+}
+
+/// A tool palette entry: its icon, name and what it does.
+type PaletteEntry = (&'static str, &'static str, PaletteKind);
 
 /// Hammer's tool palette, top to bottom. Tools Mallet does not have yet are shown greyed
 /// out so the layout already matches.
-const PALETTE: [PaletteEntry; 10] = [
+const PALETTE: [PaletteEntry; 12] = [
     (
         icon::CURSOR,
         "Selection tool",
-        Some((Tool::Select, Action::SelectionTool)),
+        PaletteKind::Tool(Tool::Select, Action::SelectionTool),
     ),
-    (icon::CAMERA, "Camera tool", Some((Tool::Camera, Action::CameraTool))),
-    (icon::LIGHTBULB, "Entity tool", Some((Tool::Entity, Action::EntityTool))),
-    (icon::CUBE, "Block tool", Some((Tool::Block, Action::BlockTool))),
+    (icon::MAGNIFYING_GLASS_PLUS, "Magnify tool", PaletteKind::Missing),
+    (
+        icon::CAMERA,
+        "Camera tool",
+        PaletteKind::Tool(Tool::Camera, Action::CameraTool),
+    ),
+    (
+        icon::LIGHTBULB,
+        "Entity tool",
+        PaletteKind::Tool(Tool::Entity, Action::EntityTool),
+    ),
+    (icon::CUBE, "Block tool", PaletteKind::Tool(Tool::Block, Action::BlockTool)),
     (
         icon::PAINT_BRUSH,
         "Texture application",
-        Some((Tool::Texture, Action::TextureTool)),
+        PaletteKind::Tool(Tool::Texture, Action::TextureTool),
     ),
-    (icon::STAMP, "Apply decals", Some((Tool::Decal, Action::DecalTool))),
-    (icon::STACK, "Overlays", Some((Tool::Overlay, Action::OverlayTool))),
-    (icon::SCISSORS, "Clipping tool", Some((Tool::Clip, Action::ClipTool))),
-    (icon::POLYGON, "Vertex tool", Some((Tool::Vertex, Action::VertexTool))),
-    (icon::PATH, "Path tool", None),
+    (
+        icon::PAINT_ROLLER,
+        "Apply current texture to the selection",
+        PaletteKind::Command(Action::ApplyCurrentTexture),
+    ),
+    (icon::STAMP, "Apply decals", PaletteKind::Tool(Tool::Decal, Action::DecalTool)),
+    (icon::STACK, "Overlays", PaletteKind::Tool(Tool::Overlay, Action::OverlayTool)),
+    (
+        icon::SCISSORS,
+        "Clipping tool",
+        PaletteKind::Tool(Tool::Clip, Action::ClipTool),
+    ),
+    (
+        icon::POLYGON,
+        "Vertex tool",
+        PaletteKind::Tool(Tool::Vertex, Action::VertexTool),
+    ),
+    (icon::PATH, "Path tool", PaletteKind::Missing),
 ];
 
 impl MalletApp {
@@ -321,9 +354,9 @@ impl MalletApp {
                 ui.add_space(4.0);
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
-                    for (glyph, name, tool) in PALETTE {
-                        match tool {
-                            Some((tool, action)) => {
+                    for (glyph, name, kind) in PALETTE {
+                        match kind {
+                            PaletteKind::Tool(tool, action) => {
                                 let selected = editor.tool == tool;
                                 if self
                                     .icon_button(ui, glyph, name, Some(action), selected, PALETTE_ICON_SIZE)
@@ -332,7 +365,15 @@ impl MalletApp {
                                     chosen = Some(action);
                                 }
                             }
-                            None => {
+                            PaletteKind::Command(action) => {
+                                if self
+                                    .icon_button(ui, glyph, name, Some(action), false, PALETTE_ICON_SIZE)
+                                    .clicked()
+                                {
+                                    chosen = Some(action);
+                                }
+                            }
+                            PaletteKind::Missing => {
                                 let button = egui::Button::new(RichText::new(glyph).size(PALETTE_ICON_SIZE))
                                     .min_size(Vec2::splat(34.0));
                                 ui.add_enabled(false, button)

@@ -38,6 +38,8 @@ pub enum Action {
     BlockTool,
     EntityTool,
     TextureTool,
+    /// Put the current texture on the selected brushes or faces.
+    ApplyCurrentTexture,
     /// Switch to the Clipping tool, or with it active, cycle which halves it keeps.
     ClipTool,
     /// Toggle the Clipping tool between two-point and three-point clipping.
@@ -268,6 +270,7 @@ impl KeyMap {
                 (Action::BlockTool, Chord::shift(Key::B)),
                 (Action::EntityTool, Chord::shift(Key::E)),
                 (Action::TextureTool, Chord::shift(Key::A)),
+                (Action::ApplyCurrentTexture, Chord::shift(Key::T)),
                 (Action::ClipTool, Chord::shift(Key::X)),
                 (Action::ClipThreePoint, Chord::key(Key::C)),
                 (Action::VertexTool, Chord::shift(Key::V)),
