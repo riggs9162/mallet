@@ -81,6 +81,8 @@ struct Snapshot {
 /// A change made in the window, applied after drawing it.
 enum Change {
     SetKey(String, String),
+    /// Change the class, adding the new class's default keyvalues.
+    SetClass(String),
     RemoveKey(String),
     Flag(u32, bool),
     Outputs(Vec<Connection>),
@@ -150,6 +152,7 @@ impl MalletApp {
             let ids = &snapshot.ids;
             let result = match change {
                 Change::SetKey(key, value) => editor.set_key_on(ids, &key, &value),
+                Change::SetClass(classname) => editor.set_class_on(ids, &classname),
                 Change::RemoveKey(key) => editor.remove_key_on(ids, &key),
                 Change::Flag(bit, on) => editor.set_flag_on(ids, bit, on),
                 Change::Outputs(outputs) => editor.set_outputs(ids[0], outputs),
@@ -354,7 +357,7 @@ fn header(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, c
             "classname"
         };
         if let Some(value) = text_field(ui, &mut state.drafts, "classname".to_owned(), &current, hint, 220.0) {
-            changes.push(Change::SetKey("classname".to_owned(), value));
+            changes.push(Change::SetClass(value));
         }
         ui.menu_button(icon::CARET_DOWN, |ui| {
             ui.set_max_height(360.0);
@@ -375,7 +378,7 @@ fn header(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, c
                         .clicked()
                     {
                         state.drafts.remove("classname");
-                        changes.push(Change::SetKey("classname".to_owned(), name.clone()));
+                        changes.push(Change::SetClass(name.clone()));
                         ui.close_menu();
                     }
                 }

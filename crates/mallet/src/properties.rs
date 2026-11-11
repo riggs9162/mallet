@@ -87,6 +87,42 @@ impl Editor {
         self.apply_edits(edits)
     }
 
+    /// Changes the class of several entities as one undoable step. Like Hammer, each
+    /// gains the new class's default keyvalues for the keys it does not have yet, so a
+    /// brush tied as `func_detail` and turned into a `func_door` gets the door's speed.
+    pub fn set_class_on(&mut self, ids: &[u32], classname: &str) -> Result<(), String> {
+        let classname = classname.trim();
+        if classname.is_empty() {
+            return Err("a class name cannot be empty".to_owned());
+        }
+        let defaults = self.class_defaults(classname);
+        let has_fgd = self.entity_class(classname).is_some();
+        let mut edits = Vec::new();
+        for id in ids {
+            let Some(entity) = self.entity(*id) else { continue };
+            if entity.classname() != classname {
+                edits.push(Edit::SetKey {
+                    entity: *id,
+                    key: "classname".to_owned(),
+                    value: classname.to_owned(),
+                });
+            }
+            if !has_fgd {
+                continue;
+            }
+            for (key, value) in &defaults {
+                if entity.get(key).is_none() && !key.eq_ignore_ascii_case("origin") {
+                    edits.push(Edit::SetKey {
+                        entity: *id,
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+                }
+            }
+        }
+        self.apply_edits(edits)
+    }
+
     /// Removes a key from every entity in `ids` that has it, as one undoable step.
     pub fn remove_key_on(&mut self, ids: &[u32], key: &str) -> Result<(), String> {
         let edits: Vec<Edit> = ids
