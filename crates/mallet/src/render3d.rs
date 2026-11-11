@@ -1744,13 +1744,15 @@ impl Renderer3D {
                 let half_height = bounds.size().max_element() * 0.5;
                 let half_width = half_height * f64::from(texture.width / texture.height.max(1.0));
                 let highlight = if mesh.selected { SELECTION_TINT } else { 0.0 };
+                let tint = mesh.sprite.as_ref().map_or([255; 3], |sprite| sprite.tint);
+                let [red, green, blue] = tint.map(|channel| (f32::from(channel) / 255.0).powf(2.2));
                 let corner = |x: f64, y: f64| FaceVertex {
                     position: (center + right * (x * half_width) + up * (y * half_height))
                         .as_vec3()
                         .to_array(),
                     normal,
                     uv: [((x + 1.0) * 0.5) as f32, ((1.0 - y) * 0.5) as f32],
-                    color: [1.0; 4],
+                    color: [red, green, blue, 1.0],
                     highlight,
                     alpha: [0.0, 1.0],
                     water: [0.0; 4],

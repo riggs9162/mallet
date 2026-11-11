@@ -51,13 +51,28 @@ pub fn entity_sprite(entity: &Entity, class: Option<&EntityClass>) -> Option<Spr
             return Some(Sprite {
                 material,
                 game: Some(GameSprite::read(entity)),
+                tint: [255; 3],
             });
         }
     }
     Some(Sprite {
         material: sprite_material(class?.icon.as_deref()?)?,
         game: None,
+        tint: icon_tint(entity),
     })
+}
+
+/// The colour Hammer tints an editor icon with: a light's `_light` colour, so the bulb of
+/// a `light` shows the colour picked for it, and white for everything else.
+fn icon_tint(entity: &Entity) -> [u8; 3] {
+    let numbers: Vec<f64> = entity
+        .get("_light")
+        .map(|value| value.split_whitespace().filter_map(|number| number.parse().ok()).collect())
+        .unwrap_or_default();
+    match numbers.as_slice() {
+        [red, green, blue, ..] => [*red, *green, *blue].map(|channel| channel.clamp(0.0, 255.0) as u8),
+        _ => [255; 3],
+    }
 }
 
 /// The material a sprite path names, as the game finds it: `sprites/glow01.spr` and
@@ -80,6 +95,8 @@ pub struct Sprite {
     /// How the game draws it, for entities that are sprites in the game; `None` for an
     /// editor icon.
     pub game: Option<GameSprite>,
+    /// The colour an editor icon is tinted with.
+    pub tint: [u8; 3],
 }
 
 /// How the game draws an env_sprite, from the entity's keys, read as the game reads them
