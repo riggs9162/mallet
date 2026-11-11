@@ -73,6 +73,9 @@ struct Snapshot {
     target_valid: Vec<bool>,
     /// Inputs of each output's target class, by output row.
     target_inputs: Vec<Vec<(String, String)>>,
+    /// The side list key that clicks in the 3D view pick faces for, when it is picked
+    /// for these entities.
+    picking: Option<String>,
 }
 
 /// A change made in the window, applied after drawing it.
@@ -84,12 +87,16 @@ enum Change {
     Select(u32),
     /// Open the model browser to pick a model for this key.
     BrowseModel(String),
+    /// Start picking faces for this side list key in the 3D view, or stop when it is
+    /// being picked already.
+    PickFaces(String),
 }
 
 impl MalletApp {
     /// Draws the Object Properties window when it is open.
     pub(super) fn properties_window(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         if !editor.properties_open {
+            editor.stop_face_pick();
             return;
         }
         let snapshot = snapshot(editor);
@@ -133,6 +140,12 @@ impl MalletApp {
         if !open {
             editor.properties_open = false;
         }
+        let stale_pick = editor.face_pick.as_ref().is_some_and(|pick| {
+            !editor.properties_open || pick.ids != snapshot.ids || pick.tab != editor.active_tab_id()
+        });
+        if stale_pick {
+            editor.stop_face_pick();
+        }
         for change in changes {
             let ids = &snapshot.ids;
             let result = match change {
@@ -146,6 +159,14 @@ impl MalletApp {
                 }
                 Change::BrowseModel(key) => {
                     browse_model = Some(key);
+                    Ok(())
+                }
+                Change::PickFaces(key) => {
+                    if snapshot.picking.as_ref() == Some(&key) {
+                        editor.stop_face_pick();
+                    } else {
+                        editor.start_face_pick(ids.clone(), &key);
+                    }
                     Ok(())
                 }
             };
@@ -211,6 +232,10 @@ fn snapshot(editor: &Editor) -> Snapshot {
         .map(|id| editor.inputs_to(id))
         .unwrap_or_default();
     let outputs_list = outputs.clone().unwrap_or_default();
+    let picking = editor
+        .active_face_pick()
+        .filter(|pick| pick.ids == ids)
+        .map(|pick| pick.key.clone());
     Snapshot {
         target_valid: outputs_list
             .iter()
@@ -239,6 +264,7 @@ fn snapshot(editor: &Editor) -> Snapshot {
         outputs,
         inputs,
         targetnames: editor.targetnames(),
+        picking,
     }
 }
 
@@ -640,6 +666,32 @@ fn property_editor(
                 {
                     state.drafts.remove(&draft_key);
                     changes.push(Change::BrowseModel(property.name.clone()));
+                }
+                response
+            })
+            .inner
+        }
+        "sidelist" => {
+            ui.horizontal(|ui| {
+                let width = (width - 34.0).max(80.0);
+                let (response, committed) =
+                    text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
+                if let Some(text) = committed {
+                    changes.push(Change::SetKey(property.name.clone(), text));
+                }
+                let picking = snapshot.picking.as_deref() == Some(property.name.as_str());
+                let tip = if picking {
+                    "Stop picking faces (Escape)"
+                } else {
+                    "Pick faces in the 3D view: click a face to list only it, Ctrl+click to add or take off a face"
+                };
+                if ui
+                    .selectable_label(picking, icon::EYEDROPPER)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::PickFaces(property.name.clone()));
                 }
                 response
             })

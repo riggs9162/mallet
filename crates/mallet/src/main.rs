@@ -19,6 +19,7 @@ mod config;
 mod decals;
 mod document;
 mod editor;
+mod face_pick;
 mod faces;
 mod gizmo;
 mod handoff;

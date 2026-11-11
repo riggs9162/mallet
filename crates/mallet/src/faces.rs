@@ -194,13 +194,13 @@ impl Editor {
                 }
             }
         }
-        self.scene.mark_faces(&self.face_selection);
+        self.refresh_face_marks();
     }
 
     pub fn clear_face_selection(&mut self) {
         if !self.face_selection.is_empty() {
             self.face_selection.clear();
-            self.scene.mark_faces(&self.face_selection);
+            self.refresh_face_marks();
         }
     }
 
@@ -250,7 +250,7 @@ impl Editor {
                 }
             }
         }
-        self.scene.mark_faces(&self.face_selection);
+        self.refresh_face_marks();
     }
 
     /// Switches tools. Like Hammer, the texture tool trades the selected brushes for all of
@@ -423,7 +423,7 @@ impl Editor {
         if !self.scene.retexture(&changed) {
             self.rebuild_scene();
         }
-        self.scene.mark_faces(&self.face_selection);
+        self.refresh_face_marks();
         Ok(count)
     }
 

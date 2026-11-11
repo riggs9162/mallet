@@ -842,16 +842,24 @@ impl MalletApp {
             }
         }
         let looking = editor.camera.mouse_look();
-        let gizmo_hot = self.use_gizmo(slot, rect, response, editor, pointer)
-            || self.vertex_tool_3d(slot, rect, response, editor, pointer)
-            || self.overlay_tool_3d(slot, rect, response, editor, pointer);
+        let picking = editor.active_face_pick().is_some();
+        let gizmo_hot = !picking
+            && (self.use_gizmo(slot, rect, response, editor, pointer)
+                || self.vertex_tool_3d(slot, rect, response, editor, pointer)
+                || self.overlay_tool_3d(slot, rect, response, editor, pointer));
+        if picking && response.hovered() && !looking {
+            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
         let clicked = if looking {
             ui.input(|input| input.pointer.primary_pressed())
         } else {
             response.clicked_by(PointerButton::Primary)
         };
         let aim = if looking { Some(rect.center()) } else { pointer.position };
-        if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
+        if let (true, Some(aim), true) = (clicked, aim, picking) {
+            let (origin, direction) = editor.camera.ray(rect, aim);
+            editor.face_pick_click(origin, direction, pointer.modifiers.ctrl);
+        } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             match editor.tool {
                 Tool::Select => {
@@ -937,7 +945,10 @@ impl MalletApp {
                 };
                 canvas.label(rect.left_top() + egui::vec2(6.0, 4.0), label, color);
                 Camera3D::draw_crosshair(&painter, rect);
-                self.draw_gizmo(&painter, slot, rect, response, editor);
+                face_pick_notice(&painter, rect, editor);
+                if !picking {
+                    self.draw_gizmo(&painter, slot, rect, response, editor);
+                }
                 vertex_tool::draw_vertex_3d(&painter, &editor.camera, rect, editor);
                 decal_tools::draw_overlay_handles(&painter, &editor.camera, rect, editor);
                 if style == CameraStyle::Lit {
@@ -2080,6 +2091,23 @@ fn lighting_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
     );
 }
 
+/// Tells what clicks in the 3D view do while they pick faces for a keyvalue.
+fn face_pick_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
+    let Some(pick) = editor.active_face_pick() else {
+        return;
+    };
+    painter.text(
+        rect.center_top() + egui::vec2(0.0, 26.0),
+        egui::Align2::CENTER_TOP,
+        format!(
+            "Picking faces for {}: click lists one face, Ctrl+click adds or takes off, Escape stops",
+            pick.key
+        ),
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_rgb(255, 210, 60),
+    );
+}
+
 /// Registers a GPU image with egui the first time, and refreshes egui's reference when the
 /// image was recreated.
 fn show_texture(
@@ -2193,6 +2221,7 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::SplitFace => report(editor.split_vertex_face(), editor),
         Action::SelectAll => editor.select_all(),
+        Action::ClearSelection if editor.stop_face_pick() => {}
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()
                 | editor.overlay.entity.take().is_some()

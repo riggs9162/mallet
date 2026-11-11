@@ -150,6 +150,14 @@ all carry its picture along. An overlay only shows on the faces it lists, as in 
 after moving one onto another brush, Ctrl+click that face with the Overlay tool to add it.
 Copying an overlay together with its wall keeps it on the copied wall.
 
+Any keyvalue that lists brush faces, such as an overlay's Brush faces, the faces an
+`env_cubemap` applies to, or both sides of an `info_overlay_transition`, has a Pick button
+(the eyedropper) in Object Properties, as in Hammer. While it is on, the listed faces are
+outlined in the views, a click on a face in the 3D view makes it the only one listed, and
+Ctrl+click adds a face or takes it off. Clicks see through entities, props and overlays to
+the brush behind, and each one is a step you can undo. With several entities selected, a
+click changes all of their lists. Click the button again or press Escape to stop.
+
 Texture lock covers overlays too. While it is on, an overlay rides along with the brushes
 it lies on when you move, rotate, flip, resize or snap them, without being selected
 itself. With texture scale lock it stretches with a resized brush; without, it keeps its

@@ -206,6 +206,15 @@ listing the outputs elsewhere that name this entity; and Flags. Help for the hov
 shows at the bottom. Text fields commit when they lose focus, and every change is an
 undoable edit, so there is no Apply button.
 
+Side list keyvalues (FGD type `sidelist`, such as `sides` and `sides2`) get a Pick button.
+It starts a face pick (`face_pick.rs`): `Editor::face_pick` names the key, the entities and
+the tab. While it is active in the tab the window shows, clicks in the 3D view go to
+`face_pick_click` instead of the current tool, the gizmo and tool handles are left out, and
+`refresh_face_marks` marks the listed faces in place of the texture tool's selection.
+`pick_side` makes the change for every entity as one undo step; the Overlay tool's
+Ctrl+click and the `pick_face` MCP tool use it too. The pick ends with Escape, the button,
+closing the window, or a selection or tab change.
+
 ## Texturing
 
 `mallet_vmf::texture` holds the Face Edit math, tested on its own: Hammer's world axes

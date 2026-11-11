@@ -17,6 +17,7 @@ use mallet_vmf::overlay::{
 use mallet_vmf::transform::TextureLock;
 
 use crate::editor::{picture_size, Editor, SelectMode};
+use crate::face_pick::PickMode;
 use crate::scene::{FaceHit, Owner};
 
 /// The size of a new overlay whose material has no texture to measure, in world units.
@@ -312,32 +313,9 @@ impl Editor {
 
     /// Adds a brush face to an overlay's `sides`, or takes it off when it is listed.
     pub fn toggle_overlay_face(&mut self, entity: u32, side: u32) -> Result<(), String> {
-        let target = self
-            .entity(entity)
+        self.entity(entity)
             .filter(|target| target.classname().eq_ignore_ascii_case(OVERLAY_CLASS))
             .ok_or_else(|| format!("entity {entity} is not an overlay"))?;
-        let mut sides: Vec<u32> = target
-            .get("sides")
-            .unwrap_or_default()
-            .split_whitespace()
-            .filter_map(|word| word.parse().ok())
-            .collect();
-        let listed = sides.contains(&side);
-        if listed {
-            sides.retain(|other| *other != side);
-        } else {
-            sides.push(side);
-        }
-        self.apply_edit(&Edit::SetKey {
-            entity,
-            key: "sides".to_owned(),
-            value: sides.iter().map(u32::to_string).collect::<Vec<_>>().join(" "),
-        })?;
-        self.message = if listed {
-            format!("Took face {side} off overlay {entity}")
-        } else {
-            format!("Added face {side} to overlay {entity}")
-        };
-        Ok(())
+        self.pick_side(&[entity], "sides", side, PickMode::Toggle).map(drop)
     }
 }

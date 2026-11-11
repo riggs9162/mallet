@@ -359,6 +359,8 @@ pub struct Editor {
     pub pointfile: Option<Vec<DVec3>>,
     /// Brush faces the texture tool has selected, by side id.
     pub face_selection: BTreeSet<u32>,
+    /// The side list keyvalue that clicks in the 3D view pick faces for, if any.
+    pub(crate) face_pick: Option<crate::face_pick::FacePick>,
     /// The clipping tool's points and settings.
     pub clipper: crate::clipper::Clipper,
     /// What a texture tool click does.
@@ -451,6 +453,7 @@ impl Default for Editor {
             active_view: 0,
             pointfile: None,
             face_selection: BTreeSet::new(),
+            face_pick: None,
             clipper: crate::clipper::Clipper::default(),
             recent_materials: Vec::new(),
             texture_mode: crate::faces::TextureMode::default(),
@@ -514,6 +517,12 @@ impl Editor {
     /// Index of the tab being edited.
     pub fn active_tab(&self) -> usize {
         self.active_tab
+    }
+
+    /// The lasting id of the tab being edited, which stays its own while tabs before it
+    /// open or close.
+    pub fn active_tab_id(&self) -> u64 {
+        self.tab_ids[self.active_tab]
     }
 
     /// Brings another tab to the front.
@@ -638,7 +647,7 @@ impl Editor {
         self.refit_on_layout = map.refit_on_layout;
         self.pointfile = map.pointfile;
         self.face_selection = map.face_selection;
-        self.scene.mark_faces(&self.face_selection);
+        self.refresh_face_marks();
         self.clear_clip_points();
     }
 
@@ -837,7 +846,7 @@ impl Editor {
             .filter_map(|face| face.side)
             .collect();
         self.face_selection.retain(|side| sides.contains(side));
-        self.scene.mark_faces(&self.face_selection);
+        self.refresh_face_marks();
         self.refresh_clip_preview();
     }
 
