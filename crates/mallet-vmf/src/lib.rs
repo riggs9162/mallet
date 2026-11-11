@@ -4,6 +4,7 @@
 //! map changes nothing except number formatting that parses back to the same value.
 
 pub mod build;
+pub mod carve;
 pub mod clip;
 pub mod edit;
 pub mod geometry;

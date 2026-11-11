@@ -58,6 +58,9 @@ pub enum Action {
     /// Ask for a wall width and turn the selected brushes into walls, as Hammer's Make
     /// Hollow does.
     MakeHollow,
+    /// Cut the selected brushes' shape out of the brushes they overlap, as Hammer's Carve
+    /// does.
+    Carve,
     /// Turn the selected brush entities back into world brushes, as Hammer's Move to
     /// World does.
     MoveToWorld,
@@ -289,6 +292,7 @@ impl KeyMap {
                 (Action::Properties, Chord::alt(Key::Enter)),
                 (Action::TieToEntity, Chord::ctrl(Key::T)),
                 (Action::MoveToWorld, Chord::ctrl_shift(Key::W)),
+                (Action::Carve, Chord::ctrl_shift(Key::C)),
                 (Action::Compile, Chord::key(Key::F9)),
                 (Action::CompileAgain, Chord::shift(Key::F9)),
                 (Action::SelectAll, Chord::ctrl_shift(Key::A)),
@@ -392,11 +396,12 @@ impl KeyMap {
     }
 }
 
-/// The clipboard action a copy, cut or paste event from the window stands for, given the
-/// modifiers held with it. Ctrl+Shift+C is left alone, as Hammer uses it for Carve.
+/// The action a copy, cut or paste event from the window stands for, given the modifiers
+/// held with it. The window sends Ctrl+Shift+C as a copy event too; it is Hammer's Carve.
 pub fn clipboard_action(event: &Event, modifiers: &Modifiers) -> Option<Action> {
     match event {
         Event::Cut => Some(Action::Cut),
+        Event::Copy if modifiers.ctrl && modifiers.shift => Some(Action::Carve),
         Event::Copy if !modifiers.shift => Some(Action::Copy),
         Event::Paste(_) if modifiers.ctrl && modifiers.shift => Some(Action::PasteSpecial),
         Event::Paste(_) => Some(Action::Paste),

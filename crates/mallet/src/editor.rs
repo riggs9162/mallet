@@ -35,6 +35,7 @@ use crate::view3d::Camera3D;
 
 mod agent;
 mod brush_entities;
+mod carve;
 mod clipboard;
 mod hollow;
 mod primitives;

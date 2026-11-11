@@ -40,7 +40,7 @@ The tools a mapper reaches for every few minutes.
 
 ### Brush operations
 
-- [ ] Carve (Ctrl+Shift+C). Hammer
+- [x] Carve (Ctrl+Shift+C). Hammer
 - [x] Make Hollow, with a wall thickness. Hammer
 - [ ] Merge brushes that form a convex shape (Ctrl+Shift+M). H++
 - [ ] Polygon tool: draw a convex brush point by point in a 2D view. H++

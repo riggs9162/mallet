@@ -292,6 +292,13 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "carve",
+            "Hammer's Carve (Ctrl+Shift+C): cut the shape of the selected brushes out of every other brush they \
+             overlap, in the world and in brush entities. New faces take the carving face's material. Undoable.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "make_hollow",
             "Hammer's Make Hollow: turn every selected brush into one wall per face, thickness units deep              (default 32), around the space it filled, or outside it when thickness is negative. The walls of              a world brush are grouped, as in Hammer, and selected. Undoable.",
             json!({ "thickness": { "type": "number", "description": "Wall width in units; negative builds the walls outside." } }),
@@ -1513,6 +1520,10 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 }
             };
             Ok(ToolResult::json(&json!({ "entity": id, "message": editor.message })))
+        }
+        "carve" => {
+            editor.carve()?;
+            Ok(ToolResult::text(format!("{}. Undo with the undo tool or Ctrl+Z.", editor.message)))
         }
         "make_hollow" => {
             let thickness = optional_number(args, "thickness")?.unwrap_or(crate::editor::DEFAULT_HOLLOW_WIDTH);
