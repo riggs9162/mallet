@@ -292,6 +292,19 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "group_selection",
+            "Hammer's Group (Ctrl+G): put the selected brushes and entities in a new group, so clicking one in \
+             Groups selection mode selects them all. Undoable.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "ungroup_selection",
+            "Hammer's Ungroup (Ctrl+U): break up every group the selection is in. Undoable.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "check_for_problems",
             "Hammer's Check for Problems (Alt+P): a missing player start, entities with no class, brush entities \
              with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused \
@@ -1529,6 +1542,14 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 }
             };
             Ok(ToolResult::json(&json!({ "entity": id, "message": editor.message })))
+        }
+        "group_selection" => {
+            editor.group_selection()?;
+            Ok(ToolResult::text(editor.message.clone()))
+        }
+        "ungroup_selection" => {
+            editor.ungroup_selection()?;
+            Ok(ToolResult::text(editor.message.clone()))
         }
         "check_for_problems" => {
             if args.get("fix").and_then(Value::as_bool) == Some(true) {

@@ -38,6 +38,7 @@ mod brush_entities;
 mod cameras;
 mod carve;
 mod clipboard;
+mod groups;
 mod hollow;
 mod primitives;
 mod views;

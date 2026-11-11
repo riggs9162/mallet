@@ -67,6 +67,10 @@ pub enum Action {
     /// Cut the selected brushes' shape out of the brushes they overlap, as Hammer's Carve
     /// does.
     Carve,
+    /// Put the selected objects in a group of their own.
+    Group,
+    /// Break up the groups the selection is in.
+    Ungroup,
     /// Turn the selected brush entities back into world brushes, as Hammer's Move to
     /// World does.
     MoveToWorld,
@@ -326,6 +330,8 @@ impl KeyMap {
                 (Action::TieToEntity, Chord::ctrl(Key::T)),
                 (Action::MoveToWorld, Chord::ctrl_shift(Key::W)),
                 (Action::Carve, Chord::ctrl_shift(Key::C)),
+                (Action::Group, Chord::ctrl(Key::G)),
+                (Action::Ungroup, Chord::ctrl(Key::U)),
                 (Action::Compile, Chord::key(Key::F9)),
                 (Action::CompileAgain, Chord::shift(Key::F9)),
                 (Action::SelectAll, Chord::ctrl_shift(Key::A)),

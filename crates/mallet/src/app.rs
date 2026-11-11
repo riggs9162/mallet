@@ -94,6 +94,8 @@ const KEY_ACTIONS: &[Action] = &[
     Action::TieToEntity,
     Action::MoveToWorld,
     Action::Carve,
+    Action::Group,
+    Action::Ungroup,
     Action::Compile,
     Action::CompileAgain,
     Action::SelectAll,
@@ -581,6 +583,8 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Create Block", Action::CreateBlock, &mut chosen);
                     ui.separator();
                     menu_item(ui, &self.keymap, "Carve", Action::Carve, &mut chosen);
+                    menu_item(ui, &self.keymap, "Group", Action::Group, &mut chosen);
+                    menu_item(ui, &self.keymap, "Ungroup", Action::Ungroup, &mut chosen);
                     menu_item(ui, &self.keymap, "Make Hollow...", Action::MakeHollow, &mut chosen);
                     menu_item(ui, &self.keymap, "Tie to Entity", Action::TieToEntity, &mut chosen);
                     menu_item(ui, &self.keymap, "Move to World", Action::MoveToWorld, &mut chosen);
@@ -2448,6 +2452,8 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::MoveToWorld => report(editor.move_to_world().map(drop), editor),
         Action::Carve => report(editor.carve().map(drop), editor),
+        Action::Group => report(editor.group_selection(), editor),
+        Action::Ungroup => report(editor.ungroup_selection(), editor),
         Action::Options => editor.options_open = true,
         Action::Transform => editor.transform_open = true,
         Action::SnapToGrid | Action::SnapToGridIndividually => report(

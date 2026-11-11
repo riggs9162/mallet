@@ -597,6 +597,7 @@ Tools:
 | `set_pivot` | Place or reset the pivot rotations turn around |
 | `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, or an arch as the Arch Properties dialog makes it |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
+| `group_selection`, `ungroup_selection` | Hammer's Group and Ungroup |
 | `check_for_problems` | Hammer's Check for Problems, optionally fixing what it can |
 | `make_hollow`, `carve` | Hammer's Make Hollow and Carve: walls of a set width in place of the selected brushes, and their shape cut out of the brushes they overlap |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |
