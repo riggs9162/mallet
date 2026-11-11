@@ -13,6 +13,7 @@ pub mod light;
 pub mod lightmap;
 mod model;
 pub mod overlay;
+pub mod primitive;
 pub mod sides;
 pub mod texture;
 pub mod transform;

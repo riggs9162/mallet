@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use eframe::egui::{self, Color32, RichText, Sense, Vec2};
 use egui_phosphor::regular as icon;
 use mallet_vmf::light::{LightingGroup, CATALOGUE};
+use mallet_vmf::primitive::Shape;
 
 use super::{run, save_as_dialog, MalletApp};
 use crate::editor::{Editor, Tool};
@@ -446,6 +447,7 @@ impl MalletApp {
                 ui.separator();
 
                 ui.label(RichText::new("New objects").strong());
+                super::new_objects::primitive_row(ui, editor);
                 ui.horizontal(|ui| {
                     ui.label("Entity tool");
                     super::new_objects::entity_class_menu(ui, editor);
@@ -588,6 +590,9 @@ impl MalletApp {
             Action::Compile => self.open_compile_window(editor),
             Action::TieToEntity => self.tie_to_entity(editor),
             Action::MakeHollow => self.open_hollow_dialog(editor),
+            Action::CreateBlock if editor.tool == Tool::Block && editor.block_shape == Shape::Arch => {
+                self.open_arch_dialog(editor)
+            }
             Action::CompileAgain => {
                 let preset = editor.config.compile.last_preset.clone();
                 if editor.is_untitled() {

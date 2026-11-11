@@ -223,6 +223,8 @@ pub struct MalletApp {
     tie_prompt: Option<entity_tools::TiePrompt>,
     /// The Make Hollow dialog and the wall width it remembers.
     hollow: brush_tools::HollowDialog,
+    /// The Arch Properties dialog and the settings it remembers.
+    arch: brush_tools::ArchDialog,
 }
 
 impl MalletApp {
@@ -264,6 +266,7 @@ impl MalletApp {
             status_bar_top: 0.0,
             tie_prompt: None,
             hollow: brush_tools::HollowDialog::default(),
+            arch: brush_tools::ArchDialog::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -1645,6 +1648,7 @@ impl eframe::App for MalletApp {
         self.close_dialog(ctx, &mut editor);
         self.tie_prompt_window(ctx, &mut editor);
         self.hollow_window(ctx, &mut editor);
+        self.arch_window(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);
         self.face_edit_window(ctx, &mut editor);

@@ -44,7 +44,8 @@ The tools a mapper reaches for every few minutes.
 - [x] Make Hollow, with a wall thickness. Hammer
 - [ ] Merge brushes that form a convex shape (Ctrl+Shift+M). H++
 - [ ] Polygon tool: draw a convex brush point by point in a 2D view. H++
-- [ ] Primitives for the Block tool: block, wedge, cylinder, spike, sphere, arch and torus, with their properties dialogs. Hammer
+- [x] Primitives for the Block tool: block, wedge, cylinder, spike, sphere and arch, with the Arch Properties dialog. Hammer
+- [ ] Torus primitive with its properties dialog. Hammer
 - [ ] Center Origins. Hammer
 - [ ] Move objects to the nearest floor or ceiling, optionally aligned to the surface normal. H++
 

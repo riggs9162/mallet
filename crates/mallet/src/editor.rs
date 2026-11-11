@@ -37,10 +37,12 @@ mod agent;
 mod brush_entities;
 mod clipboard;
 mod hollow;
+mod primitives;
 
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
 pub use hollow::DEFAULT_HOLLOW_WIDTH;
+pub use primitives::DEFAULT_FACES;
 
 pub use clipboard::{Clipboard, PasteAt, PasteOptions, MAX_COPIES};
 
@@ -305,6 +307,10 @@ pub struct Editor {
     pub tool: Tool,
     /// The class the entity tool creates.
     pub entity_class: String,
+    /// The shape the Block tool creates, from the Objects box of the side panel.
+    pub block_shape: mallet_vmf::primitive::Shape,
+    /// How many sides round shapes get, from the Faces box beside it.
+    pub block_faces: u32,
     /// Selected world brushes and entities.
     pub selection: BTreeSet<Owner>,
     /// Tool previews drawn over the map.
@@ -438,6 +444,8 @@ impl Default for Editor {
             message: "Open a map with File > Open or drop a .vmf or .mallet onto the window.".to_owned(),
             tool: Tool::Select,
             entity_class: ENTITY_CLASSES[0].to_owned(),
+            block_shape: mallet_vmf::primitive::Shape::Block,
+            block_faces: DEFAULT_FACES,
             selection: BTreeSet::new(),
             overlay: Overlay::default(),
             material: DEFAULT_MATERIAL.to_owned(),
@@ -1259,10 +1267,10 @@ impl Editor {
         self.overlay.entity = Some(marker);
     }
 
-    /// Creates the block tool's pending box.
+    /// Creates the block tool's current shape in its pending box.
     pub fn commit_block(&mut self) -> Result<u32, String> {
         let block = self.overlay.block.ok_or("draw a block in a 2D view first")?;
-        self.create_block(block.min, block.max)
+        self.create_primitive(self.block_shape, block.min, block.max)
     }
 
     /// The box a block-tool drag between two snapped 2D corners describes, taking its

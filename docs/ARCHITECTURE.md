@@ -593,7 +593,7 @@ Tools:
 | `transform_selection` | Scale, rotate and move the selection in one step around its centre, the pivot, the origin or a point |
 | `flip_selection`, `snap_selection_to_grid`, `align_selection` | Hammer's Flip Objects, Snap Selected to Grid and Align Objects |
 | `set_pivot` | Place or reset the pivot rotations turn around |
-| `create_block` | Box brush between two corners, like the Block tool |
+| `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, or an arch as the Arch Properties dialog makes it |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
 | `make_hollow` | Hammer's Make Hollow: walls of a set width in place of the selected brushes |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |

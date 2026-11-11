@@ -305,12 +305,33 @@ pub fn definitions() -> Value {
         ),
         tool(
             "create_block",
-            "Create an axis-aligned box brush in the world between two corners and select it. Undoable. \
-             Returns the new brush id.",
+            "Create a brush in the world filling the box between two corners, like the Block tool, and select \
+             it: a box, or one of Hammer's primitives (a wedge rising to the north, or an upright cylinder, \
+             spike or sphere with faces sides around). Undoable. Returns the new brush id.",
             json!({
                 "min": vec3,
                 "max": vec3,
-                "material": { "type": "string", "description": "Material for every face; default is the editor's current material." }
+                "material": { "type": "string", "description": "Material for every face; default is the editor's current material." },
+                "shape": { "type": "string", "enum": ["block", "wedge", "cylinder", "spike", "sphere"], "description": "Default block." },
+                "faces": { "type": "integer", "minimum": 3, "maximum": 100, "description": "Sides around a cylinder, spike or sphere; default the Block tool's." }
+            }),
+            &["min", "max"],
+        ),
+        tool(
+            "create_arch",
+            "Create an arch in the box between two corners, as Hammer's Arch Properties dialog does: sides \
+             brushes around the ellipse filling the box from above, wall_width thick, going arc degrees round \
+             from start_angle (counter-clockwise from east), each piece add_height higher than the last. The \
+             pieces are grouped and selected. Undoable. Returns their ids.",
+            json!({
+                "min": vec3,
+                "max": vec3,
+                "material": { "type": "string", "description": "Material for every face; default is the editor's current material." },
+                "wall_width": { "type": "number", "description": "Default 32." },
+                "sides": { "type": "integer", "minimum": 3, "maximum": 100, "description": "Default 8." },
+                "arc": { "type": "number", "minimum": 8, "maximum": 360, "description": "Degrees; default 360." },
+                "start_angle": { "type": "number", "description": "Degrees; default 0." },
+                "add_height": { "type": "number", "description": "Default 0." }
             }),
             &["min", "max"],
         ),
@@ -1534,13 +1555,46 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         "create_block" => {
             let min = required_vec3(args, "min")?;
             let max = required_vec3(args, "max")?;
+            let shape = match optional_string(args, "shape")? {
+                Some(name) => mallet_vmf::primitive::Shape::from_label(name)
+                    .filter(|shape| *shape != mallet_vmf::primitive::Shape::Arch)
+                    .ok_or_else(|| format!("unknown shape \"{name}\"; use block, wedge, cylinder, spike or sphere"))?,
+                None => mallet_vmf::primitive::Shape::Block,
+            };
+            let faces = args.get("faces").and_then(Value::as_u64).map(|faces| faces.clamp(3, 100) as u32);
             let previous = optional_string(args, "material")?
                 .map(|material| std::mem::replace(&mut editor.material, material.to_owned()));
-            let result = editor.create_block(min, max);
+            let previous_faces = faces.map(|faces| std::mem::replace(&mut editor.block_faces, faces));
+            let result = editor.create_primitive(shape, min, max);
             if let Some(previous) = previous {
                 editor.material = previous;
             }
+            if let Some(previous) = previous_faces {
+                editor.block_faces = previous;
+            }
             Ok(ToolResult::json(&json!({ "solid": result? })))
+        }
+        "create_arch" => {
+            let min = required_vec3(args, "min")?;
+            let max = required_vec3(args, "max")?;
+            let defaults = mallet_vmf::primitive::Arch::default();
+            let arch = mallet_vmf::primitive::Arch {
+                wall_width: optional_number(args, "wall_width")?.unwrap_or(defaults.wall_width),
+                sides: args
+                    .get("sides")
+                    .and_then(Value::as_u64)
+                    .map_or(defaults.sides, |sides| sides.clamp(3, 100) as u32),
+                arc: optional_number(args, "arc")?.unwrap_or(defaults.arc),
+                start_angle: optional_number(args, "start_angle")?.unwrap_or(defaults.start_angle),
+                add_height: optional_number(args, "add_height")?.unwrap_or(defaults.add_height),
+            };
+            let previous = optional_string(args, "material")?
+                .map(|material| std::mem::replace(&mut editor.material, material.to_owned()));
+            let result = editor.create_arch(min, max, &arch);
+            if let Some(previous) = previous {
+                editor.material = previous;
+            }
+            Ok(ToolResult::json(&json!({ "solids": result? })))
         }
         "create_entity" => {
             let classname = optional_string(args, "classname")?

@@ -84,7 +84,7 @@ fn round_point(point: DVec3) -> DVec3 {
 }
 
 /// A brush with one side per plane and texture axes, using Hammer's defaults for the rest.
-fn solid_from_sides(faces: &[([DVec3; 3], DVec3, DVec3)], material: &str, ids: &mut IdAllocator) -> Solid {
+pub(crate) fn solid_from_sides(faces: &[([DVec3; 3], DVec3, DVec3)], material: &str, ids: &mut IdAllocator) -> Solid {
     let id = ids.object();
     let mut items = vec![SolidItem::Key(Pair::new("id", id.to_string()))];
     for &(plane, u, v) in faces {
