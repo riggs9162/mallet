@@ -76,6 +76,9 @@ pub struct EntityClass {
     pub studio_from_model: bool,
     /// The sprite `iconsprite("...")` shows, as a material path.
     pub icon: Option<String>,
+    /// Whether `sprite()` without a path shows the entity's own `model` key as the game
+    /// draws it, as for env_sprite.
+    pub sprite_from_model: bool,
     /// Whether the model comes from `lightprop()`, which Hammer turns to point where the
     /// light shines, taking the pitch from the `pitch` key as the compiler does.
     pub light_prop: bool,
@@ -286,6 +289,7 @@ fn merge_bases(written: &Written, class: &mut EntityClass, visiting: &mut Vec<St
         if class.icon.is_none() {
             class.icon = base.icon;
         }
+        class.sprite_from_model |= base.sprite_from_model;
     }
     properties.append(&mut class.properties);
     inputs.append(&mut class.inputs);
@@ -517,6 +521,7 @@ impl Parser {
             studio: None,
             studio_from_model: false,
             icon: None,
+            sprite_from_model: false,
             light_prop: false,
         };
         // Helpers up to '='.
@@ -563,6 +568,10 @@ impl Parser {
                     }
                 }
                 "iconsprite" => class.icon = arguments.first().and_then(|group| group.first()).cloned(),
+                "sprite" => match arguments.first().and_then(|group| group.first()) {
+                    Some(path) => class.icon = Some(path.clone()),
+                    None => class.sprite_from_model = true,
+                },
                 _ => {}
             }
         }

@@ -70,6 +70,8 @@ pub struct Mips {
     pub encoding: Encoding,
     /// The picture's sizes, largest first.
     pub levels: Vec<Level>,
+    /// How many animation frames the file holds; `levels` is one of them.
+    pub frames: u32,
 }
 
 impl Mips {
@@ -89,6 +91,7 @@ impl Mips {
             height: size.1,
             encoding: Encoding::Rgba,
             levels,
+            frames: 1,
         }
     }
 
@@ -209,6 +212,8 @@ struct Header {
     mip_count: u32,
     /// Images stored for each mip level: frames times faces times depth slices.
     copies: u64,
+    /// Animation frames, each `copies / frames` images of every mip level.
+    frames: u64,
     /// Where the mip levels start, smallest first.
     start: u64,
 }
@@ -275,6 +280,7 @@ impl Header {
             format,
             mip_count,
             copies: frames * faces * depth,
+            frames,
             start,
         })
     }
@@ -301,18 +307,30 @@ impl Header {
         self.format.size(width, height) as u64
     }
 
-    /// Where the first image of a mip level lies in the file, and how long it is. The
-    /// smaller levels come before it, each with all its frames, faces and slices.
-    fn level_range(&self, level: u32) -> (u64, u64) {
+    /// Where the first image of animation frame `frame` of a mip level lies in the file,
+    /// and how long it is. The smaller levels come before it, each with all its frames,
+    /// faces and slices, and then the level's earlier frames.
+    fn level_range(&self, level: u32, frame: u64) -> (u64, u64) {
         let smaller = (level + 1..self.mip_count)
             .map(|smaller| self.level_bytes(smaller).saturating_mul(self.copies))
             .fold(0, u64::saturating_add);
-        (self.start.saturating_add(smaller), self.level_bytes(level))
+        let bytes = self.level_bytes(level);
+        let earlier = bytes
+            .saturating_mul(self.copies / self.frames.max(1))
+            .saturating_mul(frame);
+        (self.start.saturating_add(smaller).saturating_add(earlier), bytes)
     }
 
-    /// Decodes one mip level to RGBA, scaled down to fit `max_side`.
-    fn decode(&self, read: &impl Fn(u64, u64) -> Option<Vec<u8>>, level: u32, max_side: u32) -> Result<Image, String> {
-        let (start, length) = self.level_range(level);
+    /// Decodes animation frame `frame` of one mip level to RGBA, scaled down to fit
+    /// `max_side`.
+    fn decode(
+        &self,
+        read: &impl Fn(u64, u64) -> Option<Vec<u8>>,
+        level: u32,
+        max_side: u32,
+        frame: u64,
+    ) -> Result<Image, String> {
+        let (start, length) = self.level_range(level, frame);
         let source = read_exactly(read, start, length)?;
         let (pixel_width, pixel_height) = self.mip_size(level);
         let image = Image {
@@ -358,7 +376,7 @@ pub fn size(read: impl Fn(u64, u64) -> Option<Vec<u8>>) -> Result<[u32; 2], Stri
 /// scaled down to fit.
 pub fn load(read: impl Fn(u64, u64) -> Option<Vec<u8>>, max_side: u32) -> Result<Image, String> {
     let header = Header::read(&read)?;
-    header.decode(&read, header.level_for(max_side), max_side)
+    header.decode(&read, header.level_for(max_side), max_side, 0)
 }
 
 /// Reads a VTF's picture for a graphics card, at every size from the largest whose sides
@@ -367,7 +385,22 @@ pub fn load(read: impl Fn(u64, u64) -> Option<Vec<u8>>, max_side: u32) -> Result
 /// decoding. Otherwise, and for the other formats, the largest size is decoded as [`load`]
 /// does and the smaller ones are made from it.
 pub fn load_mips(read: impl Fn(u64, u64) -> Option<Vec<u8>>, max_side: u32, blocks: bool) -> Result<Mips, String> {
+    load_frame_mips(read, max_side, blocks, 0)
+}
+
+/// Reads animation frame `frame` of a VTF's picture as [`load_mips`] reads the first, for
+/// animated sprites. A frame past the last is an error.
+pub fn load_frame_mips(
+    read: impl Fn(u64, u64) -> Option<Vec<u8>>,
+    max_side: u32,
+    blocks: bool,
+    frame: u32,
+) -> Result<Mips, String> {
     let header = Header::read(&read)?;
+    let frame = u64::from(frame);
+    if frame >= header.frames {
+        return Err(format!("VTF has no frame {frame}"));
+    }
     let level = header.level_for(max_side);
     let (width, height) = header.mip_size(level);
     let encoding = header.format.encoding();
@@ -380,13 +413,16 @@ pub fn load_mips(read: impl Fn(u64, u64) -> Option<Vec<u8>>, max_side: u32, bloc
         && height % 4 == 0
         && count + OPTIONAL_LEVELS >= full_chain;
     if !as_stored {
-        return header.decode(&read, level, max_side).map(Mips::from_image);
+        return header.decode(&read, level, max_side, frame).map(|image| Mips {
+            frames: header.frames as u32,
+            ..Mips::from_image(image)
+        });
     }
-    let (start, length) = header.level_range(level);
+    let (start, length) = header.level_range(level, frame);
     let data = read_exactly(&read, header.start, start.saturating_add(length) - header.start)?;
     let levels = (level..level + count)
         .map(|level| {
-            let (start, length) = header.level_range(level);
+            let (start, length) = header.level_range(level, frame);
             let at = usize::try_from(start - header.start).ok()?;
             let (width, height) = header.mip_size(level);
             Some(Level {
@@ -402,6 +438,7 @@ pub fn load_mips(read: impl Fn(u64, u64) -> Option<Vec<u8>>, max_side: u32, bloc
         height: header.height,
         encoding,
         levels,
+        frames: header.frames as u32,
     })
 }
 

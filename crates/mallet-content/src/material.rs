@@ -79,6 +79,78 @@ const TOOL_KEYS: [&str; 14] = [
     "%compileblocklos",
 ];
 
+/// Which way a sprite faces, from `$spriteorientation`, numbered as the game numbers them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SpriteOrientation {
+    /// `parallel_upright`: stands straight up and turns about its vertical axis to face
+    /// the way the camera looks. The game's default.
+    #[default]
+    ParallelUpright,
+    /// `facing_upright`: stands straight up and turns about its vertical axis.
+    FacingUpright,
+    /// `vp_parallel`: always parallel to the screen.
+    Parallel,
+    /// `oriented`: fixed in the world by the entity's angles.
+    Oriented,
+    /// `vp_parallel_oriented`: parallel to the screen, turned on it by the entity's roll.
+    ParallelOriented,
+}
+
+impl SpriteOrientation {
+    fn from_number(number: i64) -> Self {
+        match number {
+            1 => Self::FacingUpright,
+            2 => Self::Parallel,
+            3 => Self::Oriented,
+            4 => Self::ParallelOriented,
+            _ => Self::ParallelUpright,
+        }
+    }
+}
+
+/// How the game draws a material as the sprite of an env_sprite, from its VMT.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteLook {
+    /// Drawn by the `Sprite` shader, which blends as the entity's render mode says. Other
+    /// shaders, such as `UnlitGeneric`, blend as the material itself says.
+    pub sprite_shader: bool,
+    pub orientation: SpriteOrientation,
+    /// `$spriteorigin`: where the entity's origin lies on the sprite, as a share of its
+    /// width from the left and of its height from the top.
+    pub origin: [f32; 2],
+    /// `$nosrgb`, on unless a `Sprite` material turns it off: the texture is read, tinted
+    /// and blended in gamma space, as stored, rather than in linear light.
+    pub gamma: bool,
+    /// `$ignorevertexcolors`: the Additive render modes leave out the entity's colour.
+    pub ignore_vertex_colors: bool,
+    /// `$color` and `$alpha`, which tint the Additive render modes.
+    pub color: [f32; 3],
+    pub alpha: f32,
+    /// `$ignorez`: drawn in front of everything.
+    pub ignore_z: bool,
+    /// `$vertexcolor` and `$vertexalpha`, with which other shaders take the entity's
+    /// colour and opacity.
+    pub vertex_color: bool,
+    pub vertex_alpha: bool,
+}
+
+impl Default for SpriteLook {
+    fn default() -> Self {
+        Self {
+            sprite_shader: false,
+            orientation: SpriteOrientation::ParallelUpright,
+            origin: [0.5, 0.5],
+            gamma: false,
+            ignore_vertex_colors: true,
+            color: [1.0; 3],
+            alpha: 1.0,
+            ignore_z: false,
+            vertex_color: false,
+            vertex_alpha: false,
+        }
+    }
+}
+
 /// What the editor needs to draw a material.
 #[derive(Debug, Clone)]
 pub struct Material {
@@ -98,6 +170,8 @@ pub struct Material {
     pub unlit: bool,
     /// World units per texel of an `infodecal` that uses the material (`$decalscale`).
     pub decal_scale: f32,
+    /// How the material looks as a sprite.
+    pub sprite: SpriteLook,
 }
 
 impl Material {
@@ -110,6 +184,7 @@ impl Material {
             self_illum: None,
             unlit: false,
             decal_scale: 1.0,
+            sprite: SpriteLook::default(),
         }
     }
 }
@@ -152,6 +227,119 @@ struct Properties {
     /// The hotspot `.rect` file (`%rectanglemap`), relative to `materials/` and without
     /// its extension.
     rectangle_map: Option<String>,
+    sprite: SpriteKeys,
+}
+
+/// The VMT keys that say how a material looks as a sprite. `None` means the key was not
+/// set.
+#[derive(Debug, Default, Clone)]
+struct SpriteKeys {
+    orientation: Option<String>,
+    /// `$spriteorigin` as written, which counts only when it is a `[x y]` vector.
+    origin: Option<String>,
+    no_srgb: Option<bool>,
+    ignore_vertex_colors: Option<bool>,
+    color: Option<[f32; 3]>,
+    ignore_z: Option<bool>,
+    vertex_color: Option<bool>,
+    vertex_alpha: Option<bool>,
+}
+
+impl SpriteKeys {
+    fn read(block: &Block) -> Self {
+        let flag = |key: &str| {
+            block
+                .get(key)
+                .and_then(|value| value.trim().parse::<f32>().ok())
+                .map(|value| value != 0.0)
+        };
+        Self {
+            orientation: block
+                .get("$spriteorientation")
+                .map(|value| value.trim().to_ascii_lowercase()),
+            origin: block.get("$spriteorigin").map(str::to_owned),
+            no_srgb: flag("$nosrgb"),
+            ignore_vertex_colors: flag("$ignorevertexcolors"),
+            color: block.get("$color").and_then(material_color),
+            ignore_z: flag("$ignorez"),
+            vertex_color: flag("$vertexcolor"),
+            vertex_alpha: flag("$vertexalpha"),
+        }
+    }
+
+    fn overridden_by(self, other: Self) -> Self {
+        Self {
+            orientation: other.orientation.or(self.orientation),
+            origin: other.origin.or(self.origin),
+            no_srgb: other.no_srgb.or(self.no_srgb),
+            ignore_vertex_colors: other.ignore_vertex_colors.or(self.ignore_vertex_colors),
+            color: other.color.or(self.color),
+            ignore_z: other.ignore_z.or(self.ignore_z),
+            vertex_color: other.vertex_color.or(self.vertex_color),
+            vertex_alpha: other.vertex_alpha.or(self.vertex_alpha),
+        }
+    }
+
+    /// The look the game gives these keys. The `Sprite` shader turns the orientation's
+    /// name into its number and defaults `$spriteorigin` to the top left corner, as its
+    /// parameter's default is `[0 0 0]`; under other shaders the orientation is read as a
+    /// number, so a name counts as 0, and the origin defaults to the centre.
+    fn look(&self, sprite_shader: bool, alpha: Option<f32>) -> SpriteLook {
+        let orientation = match self.orientation.as_deref() {
+            None => SpriteOrientation::ParallelUpright,
+            Some(name) if sprite_shader => match name {
+                "facing_upright" => SpriteOrientation::FacingUpright,
+                "vp_parallel" => SpriteOrientation::Parallel,
+                "oriented" => SpriteOrientation::Oriented,
+                "vp_parallel_oriented" => SpriteOrientation::ParallelOriented,
+                _ => SpriteOrientation::ParallelUpright,
+            },
+            Some(number) => SpriteOrientation::from_number(leading_integer(number)),
+        };
+        let vector = self.origin.as_deref().and_then(|text| {
+            let text = text.trim();
+            if !text.starts_with('[') && !text.starts_with('{') {
+                return None;
+            }
+            let values: Vec<f32> = text
+                .split(|c: char| c.is_whitespace() || matches!(c, '[' | ']' | '{' | '}'))
+                .filter(|part| !part.is_empty())
+                .map(|part| part.parse::<f32>().unwrap_or(0.0))
+                .collect();
+            Some([
+                values.first().copied().unwrap_or(0.0),
+                values.get(1).copied().unwrap_or(0.0),
+            ])
+        });
+        let origin = match (vector, self.origin.is_some()) {
+            (Some(origin), _) => origin,
+            (None, false) if sprite_shader => [0.0, 0.0],
+            (None, _) => [0.5, 0.5],
+        };
+        SpriteLook {
+            sprite_shader,
+            orientation,
+            origin,
+            gamma: sprite_shader && self.no_srgb.unwrap_or(true),
+            ignore_vertex_colors: self.ignore_vertex_colors.unwrap_or(true),
+            color: self.color.unwrap_or([1.0; 3]),
+            alpha: alpha.unwrap_or(1.0).clamp(0.0, 1.0),
+            ignore_z: self.ignore_z.unwrap_or(false),
+            vertex_color: self.vertex_color.unwrap_or(false),
+            vertex_alpha: self.vertex_alpha.unwrap_or(false),
+        }
+    }
+}
+
+/// The whole number a material value starts with, as the game reads a number from text:
+/// 0 when it starts with none.
+fn leading_integer(text: &str) -> i64 {
+    let text = text.trim_start();
+    let sign = usize::from(text.starts_with(['-', '+']));
+    let digits = text[sign..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(text.len(), |end| end + sign);
+    text[..digits].parse().unwrap_or(0)
 }
 
 /// What the texture browser's filters need to know about a material.
@@ -193,6 +381,7 @@ impl Properties {
                 .get("%rectanglemap")
                 .map(|name| normalize(name).trim_end_matches(".rect").to_owned())
                 .filter(|name| !name.is_empty()),
+            sprite: SpriteKeys::read(block),
         }
     }
 
@@ -232,6 +421,7 @@ impl Properties {
             surface: other.surface.or(self.surface),
             shader: other.shader.or(self.shader),
             rectangle_map: other.rectangle_map.or(self.rectangle_map),
+            sprite: self.sprite.overridden_by(other.sprite),
         }
     }
 
@@ -274,7 +464,15 @@ impl Properties {
                 .then(|| self.self_illum_tint.unwrap_or([1.0; 3])),
             unlit,
             decal_scale: self.decal_scale.unwrap_or(1.0),
+            sprite: self.sprite.look(self.shader.as_deref() == Some("sprite"), self.alpha),
         }
+    }
+
+    /// Whether the material is drawn as a sprite of the game's own: by the `Sprite`
+    /// shader, or kept with the sprites under `materials/sprites/`. Such materials have
+    /// their animation frames loaded.
+    fn animated_sprite(&self, key: &str) -> bool {
+        self.shader.as_deref() == Some("sprite") || key.starts_with("sprites/")
     }
 }
 
@@ -491,6 +689,25 @@ impl MaterialLoader {
             ..properties.material()
         };
         (material, mips)
+    }
+
+    /// Animation frame `frame` of a sprite material's texture, as [`MaterialLoader::load_mips`]
+    /// loads the first. `None` for a frame the texture does not have, and for materials
+    /// that are not sprites, whose frames the editor never shows.
+    pub fn load_frame_mips(&self, material: &str, frame: u32, blocks: bool) -> Option<Mips> {
+        let key = material_key(material);
+        let properties = self.properties(&key, 0)?;
+        if !properties.animated_sprite(&key) {
+            return None;
+        }
+        let file = self.texture_file(properties.texture.as_ref()?)?;
+        vtf::load_frame_mips(
+            |start, length| file.read(start, length),
+            MAX_TEXTURE_SIDE,
+            blocks,
+            frame,
+        )
+        .ok()
     }
 
     /// A material's texture as the viewports show it, decoded.
