@@ -973,6 +973,9 @@ impl MalletApp {
                 if editor.gpu.as_ref().is_some_and(|gpu| gpu.textures_loading() > 0) {
                     ctx.request_repaint_after(Duration::from_millis(50));
                 }
+                if editor.gpu.as_ref().is_some_and(|gpu| gpu.sprites_animating(slot)) {
+                    ctx.request_repaint_after(Duration::from_millis(33));
+                }
             }
             None => editor
                 .camera
@@ -1189,9 +1192,7 @@ impl MalletApp {
             options: &editor.config.lighting,
             texture_lights: &editor.texture_lights,
         };
-        let renderer = editor
-            .gpu
-            .get_or_insert_with(|| Renderer3D::new(&render_state.device, &render_state.queue));
+        let renderer = editor.gpu.get_or_insert_with(|| new_renderer(render_state));
         let (view, recreated) = renderer.render(
             slot,
             style,
@@ -1217,9 +1218,7 @@ impl MalletApp {
     ) -> egui::TextureId {
         let overlay = editor.display_overlay();
         let pixels = editor.slot_pixels(slot);
-        let renderer = editor
-            .gpu
-            .get_or_insert_with(|| Renderer3D::new(&render_state.device, &render_state.queue));
+        let renderer = editor.gpu.get_or_insert_with(|| new_renderer(render_state));
         let (view, recreated) = renderer.render_2d(
             slot,
             &editor.views[view_index],
@@ -2106,6 +2105,16 @@ fn face_pick_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
         egui::FontId::proportional(13.0),
         egui::Color32::from_rgb(255, 210, 60),
     );
+}
+
+/// Makes the viewport renderer for the window's graphics card.
+fn new_renderer(render_state: &egui_wgpu::RenderState) -> Renderer3D {
+    let gamma_view = render_state
+        .adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(eframe::wgpu::DownlevelFlags::VIEW_FORMATS);
+    Renderer3D::new(&render_state.device, &render_state.queue, gamma_view)
 }
 
 /// Registers a GPU image with egui the first time, and refreshes egui's reference when the

@@ -220,7 +220,8 @@ hard falloff, `_distance`, spotlight cones and focus, `pitch`, `angles` and aim 
 | `env_projectedtexture` | Projects its texture through its field of view out to its far distance, with shadows |
 | Texture lights | Faces whose material `lights.rad` lists give off light, split into patches like VRAD's, and glow; the map's own `.rad` file beside it counts too |
 | `$selfillum` materials | Glow where their texture's alpha says |
-| `point_spotlight`, `beam_spotlight`, `env_sprite`, `env_lightglow`, `env_sun` | Beams, halos and glows, and the sun's glow in the sky |
+| `point_spotlight`, `beam_spotlight`, `env_lightglow`, `env_sun` | Beams, halos and glows, and the sun's glow in the sky |
+| `env_sprite`, `env_sprite_oriented` | Their sprite, drawn as the game draws it in both 3D views: render mode, colour, scale, orientation and animation; Glow sprites keep their size on screen, fade past 1200 units and hide behind walls. The preview also fogs them, scales them by the exposure and `HDRColorScale`, and hides named sprites that start off |
 | `env_fog_controller`, `env_skypaint` | Fog, and Garry's Mod's painted sky |
 
 Sky faces show the map's skybox, and tool textures that are invisible in the game

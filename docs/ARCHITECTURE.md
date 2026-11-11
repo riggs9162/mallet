@@ -185,7 +185,7 @@ a cache shared by all tabs, with the error for each model that failed.
 
 `GameData` reads FGD files, following `@include`, and merges each class with its base
 classes: keyvalues with types, defaults, help and choices, spawnflags, inputs and outputs,
-and the `size()`, `color()`, `studio()` and `iconsprite()` helpers. Base classes have their
+and the `size()`, `color()`, `studio()`, `iconsprite()` and `sprite()` helpers. Base classes have their
 own namespace, since `base.fgd` has both a `Light` base class and a `light` point class.
 Mallet reads the FGD in the game's `bin` folder named after the game folder (such as
 `garrysmod.fgd`) unless Tools > Game Data Files picks others. The scene uses a class's
@@ -439,6 +439,16 @@ changes, never for selection changes or camera moves:
   wait for the loads to finish.
 - The camera has a draw distance (default 8192 units) that sets the projection's far
   plane, so frustum culling also drops everything beyond it. Chunks are 1024 units.
+- Point entities whose class has `iconsprite()` show that icon facing the camera in
+  place of their box. Classes with `sprite()`, such as env_sprite, show their own sprite
+  as the game draws it, rebuilt every frame in `render3d::sprites`, which follows the
+  Source SDK's `C_SpriteRenderer` and `Sprite_DX9`: the material's `$spriteorientation`
+  and `$spriteorigin`, the render mode's blend and depth test, the client's glow fade,
+  screen size and visibility test (a line to the `GlowProxySize` sphere through drawn
+  brushes and props), render effects, and animation frames loaded from the VTF. `Sprite`
+  materials read, tint and blend in gamma space by default (`$nosrgb`), so they are drawn
+  in their own pass through a view of the image without the sRGB curve, where the
+  graphics card has one; other shaders blend in linear light. Lines are drawn after them.
 - The selection, its red outline and tool previews are small and rebuilt every frame so
   drags show live. In 3D the selection is drawn again over the cached geometry at equal
   depth, tinted red.
@@ -519,7 +529,8 @@ cached chunks and props as the textured view with its own shaders (`lit.wgsl`):
 - Self-illuminated materials glow by their alpha, texture light materials glow in their
   light's colour, and the result is exposed, clamped or tone mapped and fogged.
 - Glows, spotlight beams and light helpers (reach spheres, cones, frusta and sun arrows)
-  are built each frame around the camera.
+  are built each frame around the camera. Sprites are drawn as in the textured view,
+  fogged, exposed and scaled by `HDRColorScale`.
 - With luxel detail, brush faces are lit from baked luxels. `mallet_vmf::lightmap` works
   out each face's luxel grid as VBSP does, along its texture axes at its lightmap scale,
   and the point each luxel lights, moved inside the face when it falls outside. A worker

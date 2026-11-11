@@ -31,17 +31,134 @@ pub fn entity_model<'a>(entity: &'a Entity, class: Option<&'a EntityClass>) -> O
         .or_else(|| class?.studio.as_deref())
 }
 
-/// The editor sprite the 3D view shows for a point entity, as a material path without
-/// its extension: the icon its FGD class names with `iconsprite("...")`, such as the
-/// bulb of `light` or the speaker of `ambient_generic`.
-pub fn entity_sprite(class: Option<&EntityClass>) -> Option<String> {
-    let icon = class?.icon.as_deref()?.trim().replace('\\', "/");
-    let icon = icon.strip_prefix("materials/").unwrap_or(&icon);
-    let icon = icon
+/// The sprite the 3D view shows for a point entity. Entities the game draws as sprites,
+/// such as env_sprite, show their own `model` the way the game draws it; others show the
+/// editor icon their FGD class names with `iconsprite("...")`, such as the bulb of
+/// `light` or the speaker of `ambient_generic`.
+pub fn entity_sprite(entity: &Entity, class: Option<&EntityClass>) -> Option<Sprite> {
+    let game = class.map_or_else(
+        || {
+            matches!(
+                entity.classname().to_ascii_lowercase().as_str(),
+                "env_sprite" | "env_sprite_oriented" | "env_glow" | "env_sprite_clientside"
+            )
+        },
+        |class| class.sprite_from_model,
+    );
+    if game {
+        let material = entity.get("model").and_then(sprite_material);
+        if let Some(material) = material {
+            return Some(Sprite {
+                material,
+                game: Some(GameSprite::read(entity)),
+            });
+        }
+    }
+    Some(Sprite {
+        material: sprite_material(class?.icon.as_deref()?)?,
+        game: None,
+    })
+}
+
+/// The material a sprite path names, as the game finds it: `sprites/glow01.spr` and
+/// `materials/sprites/glow01.vmt` are both `sprites/glow01`.
+fn sprite_material(path: &str) -> Option<String> {
+    let path = path.trim().replace('\\', "/").to_ascii_lowercase();
+    let path = path.strip_prefix("materials/").unwrap_or(&path);
+    let path = path
         .strip_suffix(".vmt")
-        .or_else(|| icon.strip_suffix(".spr"))
-        .unwrap_or(icon);
-    (!icon.is_empty()).then(|| icon.to_ascii_lowercase())
+        .or_else(|| path.strip_suffix(".spr"))
+        .unwrap_or(path);
+    (!path.is_empty()).then(|| path.to_owned())
+}
+
+/// A sprite drawn for a point entity in the 3D view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sprite {
+    /// The material, as a path such as `editor/light` or `sprites/glow01`.
+    pub material: String,
+    /// How the game draws it, for entities that are sprites in the game; `None` for an
+    /// editor icon.
+    pub game: Option<GameSprite>,
+}
+
+/// How the game draws an env_sprite, from the entity's keys, read as the game reads them
+/// when the sprite spawns.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GameSprite {
+    /// `rendermode`: 0 Normal, 1 Color, 2 Texture, 3 Glow, 4 Solid, 5 Additive, 7 Additive
+    /// Fractional Frame, 8 Alpha Add, 9 World Space Glow, 10 Don't Render.
+    pub mode: u8,
+    /// `renderfx`, such as 14 for Constant Glow or 1 to 4 for pulses.
+    pub fx: u8,
+    /// `rendercolor` and `renderamt`.
+    pub color: [u8; 3],
+    pub amount: u8,
+    /// `scale`, from 0 to 64. The game draws 0 at full size.
+    pub scale: f64,
+    /// `framerate`, in frames a second; the sprite animates when it is not 0 and its
+    /// texture has more than two frames.
+    pub framerate: f64,
+    /// Pitch, yaw and roll in degrees, after the game's spawn swaps them: an env_sprite
+    /// turns a yaw without roll into roll, and an env_sprite_oriented turns half way
+    /// round.
+    pub angles: DVec3,
+    /// `GlowProxySize`: the radius around the origin that must be in sight for a glow to
+    /// show.
+    pub proxy: f64,
+    /// `HDRColorScale`, which brightens the sprite in HDR.
+    pub hdr_scale: f64,
+    /// Named, and without the Start On flag: it stays hidden until something shows it.
+    pub starts_off: bool,
+    /// The entity's id, which sets apart the timing of its pulses and flickers.
+    pub seed: u32,
+}
+
+/// The largest `scale` and `GlowProxySize` the game sends to its clients.
+const MAX_SPRITE_SCALE: f64 = 64.0;
+
+impl GameSprite {
+    fn read(entity: &Entity) -> Self {
+        let number = |key: &str| {
+            entity
+                .get(key)
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+        };
+        let byte = |key: &str, default: u8| number(key).map_or(default, |value| value.clamp(0.0, 255.0) as u8);
+        let color = entity
+            .get("rendercolor")
+            .map(|text| {
+                let mut parts = text.split_whitespace().map(|part| part.parse::<f64>().unwrap_or(0.0));
+                std::array::from_fn(|_| parts.next().unwrap_or(255.0).clamp(0.0, 255.0) as u8)
+            })
+            .unwrap_or([255; 3]);
+        let mut angles = entity
+            .get("angles")
+            .and_then(parse_vec3)
+            .or_else(|| number("angle").map(|yaw| DVec3::new(0.0, yaw, 0.0)))
+            .unwrap_or(DVec3::ZERO);
+        if entity.classname().eq_ignore_ascii_case("env_sprite_oriented") {
+            angles.y = (angles.y + 180.0).rem_euclid(360.0);
+        } else if angles.y != 0.0 && angles.z == 0.0 {
+            angles = DVec3::new(angles.x, 0.0, angles.y);
+        }
+        let named = entity.get("targetname").is_some_and(|name| !name.trim().is_empty());
+        let flags = number("spawnflags").unwrap_or(0.0) as i64;
+        Self {
+            mode: byte("rendermode", 0),
+            fx: byte("renderfx", 0),
+            color,
+            amount: byte("renderamt", 255),
+            scale: number("scale").unwrap_or(0.0).clamp(0.0, MAX_SPRITE_SCALE),
+            framerate: number("framerate").unwrap_or(0.0),
+            angles,
+            proxy: number("GlowProxySize").unwrap_or(2.0).clamp(0.0, MAX_SPRITE_SCALE),
+            hdr_scale: number("HDRColorScale").unwrap_or(1.0),
+            starts_off: named && flags & 1 == 0,
+            seed: entity.id().unwrap_or(0),
+        }
+    }
 }
 
 /// The box of a point entity without an FGD size, relative to its origin, as the
@@ -336,10 +453,10 @@ pub struct WireMesh {
     pub selected: bool,
     /// The prop model drawn for this entity in the 3D view, instead of `faces`.
     pub model: Option<ModelInstance>,
-    /// The editor sprite drawn for this point entity in the 3D view, as a material path
-    /// such as `editor/light`. Once its texture loads, the sprite replaces the entity's
-    /// flat box, the way Hammer shows lights, sounds and cube maps.
-    pub sprite: Option<String>,
+    /// The sprite drawn for this point entity in the 3D view. Once its texture loads, the
+    /// sprite replaces the entity's flat box, the way Hammer shows lights, sounds and cube
+    /// maps.
+    pub sprite: Option<Sprite>,
     /// The origin of a point entity, which moves snap to the grid instead of the
     /// corner of its box, as in Hammer.
     pub origin: Option<DVec3>,
@@ -501,7 +618,7 @@ impl Scene {
                     owner: entity_owner,
                     selected: false,
                     model: None,
-                    sprite: entity_sprite(class),
+                    sprite: entity_sprite(entity, class),
                     origin: Some(origin),
                     first_face: None,
                     decal: false,
@@ -719,6 +836,47 @@ impl Scene {
                     .filter_map(|mesh| Some((mesh.owner?, ray_box(origin, direction, &mesh.bounds)?))),
             )
         })
+    }
+
+    /// Whether something drawn in the game stands between `from` and `to`, as for a glow
+    /// sprite's visibility test: a brush whose face the line enters through is
+    /// `drawn`, or a prop's triangles. Point entity boxes and decals do not count.
+    pub fn line_blocked(
+        &self,
+        from: DVec3,
+        to: DVec3,
+        models: &ModelCache,
+        drawn: impl Fn(&SceneFace) -> bool,
+    ) -> bool {
+        let offset = to - from;
+        let length = offset.length();
+        if length <= f64::EPSILON {
+            return false;
+        }
+        let direction = offset / length;
+        let line = Bounds {
+            min: from.min(to),
+            max: from.max(to),
+        };
+        self.meshes
+            .iter()
+            .filter(|mesh| {
+                !mesh.decal
+                    && mesh.owner.is_some()
+                    && mesh.bounds.min.cmple(line.max).all()
+                    && mesh.bounds.max.cmpge(line.min).all()
+            })
+            .any(|mesh| {
+                if mesh.model.is_some() {
+                    return mesh_hit(mesh, from, direction, models).is_some_and(|distance| distance < length);
+                }
+                if mesh.sprite.is_some() || mesh.faces.iter().all(|face| face.side.is_none()) {
+                    return false;
+                }
+                ray_convex_face(from, direction, &mesh.planes).is_some_and(|(distance, plane)| {
+                    distance < length && plane.and_then(|plane| mesh.faces.get(plane)).is_none_or(&drawn)
+                })
+            })
     }
 
     /// The brush face a ray hits first, for the texture tool. Point entities and props

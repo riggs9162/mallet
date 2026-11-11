@@ -228,7 +228,7 @@ pub const CATALOGUE: &[LightingClass] = &[
         classname: "env_sprite",
         group: LightingGroup::Glow,
         description: "A sprite, most often a glow around a lamp.",
-        preview: "Glow sprites (glow, additive and world space glow modes) are drawn as glows.",
+        preview: "Drawn with its sprite, render mode, colour and scale, as the game draws it.",
         defaults: &[
             ("model", "sprites/glow01.spr"),
             ("scale", "0.25"),
@@ -722,7 +722,7 @@ pub struct Fog {
     pub max_density: f64,
 }
 
-/// A glow sprite drawn without lighting anything.
+/// The glow of an env_lightglow, drawn without lighting anything.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glow {
     pub entity: Option<u32>,
@@ -998,23 +998,6 @@ impl MapLighting {
                         ldr: rgb * alpha,
                         hdr: rgb * alpha * hdr_scale,
                         starts_dark: flags(entity) & 1 == 0,
-                    });
-                }
-                "env_sprite" | "env_sprite_oriented" | "env_glow" => {
-                    let mode = number(entity, "rendermode").unwrap_or(0.0) as i64;
-                    let model = entity.get("model").unwrap_or_default().to_ascii_lowercase();
-                    if !matches!(mode, 3 | 5 | 9) && !model.contains("glow") && !model.contains("light") {
-                        continue;
-                    }
-                    let rgb = entity.get("rendercolor").and_then(rgb_color).unwrap_or(DVec3::ONE);
-                    let alpha = number(entity, "renderamt").unwrap_or(255.0).clamp(0.0, 255.0) / 255.0;
-                    let scale = number(entity, "scale").unwrap_or(1.0).abs().max(0.01);
-                    lighting.glows.push(Glow {
-                        entity: id,
-                        origin,
-                        color: rgb * alpha,
-                        radius: (64.0 * scale).clamp(2.0, 2048.0),
-                        fade: None,
                     });
                 }
                 "env_lightglow" => {

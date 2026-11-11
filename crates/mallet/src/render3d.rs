@@ -9,6 +9,7 @@
 //! on the CPU.
 
 mod lit;
+mod sprites;
 
 pub use lit::{LightingInput, LightingStats};
 
@@ -25,7 +26,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use eframe::wgpu::{self, util::DeviceExt};
 use glam::{DVec3, Mat4, Vec3, Vec4};
 use mallet_content::vtf::{Encoding, Level, Mips};
-use mallet_content::{AlphaMode, Materials, Surface};
+use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface};
 
 use crate::lighting::TextureLights;
 use crate::scene::{
@@ -191,6 +192,10 @@ struct MaterialFacts {
     surface: Surface,
     self_illum: Option<[f32; 3]>,
     unlit: bool,
+    /// How the material looks as a sprite.
+    sprite: SpriteLook,
+    /// How many animation frames its texture has.
+    frames: u32,
 }
 
 impl MaterialFacts {
@@ -200,6 +205,8 @@ impl MaterialFacts {
             surface: Surface::Normal,
             self_illum: None,
             unlit: false,
+            sprite: SpriteLook::default(),
+            frames: 1,
         }
     }
 
@@ -395,6 +402,9 @@ struct Target {
     size: [u32; 2],
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
+    /// The colour image seen without the sRGB curve, for sprites that blend in gamma
+    /// space; `None` for 2D views and where the graphics card cannot view it so.
+    gamma_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
     uniform_buffer: wgpu::Buffer,
     uniform_group: wgpu::BindGroup,
@@ -426,6 +436,11 @@ pub struct Renderer3D {
     translucent_pipeline: wgpu::RenderPipeline,
     model_pipeline: wgpu::RenderPipeline,
     translucent_model_pipeline: wgpu::RenderPipeline,
+    sprite_pipelines: sprites::SpritePipelines,
+    /// When the renderer was made, which animated sprites count their time from.
+    started: Instant,
+    /// Which slots drew sprites that change over time in their latest draw.
+    animating: [bool; 4],
     /// Uploaded prop models by model key; `None` when the model could not be loaded.
     gpu_models: HashMap<String, Option<GpuModel>>,
     line_pipeline: wgpu::RenderPipeline,
@@ -482,7 +497,9 @@ pub struct Renderer3D {
 }
 
 impl Renderer3D {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    /// `gamma_view` says whether the graphics card can view an image without its sRGB
+    /// curve, which sprites that blend in gamma space need.
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, gamma_view: bool) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mallet viewport shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("render3d.wgsl").into()),
@@ -607,6 +624,7 @@ impl Renderer3D {
         let translucent_pipeline = faces(Depth::Translucent);
         let line_pipeline = lines(Depth::Ignore);
         let flat_line_pipeline = lines(Depth::None);
+        let sprite_pipelines = sprites::SpritePipelines::new(device, &face_layout, &shader, gamma_view);
 
         let upload = |mips: Mips, facts| upload(device, queue, &texture_layout, &sampler, &mips, facts, None);
         let missing = upload(checkerboard(), MaterialFacts::opaque());
@@ -629,6 +647,9 @@ impl Renderer3D {
             translucent_pipeline,
             model_pipeline,
             translucent_model_pipeline,
+            sprite_pipelines,
+            started: Instant::now(),
+            animating: [false; 4],
             gpu_models: HashMap::new(),
             line_pipeline,
             flat_line_pipeline,
@@ -707,6 +728,12 @@ impl Renderer3D {
     /// shadow maps to draw or luxels to bake.
     pub fn lighting_pending(&self) -> bool {
         self.lit.as_ref().is_some_and(lit::LitState::pending)
+    }
+
+    /// Whether slot `slot` showed sprites that change over time in its latest draw, so it
+    /// should be drawn again soon.
+    pub fn sprites_animating(&self, slot: usize) -> bool {
+        self.animating.get(slot).copied().unwrap_or(false)
     }
 
     /// What the latest lighting preview frame used, once one has been drawn.
@@ -842,7 +869,15 @@ impl Renderer3D {
         lighting: LightingInput<'_>,
     ) -> (&wgpu::TextureView, bool) {
         let size = [size[0].max(1), size[1].max(1)];
-        let recreated = ensure_target(&self.device, &self.uniform_layout, &mut self.targets[slot], size, true);
+        let gamma_view = self.sprite_pipelines.gamma_view();
+        let recreated = ensure_target(
+            &self.device,
+            &self.uniform_layout,
+            &mut self.targets[slot],
+            size,
+            true,
+            gamma_view,
+        );
         self.poll_loading();
         let lit = style == CameraStyle::Lit;
         let textured = style != CameraStyle::Wireframe;
@@ -881,6 +916,9 @@ impl Renderer3D {
                 value.to_bits().hash(hasher);
             }
             format!("{overlay:?}").hash(hasher);
+            if self.animating[slot] {
+                ((self.started.elapsed().as_secs_f64() * sprites::ANIMATION_RATE) as u64).hash(hasher);
+            }
         });
         self.reused[slot] = !recreated && self.signatures[slot] == Some(signature);
         if self.reused[slot] {
@@ -894,6 +932,7 @@ impl Renderer3D {
                 self.load_textures(scene, materials, models);
                 self.textures_checked = scene.geometry_generation;
             }
+            self.load_sprite_frames(scene, loader.as_ref());
             self.refresh_stale_faces(scene);
             if self
                 .faces
@@ -963,6 +1002,19 @@ impl Renderer3D {
         } else {
             (None, Vec::new())
         };
+        let sprite_lighting = lit.then(|| sprites::SpriteLighting {
+            fog: scene.lighting.fog.filter(|_| lighting.options.fog),
+            exposure: lighting.options.exposure_scale(),
+            hdr: lighting.options.hdr,
+            hidden_too: lighting.options.dark_lights,
+        });
+        let game_sprites = if textured && (!lit || lighting.options.glows) {
+            let now = self.started.elapsed().as_secs_f64();
+            self.frame_sprites(scene, overlay, camera, models, &planes, sprite_lighting, now)
+        } else {
+            sprites::FrameSprites::default()
+        };
+        self.animating[slot] = game_sprites.animated;
         let translucent = match (&self.faces, textured) {
             (Some(faces), true) => {
                 // A selected brush's cached faces give way to its tinted copy, except in a
@@ -1081,11 +1133,26 @@ impl Renderer3D {
                 }
                 (_, None) => {}
             }
-            if let Some(lines) = &outline {
-                pass.set_pipeline(&self.line_pipeline);
-                pass.set_vertex_buffer(0, lines.buffer.slice(..));
-                pass.draw(0..lines.count, 0..1);
+            if game_sprites.is_empty() {
+                self.draw_lines(&mut pass, outline.as_ref());
             }
+        }
+        if !game_sprites.is_empty() {
+            let target = self.targets[slot].as_ref().expect("target was just created");
+            if let (Some(draws), Some(view)) = (&game_sprites.gamma, &target.gamma_view) {
+                let mut pass = continue_pass(&mut encoder, view, target);
+                pass.set_bind_group(0, &target.uniform_group, &[]);
+                self.draw_sprites(&mut pass, draws, true);
+            }
+            let mut pass = continue_pass(&mut encoder, &target.color_view, target);
+            pass.set_bind_group(0, &target.uniform_group, &[]);
+            if let Some(draws) = &game_sprites.linear {
+                self.draw_sprites(&mut pass, draws, false);
+            }
+            if let (Some(draws), None) = (&game_sprites.gamma, &target.gamma_view) {
+                self.draw_sprites(&mut pass, draws, false);
+            }
+            self.draw_lines(&mut pass, outline.as_ref());
         }
         self.queue.submit([encoder.finish()]);
         if textured {
@@ -1098,6 +1165,15 @@ impl Renderer3D {
             &self.targets[slot].as_ref().expect("target exists").color_view,
             recreated,
         )
+    }
+
+    /// Draws the outlines and tool lines on top of everything.
+    fn draw_lines(&self, pass: &mut wgpu::RenderPass<'_>, lines: Option<&LineMesh>) {
+        if let Some(lines) = lines {
+            pass.set_pipeline(&self.line_pipeline);
+            pass.set_vertex_buffer(0, lines.buffer.slice(..));
+            pass.draw(0..lines.count, 0..1);
+        }
     }
 
     /// Puts everything see-through in view in one order, farthest first, so props and
@@ -1401,6 +1477,7 @@ impl Renderer3D {
             &mut self.targets[slot],
             pixels,
             false,
+            false,
         );
         let look = view_style::current();
         let signature = signature(|hasher| {
@@ -1469,7 +1546,10 @@ impl Renderer3D {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_pipeline(&self.flat_line_pipeline);
             pass.set_bind_group(0, &target.uniform_group, &[]);
-            for lines in [under.as_ref(), self.static_edges(), over.as_ref()].into_iter().flatten() {
+            for lines in [under.as_ref(), self.static_edges(), over.as_ref()]
+                .into_iter()
+                .flatten()
+            {
                 pass.set_vertex_buffer(0, lines.buffer.slice(..));
                 pass.draw(0..lines.count, 0..1);
             }
@@ -1552,7 +1632,12 @@ impl Renderer3D {
             .flat_map(|mesh| &mesh.faces)
             .filter_map(|face| face.material.as_deref())
             .chain(model_materials)
-            .chain(scene.meshes.iter().filter_map(|mesh| mesh.sprite.as_deref()))
+            .chain(
+                scene
+                    .meshes
+                    .iter()
+                    .filter_map(|mesh| Some(mesh.sprite.as_ref()?.material.as_str())),
+            )
             .map(material_key)
             .filter(|key| !self.textures.contains_key(key))
             .collect();
@@ -1570,6 +1655,12 @@ impl Renderer3D {
             }
             return;
         };
+        self.spawn_loads(keys, materials.loader());
+    }
+
+    /// Loads the textures of `keys` on background threads. A key such as
+    /// `sprites/fire#3` names an animation frame of a sprite.
+    fn spawn_loads(&mut self, keys: Vec<String>, loader: MaterialLoader) {
         self.loading.extend(keys.iter().cloned());
         let (sender, receiver) = mpsc::sync_channel(LOADED_QUEUE);
         self.incoming.push(receiver);
@@ -1579,19 +1670,28 @@ impl Renderer3D {
         let next = Arc::new(AtomicUsize::new(0));
         for _ in 0..threads {
             let (keys, next, sender) = (Arc::clone(&keys), Arc::clone(&next), sender.clone());
-            let (loader, blocks) = (materials.loader(), self.blocks);
+            let (loader, blocks) = (loader.clone(), self.blocks);
             let _ = std::thread::Builder::new()
                 .name("mallet textures".to_owned())
                 .spawn(move || {
                     while let Some(key) = keys.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let (material, mips) = loader.load_mips(key, blocks);
-                        let facts = MaterialFacts {
-                            alpha: material.alpha,
-                            surface: material.surface,
-                            self_illum: material.self_illum,
-                            unlit: material.unlit,
+                        let loaded = match sprites::split_frame_key(key) {
+                            Some((material, frame)) => sprites::load_frame(&loader, material, frame, blocks)
+                                .map(|mips| (mips, MaterialFacts::opaque())),
+                            None => {
+                                let (material, mips) = loader.load_mips(key, blocks);
+                                let facts = MaterialFacts {
+                                    alpha: material.alpha,
+                                    surface: material.surface,
+                                    self_illum: material.self_illum,
+                                    unlit: material.unlit,
+                                    sprite: material.sprite,
+                                    frames: mips.as_ref().map_or(1, |mips| mips.frames.max(1)),
+                                };
+                                mips.map(|mips| (mips, facts))
+                            }
                         };
-                        if sender.send((key.clone(), mips.map(|mips| (mips, facts)))).is_err() {
+                        if sender.send((key.clone(), loaded)).is_err() {
                             return;
                         }
                     }
@@ -1602,18 +1702,19 @@ impl Renderer3D {
     /// The loaded texture of a mesh's editor sprite; `None` while it loads, when it could
     /// not be found, or when the mesh has no sprite, so the entity keeps its box.
     fn sprite_texture(&self, mesh: &WireMesh) -> Option<&GpuTexture> {
-        let key = material_key(mesh.sprite.as_deref()?);
+        let key = material_key(&mesh.sprite.as_ref()?.material);
         if self.loading.contains(&key) {
             return None;
         }
         self.textures.get(&key)?.as_ref()
     }
 
-    /// Builds the editor sprites of point entities as quads facing the camera, parallel
-    /// to the view plane as Hammer draws them. Each sprite is as tall as the entity's box
+    /// Builds the editor icons of point entities as quads facing the camera, parallel
+    /// to the view plane as Hammer draws them. Each icon is as tall as the entity's box
     /// and keeps its texture's shape; selected ones are tinted and follow a move drag.
     /// They are blended by the texture's alpha and face the textured view's light, so
-    /// they are drawn at full brightness.
+    /// they are drawn at full brightness. Sprites of the game's own are drawn by
+    /// [`Self::frame_sprites`].
     fn sprite_faces(&self, scene: &Scene, overlay: &Overlay, camera: &Camera3D) -> Vec<TranslucentFace> {
         let forward = camera.forward();
         let right = camera.right();
@@ -1622,6 +1723,7 @@ impl Renderer3D {
         scene
             .meshes
             .iter()
+            .filter(|mesh| mesh.sprite.as_ref().is_some_and(|sprite| sprite.game.is_none()))
             .filter_map(|mesh| {
                 let texture = self.sprite_texture(mesh)?;
                 let (_, remap) = mesh.appearance(overlay);
@@ -1649,7 +1751,7 @@ impl Renderer3D {
                 ];
                 Some(TranslucentFace::new(
                     center.as_vec3(),
-                    material_key(mesh.sprite.as_deref()?),
+                    material_key(&mesh.sprite.as_ref()?.material),
                     vec![quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]],
                     mesh.owner,
                 ))
@@ -1758,8 +1860,8 @@ impl Renderer3D {
             .collect();
         let sprites = scene.meshes.iter().filter(|mesh| {
             mesh.sprite
-                .as_deref()
-                .is_some_and(|sprite| stale.contains(&material_key(sprite)))
+                .as_ref()
+                .is_some_and(|sprite| stale.contains(&material_key(&sprite.material)))
         });
         dirty.extend(sprites.map(|mesh| chunk_cell(&mesh.bounds)));
         if !dirty.is_empty() {
@@ -2013,6 +2115,7 @@ fn ensure_target(
     slot: &mut Option<Target>,
     size: [u32; 2],
     with_depth: bool,
+    gamma_view: bool,
 ) -> bool {
     if slot
         .as_ref()
@@ -2035,7 +2138,11 @@ fn ensure_target(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        view_formats: if gamma_view && with_depth {
+            &[sprites::GAMMA_FORMAT]
+        } else {
+            &[]
+        },
     });
     let depth_view = with_depth.then(|| {
         device
@@ -2068,6 +2175,12 @@ fn ensure_target(
     *slot = Some(Target {
         size,
         color_view: color.create_view(&wgpu::TextureViewDescriptor::default()),
+        gamma_view: (gamma_view && with_depth).then(|| {
+            color.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(sprites::GAMMA_FORMAT),
+                ..Default::default()
+            })
+        }),
         color,
         depth_view,
         uniform_buffer,
@@ -2101,6 +2214,39 @@ fn begin_pass<'a>(encoder: &'a mut wgpu::CommandEncoder, target: &'a Target, loo
                 view,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    })
+}
+
+/// Goes on drawing into a viewport target's colour image, seen through `view`, and its
+/// depth buffer, keeping what is drawn already.
+fn continue_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &'a wgpu::TextureView,
+    target: &'a Target,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("mallet viewport sprites"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: target
+            .depth_view
+            .as_ref()
+            .map(|view| wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,

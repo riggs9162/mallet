@@ -89,6 +89,75 @@ fn vs_model(input: ModelIn) -> FaceOut {
     return out;
 }
 
+struct SpriteIn {
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) fog: vec4<f32>,
+    @location(4) mode: vec4<f32>,
+};
+
+struct SpriteOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) fog: vec4<f32>,
+    @location(3) mode: vec4<f32>,
+};
+
+// The sprites of env_sprite and the like, as the game's Sprite shader draws them.
+@vertex
+fn vs_sprite(input: SpriteIn) -> SpriteOut {
+    var out: SpriteOut;
+    out.clip = uniforms.view_proj * vec4<f32>(input.position, 1.0);
+    out.uv = input.uv;
+    out.color = input.color;
+    out.fog = input.fog;
+    out.mode = input.mode;
+    return out;
+}
+
+// The exact inverse of the sRGB curve the graphics card decodes textures with, so a
+// sprite read in gamma space gets the bytes its texture stores.
+fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
+    let low = linear * 12.92;
+    let high = 1.055 * pow(max(linear, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, linear <= vec3<f32>(0.0031308));
+}
+
+// mode.x is how the sprite blends: 0 opaque, 1 mixed by opacity, 2 added, 3 added over
+// what is first dimmed by its opacity, 4 alpha-tested. mode.y is 1 when the texture is
+// read in gamma space, mode.z the selection tint, and mode.w the alpha-test reference, or
+// below 0 when the texture's alpha is ignored. The result is premultiplied, with alpha
+// the share of what is behind that is hidden.
+@fragment
+fn fs_sprite(input: SpriteOut) -> @location(0) vec4<f32> {
+    var texel = textureSample(face_texture, face_sampler, input.uv);
+    if (input.mode.y > 0.5) {
+        texel = vec4<f32>(srgb_encode(texel.rgb), texel.a);
+    }
+    if (input.mode.w < 0.0) {
+        texel.a = 1.0;
+    }
+    let shaded = texel * input.color;
+    if (input.mode.x > 3.5 && shaded.a < input.mode.w) {
+        discard;
+    }
+    var rgb = mix(shaded.rgb, input.fog.rgb, input.fog.a);
+    rgb = mix(rgb, vec3<f32>(1.0, 0.0, 0.0), input.mode.z);
+    let opacity = clamp(shaded.a, 0.0, 1.0);
+    if (input.mode.x < 0.5 || input.mode.x > 3.5) {
+        return vec4<f32>(rgb, 1.0);
+    }
+    if (input.mode.x < 1.5) {
+        return vec4<f32>(rgb * opacity, opacity);
+    }
+    if (input.mode.x < 2.5) {
+        return vec4<f32>(rgb * opacity, 0.0);
+    }
+    return vec4<f32>(rgb, opacity);
+}
+
 struct LineIn {
     @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
