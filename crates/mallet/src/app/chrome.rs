@@ -606,6 +606,8 @@ impl MalletApp {
             Action::GoToCoordinates => self.open_go_to_point(editor),
             Action::MapInformation => self.open_map_information(),
             Action::CheckForProblems => self.check_for_problems(editor),
+            Action::EntityReport => self.open_entity_report(),
+            Action::FindEntities => self.open_find_entities(),
             Action::CreateBlock if editor.tool == Tool::Block && editor.block_shape == Shape::Arch => {
                 self.open_arch_dialog(editor)
             }

@@ -110,6 +110,10 @@ pub enum Action {
     MapInformation,
     /// Check the map for problems, as Hammer's Check for Problems does.
     CheckForProblems,
+    /// List the map's entities with filters, as Hammer's Entity Report does.
+    EntityReport,
+    /// Find entities by name, as Hammer's Find Entities does.
+    FindEntities,
     /// Open the Transform dialog.
     Transform,
     /// Move the selection so its corner lands on the grid.
@@ -351,6 +355,7 @@ impl KeyMap {
                 (Action::NextViewType, Chord::key(Key::Tab)),
                 (Action::GoToBrush, Chord::ctrl_shift(Key::G)),
                 (Action::CheckForProblems, Chord::alt(Key::P)),
+                (Action::FindEntities, Chord::ctrl_shift(Key::F)),
                 (Action::Transform, Chord::ctrl(Key::M)),
                 (Action::SnapToGrid, Chord::ctrl(Key::B)),
                 (Action::SnapToGridIndividually, Chord::ctrl_shift(Key::B)),

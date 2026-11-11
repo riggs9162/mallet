@@ -7,6 +7,7 @@ mod compile_window;
 mod context_menu;
 mod brush_tools;
 mod decal_tools;
+mod entity_report;
 mod entity_tools;
 pub(crate) use compile_window::count;
 mod map_dialogs;
@@ -112,6 +113,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ViewLighting,
     Action::GoToBrush,
     Action::CheckForProblems,
+    Action::FindEntities,
     Action::Transform,
     Action::SnapToGrid,
     Action::SnapToGridIndividually,
@@ -252,6 +254,8 @@ pub struct MalletApp {
     run_map_open: bool,
     /// The Check for Problems dialog's list.
     problems: problems_window::ProblemsDialog,
+    /// The Entity Report's filters.
+    entity_report: entity_report::EntityReport,
 }
 
 impl MalletApp {
@@ -298,6 +302,7 @@ impl MalletApp {
             camera_drag: None,
             run_map_open: false,
             problems: problems_window::ProblemsDialog::default(),
+            entity_report: entity_report::EntityReport::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -482,6 +487,7 @@ impl MalletApp {
                     menu_item(ui, &self.keymap, "Delete", Action::DeleteSelection, &mut chosen);
                     menu_item(ui, &self.keymap, "Select All", Action::SelectAll, &mut chosen);
                     menu_item(ui, &self.keymap, "Select None", Action::ClearSelection, &mut chosen);
+                    menu_item(ui, &self.keymap, "Find Entities...", Action::FindEntities, &mut chosen);
                     ui.separator();
                     menu_item(
                         ui,
@@ -504,6 +510,7 @@ impl MalletApp {
                         menu_item(ui, keymap, "Larger Grid", Action::GridLarger, &mut chosen);
                     });
                     ui.separator();
+                    menu_item(ui, keymap, "Entity Report...", Action::EntityReport, &mut chosen);
                     menu_item(ui, keymap, "Check for Problems...", Action::CheckForProblems, &mut chosen);
                     menu_item(ui, keymap, "Show Information...", Action::MapInformation, &mut chosen);
                     menu_item(ui, keymap, "Map Properties...", Action::MapProperties, &mut chosen);
@@ -1749,6 +1756,7 @@ impl eframe::App for MalletApp {
         self.arch_window(ctx, &mut editor);
         self.map_dialogs(ctx, &mut editor);
         self.problems_window(ctx, &mut editor);
+        self.entity_report_window(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
         self.run_map_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);

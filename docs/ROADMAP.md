@@ -134,8 +134,9 @@ or edit it yet.
 
 ### Entity tools and reports
 
-- [ ] Find Entities (Ctrl+Shift+F) and Replace (Ctrl+Shift+R) for keyvalues. Hammer
-- [ ] Entity Report: filter by class, name, keyvalue or VisGroup; go to, delete and mark. Hammer
+- [x] Find Entities (Ctrl+Shift+F). Hammer
+- [ ] Replace (Ctrl+Shift+R) for keyvalues. Hammer
+- [x] Entity Report: filter by class, name or keyvalue; go to, select, properties and delete. Hammer
 - [ ] Show Connections: lines between entities that send each other outputs. Hammer
 - [ ] Overlays on displacements following the displaced surface. Hammer
 - [ ] Overlay handles in the 2D views, and rotating an overlay from a handle. Hammer
