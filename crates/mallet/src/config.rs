@@ -90,6 +90,7 @@ pub struct Config {
     pub model_browser_view: ModelBrowserView,
     pub interface: InterfaceOptions,
     pub agents: AgentOptions,
+    pub discord: DiscordOptions,
     pub transform: TransformOptions,
     pub lighting: LightingOptions,
 }
@@ -588,6 +589,25 @@ impl Default for AgentOptions {
             enabled: true,
             port: crate::mcp::DEFAULT_PORT,
             own_view: true,
+        }
+    }
+}
+
+/// What Mallet shows on the user's Discord profile while it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordOptions {
+    /// Show Mallet as the current activity when Discord is running. Takes effect at once.
+    pub enabled: bool,
+    /// Name the map being edited; off shows only that a map is being edited.
+    pub show_map_name: bool,
+}
+
+impl Default for DiscordOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show_map_name: true,
         }
     }
 }

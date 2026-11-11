@@ -42,6 +42,7 @@ use crate::editor::{self, Editor, SelectMode, Tool, ViewMode, WindowShot, VIEWPO
 use crate::gizmo::{Change as GizmoChange, Gizmo, GizmoDrag, Part as GizmoPart};
 use crate::keymap::{self, Action, KeyMap};
 use crate::netgraph::{NetGraph, NetGraphExtra};
+use crate::presence::{Presence, Status};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
 use crate::scene::Remap;
 use crate::transform::{self, HandleMode};
@@ -256,6 +257,8 @@ pub struct MalletApp {
     problems: problems_window::ProblemsDialog,
     /// The Entity Report's filters.
     entity_report: entity_report::EntityReport,
+    /// What Discord shows about this Mallet.
+    presence: Presence,
 }
 
 impl MalletApp {
@@ -303,6 +306,7 @@ impl MalletApp {
             run_map_open: false,
             problems: problems_window::ProblemsDialog::default(),
             entity_report: entity_report::EntityReport::default(),
+            presence: Presence::start(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -1743,6 +1747,7 @@ impl eframe::App for MalletApp {
         self.handle_input(ctx, &mut editor);
         take_window_shot(ctx, &mut editor);
         self.update_title(ctx, &editor);
+        self.presence.set(presence_status(&editor));
         self.menu_bar(ctx, &mut editor);
         self.toolbar(ctx, &mut editor);
         self.tab_strip(ctx, &mut editor);
@@ -1808,6 +1813,30 @@ impl eframe::App for MalletApp {
             editor.cycle_2d_view(slot);
         }
     }
+}
+
+/// What Discord should show for the editor's current state, or `None` when Rich
+/// Presence is turned off in Mallet Options.
+fn presence_status(editor: &Editor) -> Option<Status> {
+    let options = &editor.config.discord;
+    if !options.enabled {
+        return None;
+    }
+    let details = match &editor.document {
+        Some(document) if options.show_map_name => format!("Editing {}", document.file_name()),
+        Some(_) => "Editing a map".to_owned(),
+        None => "No map open".to_owned(),
+    };
+    let compiling = editor.compile_job.as_ref().is_some_and(|job| job.is_running());
+    let open = editor.tabs().len();
+    let state = if compiling {
+        "Compiling".to_owned()
+    } else if open > 1 {
+        format!("{open} maps open")
+    } else {
+        String::new()
+    };
+    Some(Status { details, state })
 }
 
 /// What was picked in File > Recent Maps.

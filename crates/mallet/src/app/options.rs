@@ -1328,6 +1328,19 @@ fn interface_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
                 .changed();
             ui.end_row();
         });
+    ui.add_space(12.0);
+    ui.label(RichText::new("Discord").strong());
+    let discord = &mut editor.config.discord;
+    *dirty |= ui
+        .checkbox(&mut discord.enabled, "Show Mallet on your Discord profile")
+        .on_hover_text("Rich Presence shows the map being edited and how long Mallet has been open, while Discord runs.")
+        .changed();
+    ui.add_enabled_ui(discord.enabled, |ui| {
+        *dirty |= ui
+            .checkbox(&mut discord.show_map_name, "Show the map's name")
+            .on_hover_text("Off shows only that a map is being edited.")
+            .changed();
+    });
 }
 
 /// A folder path that can be typed or browsed for; empty means `automatic`. Returns

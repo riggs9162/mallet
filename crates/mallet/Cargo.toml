@@ -19,6 +19,7 @@ mallet-content.workspace = true
 mallet-format.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 egui-phosphor = "0.9"
+discord-rich-presence = "1.1.0"
 
 # Low compile priority (nice) on non-Windows targets.
 [target.'cfg(unix)'.dependencies]
