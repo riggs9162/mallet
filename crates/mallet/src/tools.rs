@@ -284,7 +284,10 @@ pub fn definitions() -> Value {
         ),
         tool(
             "tie_to_entity",
-            "Hammer's Tie to Entity (Ctrl+T): make the selected world brushes, and the brushes of selected brush              entities, into one new brush entity of classname (func_detail unless given) with the class's              default keyvalues, or with into, add them to that brush entity instead. Emptied entities are              removed. Selects the entity. Undoable. Returns its id.",
+            "Hammer's Tie to Entity (Ctrl+T): make the selected world brushes, and the brushes of selected brush \
+             entities, into one new brush entity of classname (func_detail unless given) with the class's \
+             default keyvalues, or with into, add them to that brush entity instead. Emptied entities are \
+             removed. Selects the entity. Undoable. Returns its id.",
             json!({
                 "classname": { "type": "string", "description": "Class of the new entity, such as func_door; default func_detail." },
                 "into": { "type": "integer", "description": "Id of a brush entity to add the brushes to instead of making a new one." }
@@ -322,13 +325,16 @@ pub fn definitions() -> Value {
         ),
         tool(
             "make_hollow",
-            "Hammer's Make Hollow: turn every selected brush into one wall per face, thickness units deep              (default 32), around the space it filled, or outside it when thickness is negative. The walls of              a world brush are grouped, as in Hammer, and selected. Undoable.",
+            "Hammer's Make Hollow: turn every selected brush into one wall per face, thickness units deep \
+             (default 32), around the space it filled, or outside it when thickness is negative. The walls of \
+             a world brush are grouped, as in Hammer, and selected. Undoable.",
             json!({ "thickness": { "type": "number", "description": "Wall width in units; negative builds the walls outside." } }),
             &[],
         ),
         tool(
             "move_to_world",
-            "Hammer's Move to World (Ctrl+Shift+W): put the brushes of the selected brush entities back into the              world and remove those entities. Selects the brushes. Undoable.",
+            "Hammer's Move to World (Ctrl+Shift+W): put the brushes of the selected brush entities back into the \
+             world and remove those entities. Selects the brushes. Undoable.",
             json!({}),
             &[],
         ),
