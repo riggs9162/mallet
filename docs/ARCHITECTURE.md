@@ -598,7 +598,7 @@ Tools:
 | `create_entity` | Point entity of any class at a position, with extra keyvalues, like the Entity tool |
 | `create_overlay`, `create_decal` | Place an overlay or decal on a brush face, like the Overlay and Decal tools; overlays get their basis and the faces they reach filled in |
 | `undo`, `redo` | Step the shared history |
-| `set_grid`, `center_views` | Grid size and framing |
+| `set_grid`, `center_views` | Grid size, Snap to Grid and Show Grid, and framing |
 | `set_viewport_type` | Switch a viewport slot between 3D (textured, wireframe, lighting preview) and 2D types |
 | `list_lights` | The map's lights as the lighting preview reads them, the sky light, fog, sky, texture lights in use, the latest frame's lighting numbers and, optionally, the lighting entity catalogue |
 | `set_camera`, `set_view_2d` | Aim the 3D camera, pan and zoom the 2D views |

@@ -654,9 +654,14 @@ pub fn definitions() -> Value {
         tool("redo", "Redo the last undone edit.", json!({}), &[]),
         tool(
             "set_grid",
-            "Set the 2D grid size in world units.",
-            json!({ "size": { "type": "number", "description": "A power of two from 1 to 512." } }),
-            &["size"],
+            "Set the 2D grid size in world units, and turn snapping to the grid (Hammer's Snap to Grid, \
+             Shift+W) and drawing it in the 2D views (Show Grid, Shift+R) on or off.",
+            json!({
+                "size": { "type": "number", "description": "A power of two from 1 to 512." },
+                "snap": { "type": "boolean", "description": "Whether drags and new points snap to the grid." },
+                "show": { "type": "boolean", "description": "Whether the 2D views draw the grid." }
+            }),
+            &[],
         ),
         tool(
             "center_views",
@@ -1567,15 +1572,34 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             Ok(ToolResult::text(text))
         }
         "set_grid" => {
-            let size = optional_number(args, "size")?.ok_or("\"size\" is required")?;
-            let valid = (MIN_GRID..=MAX_GRID).contains(&size) && size.fract() == 0.0 && (size as u32).is_power_of_two();
-            if !valid {
-                return Err(format!(
-                    "grid size must be a power of two from {MIN_GRID} to {MAX_GRID}"
-                ));
+            let size = optional_number(args, "size")?;
+            let snap = args.get("snap").and_then(Value::as_bool);
+            let show = args.get("show").and_then(Value::as_bool);
+            if size.is_none() && snap.is_none() && show.is_none() {
+                return Err("give \"size\", \"snap\" or \"show\"".to_owned());
             }
-            editor.grid = size;
-            Ok(ToolResult::text(format!("Grid is now {size}.")))
+            if let Some(size) = size {
+                let valid =
+                    (MIN_GRID..=MAX_GRID).contains(&size) && size.fract() == 0.0 && (size as u32).is_power_of_two();
+                if !valid {
+                    return Err(format!(
+                        "grid size must be a power of two from {MIN_GRID} to {MAX_GRID}"
+                    ));
+                }
+                editor.grid = size;
+            }
+            if let Some(snap) = snap {
+                editor.snap_to_grid = snap;
+            }
+            if let Some(show) = show {
+                editor.show_grid = show;
+            }
+            Ok(ToolResult::text(format!(
+                "Grid is now {}, snapping {}, {}.",
+                editor.grid,
+                if editor.snap_to_grid { "on" } else { "off" },
+                if editor.show_grid { "shown" } else { "hidden" }
+            )))
         }
         "center_views" => {
             editor.fit_2d();
@@ -1642,6 +1666,8 @@ fn status_json(editor: &Editor) -> Value {
             "max": bounds.max.to_array(),
         })),
         "grid": editor.grid,
+        "snap_to_grid": editor.snap_to_grid,
+        "show_grid": editor.show_grid,
         "game_dir": editor.game_dir().map(|dir| dir.display().to_string()),
         "textured_3d": editor.gpu.is_some(),
         "gpu": editor.gpu_info,
