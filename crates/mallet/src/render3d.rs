@@ -354,6 +354,36 @@ struct Chunk {
 /// A vertex or instance buffer and the runs of it that share a texture or model.
 type Batches = (wgpu::Buffer, Vec<(String, Range<u32>)>);
 
+/// A prop in view that has see-through meshes: where it is, its model, and its place in
+/// the frame's instance buffer.
+struct PropInView {
+    center: Vec3,
+    model: String,
+    instance: u32,
+}
+
+/// A see-through face or prop, while they are put in order.
+enum SortedItem<'a> {
+    Face(&'a TranslucentFace),
+    Prop(&'a PropInView),
+}
+
+/// One step of drawing what is see-through.
+enum TranslucentDraw {
+    /// A run of faces that share a texture, as a range of [`Translucent::faces`].
+    Faces(String, Range<u32>),
+    /// The see-through meshes of one prop: its model, and its place in the frame's
+    /// instance buffer.
+    Prop(String, u32),
+}
+
+/// Everything see-through in view, in drawing order: farthest first.
+struct Translucent {
+    /// The faces' vertices, when any face is in view.
+    faces: Option<wgpu::Buffer>,
+    draws: Vec<TranslucentDraw>,
+}
+
 /// Lines in one vertex buffer.
 struct LineMesh {
     buffer: wgpu::Buffer,
@@ -927,6 +957,12 @@ impl Renderer3D {
         } else {
             Vec::new()
         };
+        let mut stats = RenderStats::default();
+        let (instances, see_through_props) = if textured {
+            self.model_instances(scene, overlay, &planes, helpers, &mut stats)
+        } else {
+            (None, Vec::new())
+        };
         let translucent = match (&self.faces, textured) {
             (Some(faces), true) => {
                 // A selected brush's cached faces give way to its tinted copy, except in a
@@ -935,15 +971,14 @@ impl Renderer3D {
                 let unselected = faces.translucent.iter().filter(|face| {
                     keep_originals || face.owner.is_none_or(|owner| !selected_owners.contains(&owner))
                 });
-                self.sorted_translucent(unselected.chain(&tinted_translucent).chain(&sprites), camera, &planes)
+                self.sorted_translucent(
+                    unselected.chain(&tinted_translucent).chain(&sprites),
+                    &see_through_props,
+                    camera,
+                    &planes,
+                )
             }
             _ => None,
-        };
-        let mut stats = RenderStats::default();
-        let instances = if textured {
-            self.model_instances(scene, overlay, &planes, helpers, &mut stats)
-        } else {
-            None
         };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("mallet camera"),
@@ -1000,7 +1035,7 @@ impl Renderer3D {
                         }
                     }
                     if let Some((buffer, ranges)) = &instances {
-                        self.draw_models(&mut pass, buffer, ranges, false, &mut stats);
+                        self.draw_models(&mut pass, buffer, ranges, &mut stats);
                     }
                     for tinted in [&tinted, &face_tinted].into_iter().flatten() {
                         pass.set_pipeline(&self.overdraw_pipeline);
@@ -1010,17 +1045,15 @@ impl Renderer3D {
                             pass.draw(range.clone(), 0..1);
                         }
                     }
-                    if let Some((buffer, batches)) = &translucent {
-                        pass.set_pipeline(&self.translucent_pipeline);
-                        pass.set_vertex_buffer(0, buffer.slice(..));
-                        for (key, range) in batches {
-                            stats.triangles_drawn += range.len() / 3;
-                            pass.set_bind_group(1, &self.texture_for(key).bind_group, &[]);
-                            pass.draw(range.clone(), 0..1);
-                        }
-                    }
-                    if let Some((buffer, ranges)) = &instances {
-                        self.draw_models(&mut pass, buffer, ranges, true, &mut stats);
+                    if let Some(translucent) = &translucent {
+                        self.draw_translucent(
+                            &mut pass,
+                            translucent,
+                            instances.as_ref().map(|(buffer, _)| buffer),
+                            (&self.translucent_pipeline, &self.translucent_model_pipeline),
+                            &|_| false,
+                            &mut stats,
+                        );
                     }
                 }
                 (CameraStyle::Lit, Some(_)) => {
@@ -1067,42 +1100,111 @@ impl Renderer3D {
         )
     }
 
-    /// Builds this frame's buffer of translucent faces in view, farthest first, with runs
-    /// of the same texture merged into one draw.
-    #[allow(clippy::type_complexity)]
+    /// Puts everything see-through in view in one order, farthest first, so props and
+    /// brush faces cover each other the right way round: faces from `faces` that are in
+    /// view, and the props in view that have see-through meshes. The faces go into one
+    /// buffer, with runs of the same texture merged into one draw.
     fn sorted_translucent<'a>(
         &self,
         faces: impl Iterator<Item = &'a TranslucentFace>,
+        props: &'a [PropInView],
         camera: &Camera3D,
         planes: &[Vec4; 6],
-    ) -> Option<(wgpu::Buffer, Vec<(String, Range<u32>)>)> {
+    ) -> Option<Translucent> {
         let eye = camera.position.as_vec3();
-        let mut visible: Vec<&TranslucentFace> = faces.filter(|face| box_visible(planes, face.min, face.max)).collect();
+        let mut visible: Vec<(f32, SortedItem<'a>)> = faces
+            .filter(|face| box_visible(planes, face.min, face.max))
+            .map(|face| (face.center.distance_squared(eye), SortedItem::Face(face)))
+            .chain(
+                props
+                    .iter()
+                    .map(|prop| (prop.center.distance_squared(eye), SortedItem::Prop(prop))),
+            )
+            .collect();
         if visible.is_empty() {
             return None;
         }
-        visible.sort_by(|a, b| {
-            b.center
-                .distance_squared(eye)
-                .total_cmp(&a.center.distance_squared(eye))
-        });
+        visible.sort_by(|a, b| b.0.total_cmp(&a.0));
         let mut vertices = Vec::new();
-        let mut batches: Vec<(String, Range<u32>)> = Vec::new();
-        for face in visible {
-            let start = vertices.len() as u32;
-            vertices.extend_from_slice(&face.vertices);
-            let end = vertices.len() as u32;
-            match batches.last_mut() {
-                Some((key, range)) if *key == face.key => range.end = end,
-                _ => batches.push((face.key.clone(), start..end)),
+        let mut draws: Vec<TranslucentDraw> = Vec::new();
+        for (_, item) in visible {
+            match item {
+                SortedItem::Face(face) => {
+                    let start = vertices.len() as u32;
+                    vertices.extend_from_slice(&face.vertices);
+                    let end = vertices.len() as u32;
+                    match draws.last_mut() {
+                        Some(TranslucentDraw::Faces(key, range)) if *key == face.key => range.end = end,
+                        _ => draws.push(TranslucentDraw::Faces(face.key.clone(), start..end)),
+                    }
+                }
+                SortedItem::Prop(prop) => draws.push(TranslucentDraw::Prop(prop.model.clone(), prop.instance)),
             }
         }
-        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mallet translucent faces"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+        let faces = (!vertices.is_empty()).then(|| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mallet translucent faces"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
         });
-        Some((buffer, batches))
+        Some(Translucent { faces, draws })
+    }
+
+    /// Draws everything see-through in view in the order [`Self::sorted_translucent`]
+    /// put it, faces with `face_pipeline` and props with `prop_pipeline`, leaving out the
+    /// materials `hidden` names.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_translucent<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        translucent: &'a Translucent,
+        instances: Option<&'a wgpu::Buffer>,
+        (face_pipeline, prop_pipeline): (&'a wgpu::RenderPipeline, &'a wgpu::RenderPipeline),
+        hidden: &dyn Fn(&str) -> bool,
+        stats: &mut RenderStats,
+    ) {
+        let mut drawing_props = None;
+        for draw in &translucent.draws {
+            match draw {
+                TranslucentDraw::Faces(key, range) => {
+                    let Some(buffer) = &translucent.faces else {
+                        continue;
+                    };
+                    if hidden(key) {
+                        continue;
+                    }
+                    if drawing_props != Some(false) {
+                        pass.set_pipeline(face_pipeline);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        drawing_props = Some(false);
+                    }
+                    stats.triangles_drawn += range.len() / 3;
+                    pass.set_bind_group(1, &self.texture_for(key).bind_group, &[]);
+                    pass.draw(range.clone(), 0..1);
+                }
+                TranslucentDraw::Prop(key, instance) => {
+                    let (Some(instances), Some(Some(model))) = (instances, self.gpu_models.get(key)) else {
+                        continue;
+                    };
+                    if drawing_props != Some(true) {
+                        pass.set_pipeline(prop_pipeline);
+                        pass.set_vertex_buffer(1, instances.slice(..));
+                        drawing_props = Some(true);
+                    }
+                    pass.set_vertex_buffer(0, model.vertices.slice(..));
+                    pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for (material, range) in &model.meshes {
+                        let texture = self.texture_for(material);
+                        if !texture.alpha.see_through() || hidden(material) {
+                            continue;
+                        }
+                        pass.set_bind_group(1, &texture.bind_group, &[]);
+                        pass.draw_indexed(range.clone(), 0, *instance..instance + 1);
+                    }
+                }
+            }
+        }
     }
 
     /// Uploads every model the scene places that is not on the GPU yet.
@@ -1150,8 +1252,8 @@ impl Renderer3D {
     /// Builds this frame's instance buffer: every prop in view, grouped by model, with
     /// selected props tinted and shown where a move or resize drag puts them. Editor
     /// models of point entities are left out unless `helpers` is set. Returns the buffer
-    /// and each model's range of instances in it.
-    #[allow(clippy::type_complexity)]
+    /// with each model's range of instances in it, and the props in it that have
+    /// see-through meshes, to be sorted with the see-through faces.
     fn model_instances(
         &self,
         scene: &Scene,
@@ -1159,8 +1261,8 @@ impl Renderer3D {
         planes: &[Vec4; 6],
         helpers: bool,
         stats: &mut RenderStats,
-    ) -> Option<(wgpu::Buffer, Vec<(String, Range<u32>)>)> {
-        let mut by_model: HashMap<&str, Vec<ModelInstanceData>> = HashMap::new();
+    ) -> (Option<Batches>, Vec<PropInView>) {
+        let mut by_model: HashMap<&str, Vec<(ModelInstanceData, Vec3)>> = HashMap::new();
         for mesh in &scene.meshes {
             let Some(instance) = mesh.model.as_ref().filter(|instance| helpers || !instance.helper) else {
                 continue;
@@ -1172,13 +1274,13 @@ impl Renderer3D {
             // A clone drag leaves the original where it is, so draw it there as well.
             let original = mesh.selected && overlay.transform.is_some() && overlay.cloning;
             if original && box_visible(planes, mesh.bounds.min.as_vec3(), mesh.bounds.max.as_vec3()) {
-                by_model
-                    .entry(instance.key.as_str())
-                    .or_default()
-                    .push(ModelInstanceData {
+                by_model.entry(instance.key.as_str()).or_default().push((
+                    ModelInstanceData {
                         transform: instance.transform.as_mat4().to_cols_array(),
                         tint: [1.0, 1.0, 1.0, 0.0],
-                    });
+                    },
+                    mesh.bounds.center().as_vec3(),
+                ));
             }
             let (_, remap) = mesh.appearance(overlay);
             let bounds = mesh.mapped_bounds(remap.as_ref());
@@ -1188,22 +1290,38 @@ impl Renderer3D {
             stats.models_drawn += 1;
             let transform = remap.map_or(instance.transform, |remap| remap.matrix() * instance.transform);
             let highlight = if mesh.selected { SELECTION_TINT } else { 0.0 };
-            by_model
-                .entry(instance.key.as_str())
-                .or_default()
-                .push(ModelInstanceData {
+            by_model.entry(instance.key.as_str()).or_default().push((
+                ModelInstanceData {
                     transform: transform.as_mat4().to_cols_array(),
                     tint: [1.0, 1.0, 1.0, highlight],
-                });
+                },
+                bounds.center().as_vec3(),
+            ));
         }
         if by_model.is_empty() {
-            return None;
+            return (None, Vec::new());
         }
         let mut all = Vec::new();
         let mut ranges = Vec::with_capacity(by_model.len());
+        let mut see_through = Vec::new();
         for (key, instances) in by_model {
             let start = all.len() as u32;
-            all.extend(instances);
+            let has_see_through = self.gpu_models.get(key).and_then(Option::as_ref).is_some_and(|model| {
+                model
+                    .meshes
+                    .iter()
+                    .any(|(material, _)| self.texture_for(material).alpha.see_through())
+            });
+            for (index, (instance, center)) in instances.into_iter().enumerate() {
+                if has_see_through {
+                    see_through.push(PropInView {
+                        center,
+                        model: key.to_owned(),
+                        instance: start + index as u32,
+                    });
+                }
+                all.push(instance);
+            }
             ranges.push((key.to_owned(), start..all.len() as u32));
         }
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1211,23 +1329,19 @@ impl Renderer3D {
             contents: bytemuck::cast_slice(&all),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        Some((buffer, ranges))
+        (Some((buffer, ranges)), see_through)
     }
 
-    /// Draws every visible prop's opaque meshes, or with `translucent` its blended ones.
+    /// Draws every visible prop's opaque meshes. Their see-through ones are drawn later,
+    /// sorted with the see-through faces.
     fn draw_models<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         instances: &'a wgpu::Buffer,
         ranges: &[(String, Range<u32>)],
-        translucent: bool,
         stats: &mut RenderStats,
     ) {
-        pass.set_pipeline(if translucent {
-            &self.translucent_model_pipeline
-        } else {
-            &self.model_pipeline
-        });
+        pass.set_pipeline(&self.model_pipeline);
         pass.set_vertex_buffer(1, instances.slice(..));
         for (key, instance_range) in ranges {
             let Some(Some(model)) = self.gpu_models.get(key) else {
@@ -1237,15 +1351,13 @@ impl Renderer3D {
             pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
             for (material, range) in &model.meshes {
                 let texture = self.texture_for(material);
-                if texture.alpha.see_through() != translucent {
+                if texture.alpha.see_through() {
                     continue;
                 }
                 pass.set_bind_group(1, &texture.bind_group, &[]);
                 pass.draw_indexed(range.clone(), 0, instance_range.clone());
             }
-            if !translucent {
-                stats.triangles_drawn += model.triangles * instance_range.len();
-            }
+            stats.triangles_drawn += model.triangles * instance_range.len();
         }
     }
 

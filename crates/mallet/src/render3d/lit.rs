@@ -37,7 +37,7 @@ use mallet_vmf::lightmap::{pack_rows, LuxelGrid};
 
 use super::{
     box_visible, frustum_planes, material_key, pipeline, signature, Batches, Depth, FaceMesh, FaceVertex, GpuTexture,
-    ModelInstanceData, RenderStats, Renderer3D, COLOR_FORMAT, WHITE_KEY,
+    ModelInstanceData, RenderStats, Renderer3D, Translucent, COLOR_FORMAT, WHITE_KEY,
 };
 use crate::config::LightingOptions;
 use crate::lighting::{HelperMode, LightingDetail, SkyMode, TextureLights, Tonemap};
@@ -2693,7 +2693,7 @@ impl LitState {
         planes: &[Vec4; 6],
         options: &LightingOptions,
         tinted: &[&'a FaceMesh],
-        translucent: Option<&'a Batches>,
+        translucent: Option<&'a Translucent>,
         instances: Option<&'a Batches>,
         glows: Option<&'a (wgpu::Buffer, u32)>,
         stats: &mut RenderStats,
@@ -2728,7 +2728,7 @@ impl LitState {
             }
         }
         if let Some((buffer, ranges)) = instances {
-            self.draw_models(renderer, pass, buffer, ranges, false, &hidden, stats);
+            self.draw_models(renderer, pass, buffer, ranges, &hidden, stats);
         }
         for mesh in tinted {
             pass.set_pipeline(&self.overdraw);
@@ -2741,20 +2741,15 @@ impl LitState {
                 pass.draw(range.clone(), 0..1);
             }
         }
-        if let Some((buffer, batches)) = translucent {
-            pass.set_pipeline(&self.translucent);
-            pass.set_vertex_buffer(0, buffer.slice(..));
-            for (key, range) in batches {
-                if hidden(key) {
-                    continue;
-                }
-                stats.triangles_drawn += range.len() / 3;
-                pass.set_bind_group(1, &renderer.texture_for(key).bind_group, &[]);
-                pass.draw(range.clone(), 0..1);
-            }
-        }
-        if let Some((buffer, ranges)) = instances {
-            self.draw_models(renderer, pass, buffer, ranges, true, &hidden, stats);
+        if let Some(translucent) = translucent {
+            renderer.draw_translucent(
+                pass,
+                translucent,
+                instances.map(|(buffer, _)| buffer),
+                (&self.translucent, &self.translucent_model),
+                &hidden,
+                stats,
+            );
         }
         if let Some((buffer, count)) = glows {
             pass.set_pipeline(&self.glow);
@@ -2770,15 +2765,10 @@ impl LitState {
         pass: &mut wgpu::RenderPass<'a>,
         instances: &'a wgpu::Buffer,
         ranges: &[(String, Range<u32>)],
-        translucent: bool,
         hidden: &dyn Fn(&str) -> bool,
         stats: &mut RenderStats,
     ) {
-        pass.set_pipeline(if translucent {
-            &self.translucent_model
-        } else {
-            &self.model
-        });
+        pass.set_pipeline(&self.model);
         pass.set_vertex_buffer(1, instances.slice(..));
         for (key, instance_range) in ranges {
             let Some(Some(model)) = renderer.gpu_models.get(key) else {
@@ -2788,15 +2778,13 @@ impl LitState {
             pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
             for (material, range) in &model.meshes {
                 let texture = renderer.texture_for(material);
-                if texture.alpha.see_through() != translucent || hidden(material) {
+                if texture.alpha.see_through() || hidden(material) {
                     continue;
                 }
                 pass.set_bind_group(1, &texture.bind_group, &[]);
                 pass.draw_indexed(range.clone(), 0, instance_range.clone());
             }
-            if !translucent {
-                stats.triangles_drawn += model.triangles * instance_range.len();
-            }
+            stats.triangles_drawn += model.triangles * instance_range.len();
         }
     }
 }
