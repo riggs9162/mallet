@@ -842,7 +842,6 @@ entity { "id" "3" "classname" "info_target" }
         assert!(vmf.entities().all(|entity| entity.id() != Some(3)));
         assert_eq!(hidden_ids(&vmf), (vec![brush_id], vec![3]));
         assert!(vmf.to_text().contains("hidden"), "hidden objects are written in hidden blocks");
-        // Hiding again changes nothing, so its undo names no objects.
         let again = hide.apply(&mut vmf).unwrap();
         assert_eq!(
             again,

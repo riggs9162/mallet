@@ -2031,7 +2031,6 @@ mod hide_tests {
         assert!(!editor.scene.owners().contains(&Owner::Solid(first)));
         assert!(editor.selection.is_empty(), "a hidden object leaves the selection");
 
-        // Everything else is visible and unselected, so hiding the unselected hides it all.
         assert_eq!(editor.hide_unselected().unwrap(), 2);
         assert!(editor.scene.owners().is_empty());
 
@@ -2040,7 +2039,6 @@ mod hide_tests {
         assert!(owners.contains(&Owner::Solid(first)));
         assert!(owners.contains(&Owner::Entity(entity)));
 
-        // Undo hides them again, the way every other edit undoes.
         assert!(editor.step_history(false).unwrap());
         assert!(editor.scene.owners().is_empty());
     }
