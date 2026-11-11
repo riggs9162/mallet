@@ -182,7 +182,7 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 - [ ] Open RMF and MAP files from older Hammers. Hammer (low priority)
 - [ ] Undo levels setting. Hammer
 - [ ] Load and save window state presets. Hammer
-- [ ] Discord Rich Presence, off by default. H++ (low priority)
+- [x] Discord Rich Presence, with the map name optional. H++ (low priority)
 
 ## Milestone 7: lighting and compiling
 

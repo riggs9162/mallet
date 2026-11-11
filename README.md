@@ -399,7 +399,8 @@ as you change it:
   Windows file types.
 - **Texture browser**: scrolling, thumbnail size, loading threads and how many
   thumbnails stay in memory.
-- **Interface**: the size of menus, panels and text, and vertical sync.
+- **Interface**: the size of menus, panels and text, vertical sync, and whether your
+  Discord profile shows the map you are editing (Rich Presence, on by default).
 - **Keyboard** and **AI agents**: the key bindings, and whether the MCP server runs and on
   which port.
 

@@ -69,6 +69,12 @@ port (`open_map` with `focus`, after `AllowSetForegroundWindow` so that copy may
 the front) and exits if one takes it, so double-clicking maps fills tabs of one window.
 Copies with their own `MALLET_MCP_PORT` stay apart.
 
+`presence.rs` shows Mallet on the user's Discord profile through the Discord client's
+local IPC pipe. A background thread owns the connection; each frame the window hands it
+the wanted status (the map's name, and whether it is compiling), only sending it on when
+it changes. While Discord is not running the thread retries every 15 seconds, and
+turning presence off in Mallet Options clears the activity at once.
+
 ## Edits and undo
 
 Every change to a map is an `Edit` (`mallet_vmf::edit`). Applying an edit returns its
