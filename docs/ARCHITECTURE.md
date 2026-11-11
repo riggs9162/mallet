@@ -604,7 +604,7 @@ Tools:
 | `list_recent_maps` | The maps opened or saved lately, latest first |
 | `load_pointfile`, `clear_pointfile` | Show or hide a leak line |
 | `list_materials` | The game's materials, filtered, or the ones the map uses with counts |
-| `get_faces`, `select_faces`, `pick_face` | Brush faces: details, texture tool selection, and the face under a camera pixel |
+| `get_faces`, `select_faces`, `pick_face` | Brush faces: details, texture tool selection, and the face under a camera pixel, which `pick_face` can also put on an entity's side list |
 | `set_faces` | Material, scale, shift, rotation, lightmap scale, alignment and justify, as one undo step |
 | `replace_material` | Replace a material in the map or the selected faces |
 | `show_texture_browser` | Open the texture browser with a search |

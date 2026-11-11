@@ -16,6 +16,7 @@ use eframe::egui::Pos2;
 use crate::compile::{self, Outcome, Preset, Severity};
 use crate::config::{self, Config, ToolKind};
 use crate::editor::{Editor, SelectMode, ShotTarget, Tool, ViewMode, MAX_GRID, MIN_GRID};
+use crate::face_pick::PickMode;
 use crate::faces::{FaceChange, FaceInfo, FaceValues};
 use crate::input::{self, InputFrame};
 use crate::mcp::ToolResult;
@@ -513,8 +514,18 @@ pub fn definitions() -> Value {
         tool(
             "pick_face",
             "The brush face under a point of the camera viewport, in pixels from its top-left corner, as a \
-             screenshot of the camera shows it.",
-            json!({ "point": vec2 }),
+             screenshot of the camera shows it. Pass entities to pick that face for a keyvalue listing brush \
+             faces, as the Pick button of Object Properties does: key is the side list, such as sides on \
+             info_overlay or env_cubemap and sides2 on info_overlay_transition (default sides), and mode \
+             replace (default) lists only this face, add or remove changes the list, and toggle takes it off \
+             when every entity lists it and adds it otherwise. Picking for entities sees through entities, \
+             props, overlays and decals. Undoable.",
+            json!({
+                "point": vec2,
+                "entities": { "type": "array", "items": { "type": "integer" } },
+                "key": { "type": "string" },
+                "mode": { "type": "string", "enum": ["replace", "add", "remove", "toggle"] }
+            }),
             &["point"],
         ),
         tool(
@@ -1146,18 +1157,40 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             let rect = editor.viewport_rects[slot];
             let at = editor.viewport_point(ShotTarget::Camera, DVec2::new(x, y))?;
             let (origin, direction) = editor.camera.ray(rect, at);
-            let Some(hit) = editor.scene.pick_face(origin, direction, &editor.models) else {
+            let entities = id_list(args, "entities")?;
+            let hit = if entities.is_empty() {
+                editor.scene.pick_face(origin, direction, &editor.models)
+            } else {
+                editor.scene.surface_face(origin, direction).map(|(hit, _)| hit)
+            };
+            let Some(hit) = hit else {
                 return Ok(ToolResult::json(&json!({ "hit": null })));
             };
             let face = editor.faces(&[hit.side].into_iter().collect()).pop();
-            Ok(ToolResult::json(&json!({
+            let mut result = json!({
                 "hit": {
                     "side": hit.side,
                     "solid": hit.solid,
                     "point": [hit.point.x, hit.point.y, hit.point.z],
                     "material": face.map(|face| face.side.material),
                 }
-            })))
+            });
+            if !entities.is_empty() {
+                let mode = match optional_string(args, "mode")?.unwrap_or("replace") {
+                    "replace" => PickMode::Replace,
+                    "add" => PickMode::Add,
+                    "remove" => PickMode::Remove,
+                    "toggle" => PickMode::Toggle,
+                    other => return Err(format!("unknown mode \"{other}\"")),
+                };
+                let key = optional_string(args, "key")?.unwrap_or("sides");
+                let lists = editor.pick_side(&entities, key, hit.side, mode)?;
+                let lists: serde_json::Map<String, Value> =
+                    lists.into_iter().map(|(id, sides)| (id.to_string(), json!(sides))).collect();
+                result["key"] = json!(key);
+                result["lists"] = Value::Object(lists);
+            }
+            Ok(ToolResult::json(&result))
         }
         "set_faces" => {
             let mut sides: std::collections::BTreeSet<u32> = id_list(args, "sides")?.into_iter().collect();
