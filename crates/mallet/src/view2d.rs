@@ -408,9 +408,14 @@ impl View2D {
         canvas.label(rect.left_top() + egui::vec2(6.0, 4.0), self.axis.label(), label_color);
     }
 
-    /// Draws the clipping tool's points as handles, joined by the clip line in the view
-    /// it was drawn in. Three-point clipping shows its points in every view.
+    /// Draws the clipping tool's points as white handles, joined by the cyan clip line in
+    /// the view it was drawn in, as Hammer does. Three-point clipping shows its points in
+    /// every view. With measurements on, every view also labels the kept pieces' sizes.
     fn draw_clip_points(&self, canvas: &mut dyn Canvas, rect: Rect, clip: &ClipOverlay) {
+        let style = style::current();
+        for bounds in &clip.measured {
+            self.draw_measurements(canvas, rect, bounds, style.tool);
+        }
         if clip.axis.is_some_and(|axis| axis != self.axis) {
             return;
         }
@@ -425,9 +430,36 @@ impl View2D {
         for point in at {
             canvas.fill(
                 Rect::from_center_size(point, egui::Vec2::splat(HANDLE_HALF_SIZE * 2.0)),
-                CLIP_PLANE_COLOR,
+                style.handles,
             );
         }
+    }
+
+    /// Labels a box's width above it and its height to its left, as Hammer labels sizes.
+    fn draw_measurements(&self, canvas: &mut dyn Canvas, rect: Rect, bounds: &Bounds, color: Color32) {
+        /// Rough width of one label character, in pixels, for centring.
+        const CHAR_PIXELS: f32 = 7.0;
+        /// Gap between a box and its labels, in pixels.
+        const GAP: f32 = 4.0;
+        /// Height of a label line, in pixels.
+        const LINE_PIXELS: f32 = 14.0;
+        let size = self.axis.project(bounds.size());
+        let screen = Rect::from_two_pos(
+            self.to_screen(rect, self.axis.project(bounds.min)),
+            self.to_screen(rect, self.axis.project(bounds.max)),
+        );
+        let width = format!("{:.1}", size.x);
+        let height = format!("{:.1}", size.y);
+        let width_at = egui::pos2(
+            screen.center().x - width.len() as f32 * CHAR_PIXELS / 2.0,
+            screen.top() - GAP - LINE_PIXELS,
+        );
+        let height_at = egui::pos2(
+            screen.left() - GAP - height.len() as f32 * CHAR_PIXELS,
+            screen.center().y - LINE_PIXELS / 2.0,
+        );
+        canvas.label(width_at, &width, color);
+        canvas.label(height_at, &height, color);
     }
 
     /// Screen positions of the eight resize handles of a box in this view.

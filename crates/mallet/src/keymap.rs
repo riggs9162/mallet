@@ -50,6 +50,9 @@ pub enum Action {
     ClipTool,
     /// Toggle the Clipping tool between two-point and three-point clipping.
     ClipThreePoint,
+    /// With the Clipping tool active, show or hide the size of each piece a clip keeps,
+    /// as the O key does in Hammer.
+    ClipMeasurements,
     VertexTool,
     /// Switch to the Overlay tool.
     OverlayTool,
@@ -334,6 +337,7 @@ impl KeyMap {
                 (Action::ApplyCurrentTexture, Chord::shift(Key::T)),
                 (Action::ClipTool, Chord::shift(Key::X)),
                 (Action::ClipThreePoint, Chord::key(Key::C)),
+                (Action::ClipMeasurements, Chord::key(Key::O)),
                 (Action::VertexTool, Chord::shift(Key::V)),
                 (Action::OverlayTool, Chord::shift(Key::O)),
                 (Action::DecalTool, Chord::shift(Key::D)),

@@ -3,7 +3,11 @@
 //! Dragging in a 2D view draws the clip line between two grid points; the plane runs
 //! through it, straight along the axis the view looks down. With three-point clipping (C,
 //! as in Hammer++) the plane goes through three points placed in the 2D views or on
-//! surfaces in the 3D view. Shift+X cycles which half is kept and Enter clips.
+//! surfaces in the 3D view. As in Hammer, the selection stays red, the pieces a clip
+//! keeps are outlined in white and the clip line is cyan between its two white points.
+//! Shift+X, or clicking the tool again, cycles which pieces are kept: both, then one
+//! side, then the other. Ctrl+dragging a point moves the whole line, O shows the size of
+//! each kept piece in the 2D views, and Enter clips.
 
 use std::collections::HashMap;
 
@@ -22,8 +26,8 @@ use crate::view2d::Axis2D;
 const PLANE_MARGIN: f64 = 16.0;
 /// Half-length of the cross the 3D view draws at each clip point, in world units.
 const POINT_MARKER_SIZE: f64 = 4.0;
-/// The colour of the clip plane, its line and its points.
-pub const CLIP_PLANE_COLOR: Color32 = Color32::from_rgb(255, 196, 0);
+/// The colour of the clip line and plane: cyan, as in Hammer.
+pub const CLIP_PLANE_COLOR: Color32 = Color32::from_rgb(0, 255, 255);
 
 /// The clipping tool's points and settings, kept while the tool is in use.
 #[derive(Clone, Debug, Default)]
@@ -36,6 +40,8 @@ pub struct Clipper {
     pub keep: Keep,
     /// Whether the plane goes through three points instead of a line in one view.
     pub three_point: bool,
+    /// Whether the 2D views show the size of each piece a clip keeps (O in Hammer).
+    pub measurements: bool,
 }
 
 /// What the views draw for the clipping tool.
@@ -49,19 +55,28 @@ pub struct ClipOverlay {
     pub kept: Vec<[DVec3; 2]>,
     /// The outline of the clip plane where it crosses the selection.
     pub plane: Vec<[DVec3; 2]>,
+    /// The bounds of each kept piece, while measurements are shown.
+    pub measured: Vec<Bounds>,
 }
 
 impl ClipOverlay {
-    /// What the 2D views draw in world space: the kept pieces and the plane's outline.
+    /// What the 2D views draw in world space: the kept pieces in white. As in Hammer, a
+    /// two-point clip shows no plane, only its line in the view it was drawn in, which
+    /// [`crate::view2d`] draws with the points; three-point clipping, which has no such
+    /// line, also outlines its plane.
     pub fn edges_2d(&self) -> Vec<([DVec3; 2], Color32)> {
-        let tool = crate::style::current().tool;
-        let kept = self.kept.iter().map(move |edge| (*edge, tool));
-        kept.chain(self.plane.iter().map(|edge| (*edge, CLIP_PLANE_COLOR))).collect()
+        let mut edges = self.kept_edges();
+        if self.axis.is_none() {
+            edges.extend(self.plane.iter().map(|edge| (*edge, CLIP_PLANE_COLOR)));
+        }
+        edges
     }
 
-    /// What the 3D view draws: the 2D edges plus a small cross at each point.
+    /// What the 3D view draws: the kept pieces, the plane's outline and a small cross at
+    /// each point.
     pub fn edges_3d(&self) -> Vec<([DVec3; 2], Color32)> {
-        let mut edges = self.edges_2d();
+        let mut edges = self.kept_edges();
+        edges.extend(self.plane.iter().map(|edge| (*edge, CLIP_PLANE_COLOR)));
         for point in &self.points {
             for axis in [DVec3::X, DVec3::Y, DVec3::Z] {
                 let arm = axis * POINT_MARKER_SIZE;
@@ -69,6 +84,12 @@ impl ClipOverlay {
             }
         }
         edges
+    }
+
+    /// The edges of the kept pieces, in the tool colour (white by default).
+    fn kept_edges(&self) -> Vec<([DVec3; 2], Color32)> {
+        let tool = crate::style::current().tool;
+        self.kept.iter().map(|edge| (*edge, tool)).collect()
     }
 }
 
@@ -177,6 +198,33 @@ impl Editor {
             self.clipper.points[index] = point;
             self.refresh_clip_preview();
         }
+    }
+
+    /// Moves every clip point by as much as moving point `index` to a grid point of a 2D
+    /// view takes, as Ctrl+dragging a point does in Hammer. Depths stay as they are.
+    pub fn move_clip_points(&mut self, index: usize, axis: Axis2D, at: DVec2) {
+        let Some(&old) = self.clipper.points.get(index) else {
+            return;
+        };
+        let offset = self.clip_point_in_view(axis, at, Some(old)) - old;
+        if offset != DVec3::ZERO {
+            for point in &mut self.clipper.points {
+                *point += offset;
+            }
+            self.refresh_clip_preview();
+        }
+    }
+
+    /// Shows or hides the size of each piece a clip keeps, as O does in Hammer.
+    pub fn toggle_clip_measurements(&mut self) {
+        self.clipper.measurements = !self.clipper.measurements;
+        self.message = if self.clipper.measurements {
+            "Clipping tool shows the size of the pieces it keeps"
+        } else {
+            "Clipping tool hides the size of the pieces it keeps"
+        }
+        .to_owned();
+        self.refresh_clip_preview();
     }
 
     /// The clip point under a 2D position, within `reach` world units.
@@ -324,13 +372,18 @@ impl Editor {
                 };
                 for (piece, kept) in [(&split.back, keep.back()), (&split.front, keep.front())] {
                     let piece_faces = solid_faces(piece);
+                    let mut piece_bounds = Bounds::EMPTY;
                     for face in &piece_faces {
                         for vertex in &face.vertices {
                             cut_bounds.add_point(*vertex);
+                            piece_bounds.add_point(*vertex);
                         }
                         if kept {
                             preview.kept.extend(polygon_edges(&face.vertices));
                         }
+                    }
+                    if kept && self.clipper.measurements && !piece_bounds.is_empty() {
+                        preview.measured.push(piece_bounds);
                     }
                 }
             }

@@ -292,9 +292,13 @@ pointed at the faces the cut ones became. The whole clip is one `Edit::Batch`.
 
 `crates/mallet/src/clipper.rs` holds the tool. Two-point clipping drags a line in a 2D view
 and runs the plane along that view's depth; three-point clipping (C) takes three points from
-the 2D views or from faces in the 3D view. Shift+X cycles the halves kept and Enter clips.
-The preview (kept pieces and the plane's outline) is recomputed only when the points, the
-selection or the map change, and travels in `Overlay::clip`, so every view draws it.
+the 2D views or from faces in the 3D view. Shift+X, or clicking the tool again, cycles the
+halves kept (both, then each side) and Enter clips. Ctrl+dragging a point moves the whole
+line, and O labels the size of each kept piece in the 2D views. As in Hammer, the 2D views
+draw the kept pieces in white and a two-point line in cyan between white points, with no
+plane outline. The preview (kept pieces, the plane's outline and the sizes) is recomputed
+only when the points, the selection or the map change, and travels in `Overlay::clip`, so
+every view draws it.
 
 ## Overlays and decals
 

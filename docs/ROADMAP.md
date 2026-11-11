@@ -25,6 +25,7 @@ The tools a mapper reaches for every few minutes.
 ### Clipping tool (Shift+X)
 
 - [x] Two-point clipping in the 2D views, keeping the front, the back or both halves (Shift+X cycles). Hammer
+- [x] Ctrl+drag a clip point to move the whole line, and O to show the size of the kept pieces. Hammer
 - [x] Three-point clipping, switched with C. H++
 - [x] Clip plane, handles and red highlight of the brushes it cuts in the 3D view. H++
 - [x] Clipping brushes that belong to entities. H++

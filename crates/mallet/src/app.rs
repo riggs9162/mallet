@@ -88,6 +88,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ApplyCurrentTexture,
     Action::ClipTool,
     Action::ClipThreePoint,
+    Action::ClipMeasurements,
     Action::VertexTool,
     Action::OverlayTool,
     Action::DecalTool,
@@ -167,8 +168,9 @@ enum Drag {
         bounds: Bounds,
         handle: Handle,
     },
-    /// Placing or moving one of the clipping tool's points.
-    ClipPoint { view: usize, point: usize },
+    /// Placing or moving one of the clipping tool's points, or with `whole`, moving all
+    /// of them together by the grabbed one.
+    ClipPoint { view: usize, point: usize, whole: bool },
 }
 
 impl Drag {
@@ -1477,7 +1479,8 @@ impl MalletApp {
 
     /// Runs the clipping tool in one 2D view: a drag from empty space draws a new clip
     /// line (or, with three-point clipping, places a point), a drag from a point moves
-    /// it, and a click places a three-point clip point.
+    /// it, a Ctrl+drag from a point moves the whole line or every point, as in Hammer,
+    /// and a click places a three-point clip point.
     fn use_clip_2d(
         &mut self,
         index: usize,
@@ -1491,21 +1494,35 @@ impl MalletApp {
         let begin = |editor: &mut Editor, at: Pos2| {
             let world = view.to_world(rect, at);
             match editor.clip_point_at(view.axis, world, reach) {
-                Some(point) => point,
-                None if editor.clipper.three_point => editor.add_clip_point_2d(view.axis, world),
-                None => editor.start_clip_line(view.axis, world),
+                Some(point) => (point, true),
+                None if editor.clipper.three_point => (editor.add_clip_point_2d(view.axis, world), false),
+                None => (editor.start_clip_line(view.axis, world), false),
             }
         };
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
-                let point = begin(editor, origin);
-                self.drag = Some(Drag::ClipPoint { view: index, point });
+                let (point, grabbed) = begin(editor, origin);
+                self.drag = Some(Drag::ClipPoint {
+                    view: index,
+                    point,
+                    whole: grabbed && pointer.modifiers.ctrl,
+                });
             }
         }
-        if let Some(Drag::ClipPoint { view: dragged, point }) = self.drag {
+        if let Some(Drag::ClipPoint {
+            view: dragged,
+            point,
+            whole,
+        }) = self.drag
+        {
             if dragged == index {
                 if let Some(position) = pointer.position {
-                    editor.move_clip_point(point, view.axis, view.to_world(rect, position));
+                    let world = view.to_world(rect, position);
+                    if whole {
+                        editor.move_clip_points(point, view.axis, world);
+                    } else {
+                        editor.move_clip_point(point, view.axis, world);
+                    }
                 }
                 if response.drag_stopped() {
                     self.drag = None;
@@ -2427,6 +2444,8 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ClipTool => editor.set_tool(Tool::Clip),
         Action::ClipThreePoint if editor.tool == Tool::Clip => editor.toggle_three_point_clip(),
         Action::ClipThreePoint => {}
+        Action::ClipMeasurements if editor.tool == Tool::Clip => editor.toggle_clip_measurements(),
+        Action::ClipMeasurements => {}
         Action::VertexTool => {
             editor.set_tool(Tool::Vertex);
             editor.message = if editor.selection.is_empty() {
