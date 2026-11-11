@@ -155,8 +155,8 @@ fn clipped_faces(solid: &Solid) -> Vec<Face> {
                 if other_index == index {
                     continue;
                 }
-                if let Some(other) = other {
-                    polygon = clip_polygon(&polygon, other);
+                if let Some(other) = other.filter(|other| reaches(&polygon, other)) {
+                    polygon = clip_polygon(&polygon, &other);
                 }
                 if polygon.len() < 3 {
                     return None;
@@ -169,6 +169,12 @@ fn clipped_faces(solid: &Solid) -> Vec<Face> {
             })
         })
         .collect()
+}
+
+/// Whether any point of a polygon lies in front of a plane, so clipping by it would change
+/// the polygon.
+fn reaches(points: &[DVec3], plane: &Plane) -> bool {
+    points.iter().any(|point| plane.distance(*point) > EPSILON)
 }
 
 /// Returns the bounds of a set of faces.
