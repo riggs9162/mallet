@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use glam::{DVec2, DVec3};
 use mallet_content::{ClassKind, EntityClass};
 use mallet_vmf::clip::Keep;
+use mallet_vmf::displacement::{self, Patch};
 use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::light::{Falloff, CATALOGUE};
@@ -656,6 +657,84 @@ pub fn definitions() -> Value {
                 "selected_only": { "type": "boolean" }
             }),
             &["find", "replace"],
+        ),
+        tool(
+            "create_displacement",
+            "Hammer's Create from the Face Edit sheet's Displacement tab: make four-sided brush faces into flat \
+             displacements of power 2, 3 or 4 (5, 9 or 17 vertices a side; default 3). The rest of a \
+             displacement's brush is hidden, as the game leaves it out. A face that already is one starts over. \
+             Applies to the given sides, the selected faces, or every face of the selected brushes. Undoable.",
+            json!({
+                "sides": { "type": "array", "items": { "type": "integer" } },
+                "power": { "type": "integer", "minimum": 2, "maximum": 4 }
+            }),
+            &[],
+        ),
+        tool(
+            "destroy_displacement",
+            "Hammer's Destroy: turn displacements back into plain brush faces. Applies to the given sides, the \
+             selected faces, or every face of the selected brushes. Undoable.",
+            json!({ "sides": { "type": "array", "items": { "type": "integer" } } }),
+            &[],
+        ),
+        tool(
+            "get_displacement",
+            "The displacements among the given sides, the selected faces, or every face of the selected brushes: \
+             side and brush id, power, vertices a side, start position, elevation, collision flags, the face's \
+             corners in row order, the box around the surface and the range of its alpha. With vertices, also \
+             every vertex's position and alpha (0 shows a blended material's first texture, 255 its second), \
+             row by row: rows run from the first corner towards the second, each row towards the fourth.",
+            json!({
+                "sides": { "type": "array", "items": { "type": "integer" } },
+                "vertices": { "type": "boolean" }
+            }),
+            &[],
+        ),
+        tool(
+            "paint_displacement",
+            "Hammer's Paint Geometry and Paint Alpha: apply the brush at each point in turn, as one stroke that \
+             undoes in one step. Paints only displacements among the given sides, the selected faces, or every \
+             face of the selected brushes. Points are world positions, such as get_displacement gives; every \
+             vertex within radius (default 64) of a point is painted, at full strength in the middle and fading \
+             out with falloff soft (default), or evenly with hard. Mode geometry (default) moves vertices along \
+             axis face_normal (default), x, y or z: effect raise (default) by distance (default 8; below zero \
+             lowers), raise_to the given distance from the flat face, or smooth towards their neighbours; \
+             autosew (default true) then joins the edges the painted displacements share. Mode alpha paints \
+             the blend of a two-texture material: raise adds value (default 64; below zero takes away), \
+             raise_to sets it, smooth evens it out; alpha runs from 0 to 255.",
+            json!({
+                "sides": { "type": "array", "items": { "type": "integer" } },
+                "points": { "type": "array", "items": vec3.clone(), "minItems": 1 },
+                "mode": { "type": "string", "enum": ["geometry", "alpha"] },
+                "effect": { "type": "string", "enum": ["raise", "raise_to", "smooth"] },
+                "axis": { "type": "string", "enum": ["face_normal", "x", "y", "z"] },
+                "distance": { "type": "number" },
+                "value": { "type": "number" },
+                "radius": { "type": "number", "exclusiveMinimum": 0 },
+                "falloff": { "type": "string", "enum": ["soft", "hard"] },
+                "autosew": { "type": "boolean" }
+            }),
+            &["points"],
+        ),
+        tool(
+            "edit_displacements",
+            "Hammer's other displacement tools, on the displacements among the given sides, the selected faces, \
+             or every face of the selected brushes, as one undo step. sew joins the edges and corners they \
+             share so no gaps open; subdivide rounds them off as one smooth surface (all must have one power); \
+             noise raises every vertex by a smooth random amount from min (default 0) to max (default 16), \
+             rougher as rockiness goes from 0 to 1 (default 0.5); invert_alpha swaps the two textures of a \
+             blended material; elevation lifts them that far off their faces; scale multiplies how far every \
+             vertex moves by factor.",
+            json!({
+                "action": { "type": "string", "enum": ["sew", "subdivide", "noise", "invert_alpha", "elevation", "scale"] },
+                "sides": { "type": "array", "items": { "type": "integer" } },
+                "min": { "type": "number" },
+                "max": { "type": "number" },
+                "rockiness": { "type": "number", "minimum": 0, "maximum": 1 },
+                "elevation": { "type": "number" },
+                "factor": { "type": "number" }
+            }),
+            &["action"],
         ),
         tool(
             "show_texture_browser",
@@ -1362,6 +1441,8 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 "Replaced the material on {count} faces. Undo with the undo tool."
             )))
         }
+        "create_displacement" | "destroy_displacement" | "get_displacement" | "paint_displacement"
+        | "edit_displacements" => displacement_tool(editor, name, args),
         "show_texture_browser" => {
             editor.texture_browser_open = args.get("open").and_then(Value::as_bool).unwrap_or(true);
             editor.texture_browser_filter = optional_string(args, "filter")?.map(str::to_owned);
@@ -2582,6 +2663,182 @@ fn entity_details(entity: &Entity) -> Value {
         "solids": solids,
         "editor_color": entity.editor_color(),
     })
+}
+
+/// The displacement tools: Create, Destroy, reading displacements, painting them, and
+/// Sew, Subdivide, Noise, Invert Alpha and the elevation and scale attributes.
+fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, String> {
+    let mut sides: std::collections::BTreeSet<u32> = id_list(args, "sides")?.into_iter().collect();
+    if sides.is_empty() {
+        sides = editor.displacement_sides();
+    }
+    if sides.is_empty() {
+        return Err("pass sides, or select faces or brushes first".to_owned());
+    }
+    let report = |editor: &Editor, vertices: bool| {
+        let patches: Vec<Value> = editor
+            .displacement_patches(&sides)
+            .iter()
+            .map(|(solid, patch)| displacement_json(*solid, patch, vertices))
+            .collect();
+        ToolResult::json(&json!({ "displacements": patches }))
+    };
+    match name {
+        "create_displacement" => {
+            let power = optional_number(args, "power")?.map_or(crate::editor::DEFAULT_POWER, |power| power as u32);
+            editor.create_displacements(&sides, power)?;
+            Ok(report(editor, false))
+        }
+        "destroy_displacement" => {
+            let count = editor.destroy_displacements(&sides)?;
+            Ok(ToolResult::text(format!(
+                "Destroyed {count} displacements. Undo with the undo tool."
+            )))
+        }
+        "get_displacement" => Ok(report(
+            editor,
+            args.get("vertices").and_then(Value::as_bool).unwrap_or(false),
+        )),
+        "paint_displacement" => {
+            let points = args
+                .get("points")
+                .and_then(Value::as_array)
+                .filter(|points| !points.is_empty())
+                .ok_or("\"points\" must be a list of [x, y, z] positions")?;
+            let points = points
+                .iter()
+                .map(|point| {
+                    let numbers: Option<Vec<f64>> = point.as_array()?.iter().map(Value::as_f64).collect();
+                    let [x, y, z]: [f64; 3] = numbers?.try_into().ok()?;
+                    Some(DVec3::new(x, y, z))
+                })
+                .collect::<Option<Vec<DVec3>>>()
+                .ok_or("every point must be three numbers")?;
+            let alpha = match optional_string(args, "mode")?.unwrap_or("geometry") {
+                "geometry" => false,
+                "alpha" => true,
+                other => return Err(format!("unknown mode \"{other}\"")),
+            };
+            let effect = match optional_string(args, "effect")?.unwrap_or("raise") {
+                "raise" => displacement::Effect::Raise,
+                "raise_to" => displacement::Effect::RaiseTo,
+                "smooth" => displacement::Effect::Smooth,
+                other => return Err(format!("unknown effect \"{other}\"")),
+            };
+            let axis = match optional_string(args, "axis")?.unwrap_or("face_normal") {
+                "face_normal" => displacement::PaintAxis::FaceNormal,
+                "x" => displacement::PaintAxis::Direction(DVec3::X),
+                "y" => displacement::PaintAxis::Direction(DVec3::Y),
+                "z" => displacement::PaintAxis::Direction(DVec3::Z),
+                other => return Err(format!("unknown axis \"{other}\"")),
+            };
+            let falloff = match optional_string(args, "falloff")?.unwrap_or("soft") {
+                "soft" => displacement::Falloff::Soft,
+                "hard" => displacement::Falloff::Hard,
+                other => return Err(format!("unknown falloff \"{other}\"")),
+            };
+            let radius = optional_number(args, "radius")?.unwrap_or(crate::editor::DEFAULT_RADIUS);
+            if radius.is_nan() || radius <= 0.0 {
+                return Err("\"radius\" must be above zero".to_owned());
+            }
+            let (channel, amount) = if alpha {
+                (
+                    displacement::Channel::Alpha,
+                    optional_number(args, "value")?.unwrap_or(crate::editor::DEFAULT_ALPHA),
+                )
+            } else {
+                (
+                    displacement::Channel::Geometry,
+                    optional_number(args, "distance")?.unwrap_or(crate::editor::DEFAULT_DISTANCE),
+                )
+            };
+            let autosew = !alpha && args.get("autosew").and_then(Value::as_bool).unwrap_or(true);
+            let stroke = crate::scene::next_generation();
+            let mut touched = false;
+            for center in points {
+                let dab = displacement::Dab {
+                    center,
+                    radius,
+                    falloff,
+                    effect,
+                    channel,
+                    amount,
+                    axis,
+                };
+                touched |= editor.paint_displacements(&sides, &dab, autosew, stroke)? > 0;
+            }
+            if !touched {
+                return Err(format!(
+                    "no vertex of the displacements lies within {radius} units of the points"
+                ));
+            }
+            Ok(report(editor, false))
+        }
+        "edit_displacements" => {
+            let count = match string_arg(args, "action")? {
+                "sew" => editor.sew_displacements(&sides)?,
+                "subdivide" => editor.subdivide_displacements(&sides)?,
+                "noise" => editor.displacement_noise(
+                    &sides,
+                    optional_number(args, "min")?.unwrap_or(0.0),
+                    optional_number(args, "max")?.unwrap_or(16.0),
+                    optional_number(args, "rockiness")?.unwrap_or(0.5),
+                )?,
+                "invert_alpha" => editor.invert_displacement_alpha(&sides)?,
+                "elevation" => editor.set_displacement_elevation(
+                    &sides,
+                    optional_number(args, "elevation")?.ok_or("\"elevation\" is required")?,
+                )?,
+                "scale" => editor.scale_displacements(
+                    &sides,
+                    optional_number(args, "factor")?.ok_or("\"factor\" is required")?,
+                )?,
+                other => return Err(format!("unknown action \"{other}\"")),
+            };
+            let mut result = report(editor, false);
+            result
+                .content
+                .insert(0, crate::mcp::Content::Text(format!("{count} displacements changed.")));
+            Ok(result)
+        }
+        other => Err(format!("unknown displacement tool \"{other}\"")),
+    }
+}
+
+/// A displacement as the MCP tools report it, with every vertex when `vertices` is set.
+fn displacement_json(solid: u32, patch: &Patch, vertices: bool) -> Value {
+    let round = |value: f64| (value * 1000.0).round() / 1000.0 + 0.0;
+    let point = |point: DVec3| json!([round(point.x), round(point.y), round(point.z)]);
+    let surface = &patch.surface;
+    let data = &patch.displacement;
+    let (lowest, highest) = surface
+        .alphas
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), alpha| {
+            (low.min(*alpha), high.max(*alpha))
+        });
+    let mut json = json!({
+        "side": patch.side,
+        "solid": solid,
+        "power": data.power,
+        "size": surface.size,
+        "start": point(data.start),
+        "elevation": round(data.elevation),
+        "flags": data.flags,
+        "subdivided": data.subdivided,
+        "corners": surface.corners.iter().map(|corner| point(*corner)).collect::<Vec<_>>(),
+        "min": point(surface.bounds.min),
+        "max": point(surface.bounds.max),
+        "alpha": [round(lowest), round(highest)],
+    });
+    if vertices {
+        let rows = |values: Vec<Value>| -> Vec<Value> { values.chunks(surface.size).map(|row| json!(row)).collect() };
+        json["positions"] = json!(rows(
+            surface.positions.iter().map(|position| point(*position)).collect()
+        ));
+        json["alphas"] = json!(rows(surface.alphas.iter().map(|alpha| json!(round(*alpha))).collect()));
+    }
+    json
 }
 
 fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
