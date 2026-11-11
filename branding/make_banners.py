@@ -8,7 +8,8 @@ outlines from Inter, so the SVGs look the same on machines without the font. Run
 
 Writes banners/mallet-banner-<ratio>.svg and .png next to this file. Needs fontTools,
 matplotlib, numpy and the Inter variable font (https://rsms.me/inter/) installed, or its path
-in the MALLET_BANNER_FONT environment variable.
+in the MALLET_BANNER_FONT environment variable. make_assets.py builds the other brand assets
+from the same drawing code.
 """
 
 import math
@@ -53,6 +54,8 @@ STACK_BELOW_RATIO = 1.9
 
 NAME = "Mallet"
 TAGLINE = "A Hammer-style level editor for Source engine maps"
+# The tagline broken in two, for portrait images where one line would be too small to read.
+TAGLINE_LINES = ("A Hammer-style level editor", "for Source engine maps")
 
 BACKGROUND = "#0e0e0e"
 MINOR_GRID = "#1e1e1e"
@@ -73,8 +76,9 @@ MAJOR_EVERY = 4
 FADE_STOPS = [(0.0, 0.0), (0.45, 0.15), (1.0, 0.9)]
 
 # Sizes in icon diameters. A row sets the text beside the icon, a stack sets it below.
-ROW = {"gap": 0.26, "name": 0.66, "tagline": 0.125, "line_gap": 0.2, "max_w": 0.76, "max_h": 0.46}
-STACK = {"gap": 0.22, "name": 0.5, "tagline": 0.105, "line_gap": 0.16, "max_w": 0.76, "max_h": 0.62}
+# `leading` is the distance between tagline lines, as a share of the tagline's size.
+ROW = {"gap": 0.26, "name": 0.66, "tagline": 0.125, "line_gap": 0.2, "leading": 1.45, "max_w": 0.76, "max_h": 0.46}
+STACK = {"gap": 0.22, "name": 0.5, "tagline": 0.105, "line_gap": 0.16, "leading": 1.45, "max_w": 0.76, "max_h": 0.62}
 # Letter spacing in ems: display sizes of Inter read better a little tighter.
 NAME_TRACKING = -0.02
 TAGLINE_TRACKING = 0.0
@@ -142,9 +146,20 @@ def load_font(path, weight, optical_size):
     return instantiateVariableFont(TTFont(path), {"wght": weight, "opsz": optical_size})
 
 
+def load_fonts():
+    """The bold name font and the regular tagline font."""
+    path = find_font()
+    return load_font(path, 700, 32), load_font(path, 400, 14)
+
+
 def map_ops(ops, transform):
     """`ops` with every point passed through `transform`."""
     return [(op[0], *(transform(point) for point in op[1:])) for op in ops]
+
+
+def place_shapes(shapes, scale, left, top):
+    """`shapes` scaled by `scale` and then moved by (`left`, `top`)."""
+    return [(map_ops(ops, lambda p: (left + p[0] * scale, top + p[1] * scale)), colour) for ops, colour in shapes]
 
 
 def rect_ops(x0, y0, x1, y1):
@@ -183,8 +198,8 @@ def circle_ops(cx, cy, r):
     ]
 
 
-def icon_ops():
-    """The icon's circle and glyph in a unit square, as (operations, colour) pairs."""
+def glyph_ops():
+    """The tilted mallet glyph alone, fitted to a unit square the way the icon fits it."""
     scale, centre_x, centre_y = glyph_frame()
     angle = math.radians(TILT)
     cos, sin = math.cos(angle), math.sin(angle)
@@ -202,7 +217,22 @@ def icon_ops():
             (y1 - centre_y) * scale + 128,
             radius * scale,
         )
-    return [(circle_ops(0.5, 0.5, 0.5), CIRCLE), (map_ops(glyph, place), GLYPH)]
+    return map_ops(glyph, place)
+
+
+def icon_ops(backing=CIRCLE, glyph=GLYPH, shape="circle"):
+    """The icon in a unit square, as (operations, colour) pairs.
+
+    `shape` is "circle" for the usual disc, "square" for a rounded square, or None for the
+    glyph alone.
+    """
+    shapes = []
+    if shape == "circle":
+        shapes.append((circle_ops(0.5, 0.5, 0.5), backing))
+    elif shape == "square":
+        shapes.append((rounded_rect_ops(0, 0, 1, 1, 0.225), backing))
+    shapes.append((glyph_ops(), glyph))
+    return shapes
 
 
 def text_ops(font, text, size, tracking):
@@ -229,41 +259,66 @@ def cap_height(font, size):
     return font["OS/2"].sCapHeight * size / font["head"].unitsPerEm
 
 
-def lockup(name_font, tagline_font, stacked):
-    """The icon, name and tagline with a unit icon, plus the box they fill: (shapes, box)."""
+def lockup(
+    name_font,
+    tagline_font,
+    stacked,
+    tagline_lines=(TAGLINE,),
+    icon=True,
+    name=True,
+    name_colour=NAME_COLOUR,
+    tagline_colour=TAGLINE_COLOUR,
+    icon_shapes=None,
+):
+    """The icon, name and tagline with a unit icon, plus the size they fill: (shapes, (w, h)).
+
+    Turn `icon` or `name` off, or pass no `tagline_lines`, to leave that part out.
+    `icon_shapes` replaces the usual icon.
+    """
     sizes = STACK if stacked else ROW
-    name, name_width = text_ops(name_font, NAME, sizes["name"], NAME_TRACKING)
-    tagline, tagline_width = text_ops(tagline_font, TAGLINE, sizes["tagline"], TAGLINE_TRACKING)
+    shapes = (icon_shapes or icon_ops()) if icon else []
+    if not name:
+        return shapes, (1, 1)
+
+    name_ops, name_width = text_ops(name_font, NAME, sizes["name"], NAME_TRACKING)
+    taglines = [text_ops(tagline_font, line, sizes["tagline"], TAGLINE_TRACKING) for line in tagline_lines]
     name_cap = cap_height(name_font, sizes["name"])
     tagline_cap = cap_height(tagline_font, sizes["tagline"])
-    text_height = name_cap + sizes["line_gap"] + tagline_cap
-    shapes = icon_ops()
+    leading = sizes["tagline"] * sizes["leading"]
+    tagline_height = sizes["line_gap"] + tagline_cap + leading * (len(taglines) - 1) if taglines else 0
+    text_width = max([name_width] + [width for _, width in taglines])
 
-    if stacked:
-        width = max(1, name_width, tagline_width)
-        icon_x = (width - 1) / 2
-        shapes = [(map_ops(ops, lambda p: (p[0] + icon_x, p[1])), colour) for ops, colour in shapes]
+    if not icon:
+        text_left, name_base, width = 0, name_cap, text_width
+    elif stacked:
+        width = max(1, text_width)
+        shapes = place_shapes(shapes, 1, (width - 1) / 2, 0)
+        text_left = (width - text_width) / 2
         name_base = 1 + sizes["gap"] + name_cap
-        tagline_base = name_base + sizes["line_gap"] + tagline_cap
-        name_x = (width - name_width) / 2
-        tagline_x = (width - tagline_width) / 2
-        height = tagline_base
     else:
-        text_x = 1 + sizes["gap"]
-        width = text_x + max(name_width, tagline_width)
-        name_base = 0.5 - text_height / 2 + name_cap
-        tagline_base = name_base + sizes["line_gap"] + tagline_cap
-        name_x = tagline_x = text_x
-        height = 1
+        text_left = 1 + sizes["gap"]
+        width = text_left + text_width
+        name_base = 0.5 - (name_cap + tagline_height) / 2 + name_cap
 
-    shapes.append((map_ops(name, lambda p: (p[0] + name_x, p[1] + name_base)), NAME_COLOUR))
-    shapes.append((map_ops(tagline, lambda p: (p[0] + tagline_x, p[1] + tagline_base)), TAGLINE_COLOUR))
+    def line_left(line_width):
+        return text_left + (text_width - line_width) / 2 if stacked else text_left
+
+    shapes.append((map_ops(name_ops, lambda p: (p[0] + line_left(name_width), p[1] + name_base)), name_colour))
+    base = name_base + sizes["line_gap"] + tagline_cap
+    for ops, line_width in taglines:
+        left = line_left(line_width)
+        shapes.append((map_ops(ops, lambda p, left=left, base=base: (p[0] + left, p[1] + base)), tagline_colour))
+        base += leading
+
+    bottom = name_base + tagline_height
+    height = max(bottom, 1) if icon else bottom
     return shapes, (width, height)
 
 
 def grid_ops(width, height):
-    """The minor and major grid lines as one-pixel bars centred on the banner."""
+    """The minor and major grid lines as thin bars centred on the image."""
     cell = max(8, round(height / GRID_CELLS_PER_HEIGHT))
+    thickness = max(1, round(min(width, height) / 1440))
     centre_x, centre_y = width // 2, height // 2
     minor, major = [], []
     for centre, extent, vertical in ((centre_x, width, True), (centre_y, height, False)):
@@ -272,7 +327,7 @@ def grid_ops(width, height):
             at = centre + step * cell
             if not 0 <= at < extent:
                 continue
-            bar = rect_ops(at, 0, at + 1, height) if vertical else rect_ops(0, at, width, at + 1)
+            bar = rect_ops(at, 0, at + thickness, height) if vertical else rect_ops(0, at, width, at + thickness)
             (major if step % MAJOR_EVERY == 0 else minor).extend(bar)
     return [(minor, MINOR_GRID), (major, MAJOR_GRID)]
 
@@ -303,20 +358,23 @@ def selection_ops(box, icon_size, height):
     return [(dashes, SELECTION), (handles, HANDLE)]
 
 
-def layout(width, height, name_font, tagline_font):
-    """Everything drawn above the fade, in pixels: a list of (operations, colour)."""
-    stacked = width / height < STACK_BELOW_RATIO
+def layout(width, height, name_font, tagline_font, stacked=None, fill=1.0, selection=True, **parts):
+    """Everything drawn above the fade, in pixels: a list of (operations, colour).
+
+    `stacked` defaults to stacking on images narrower than STACK_BELOW_RATIO. `fill` shrinks
+    the logo below its usual share of the image. `parts` go to lockup().
+    """
+    if stacked is None:
+        stacked = width / height < STACK_BELOW_RATIO
     sizes = STACK if stacked else ROW
-    shapes, (unit_width, unit_height) = lockup(name_font, tagline_font, stacked)
-    icon = min(sizes["max_w"] * width / unit_width, sizes["max_h"] * height / unit_height)
+    shapes, (unit_width, unit_height) = lockup(name_font, tagline_font, stacked, **parts)
+    icon = fill * min(sizes["max_w"] * width / unit_width, sizes["max_h"] * height / unit_height)
     left = (width - unit_width * icon) / 2
     top = (height - unit_height * icon) / 2
-
-    def place(point):
-        return (left + point[0] * icon, top + point[1] * icon)
-
+    placed = place_shapes(shapes, icon, left, top)
+    if not selection:
+        return placed
     box = (left, top, left + unit_width * icon, top + unit_height * icon)
-    placed = [(map_ops(ops, place), colour) for ops, colour in shapes]
     return selection_ops(box, icon, height) + placed
 
 
@@ -335,27 +393,29 @@ def svg_path(ops):
     return "".join(parts)
 
 
-def write_svg(path, width, height, below, above):
-    """Writes the banner as an SVG: the grid, the fade over it, then the logo."""
-    stops = "\n".join(
-        f'      <stop offset="{offset}" stop-color="{BACKGROUND}" stop-opacity="{opacity}"/>'
-        for offset, opacity in FADE_STOPS
-    )
-    shapes = "\n".join(f'  <path fill="{colour}" d="{svg_path(ops)}"/>' for ops, colour in below + above if ops)
-    fade_index = len([ops for ops, _ in below if ops])
-    lines = shapes.split("\n")
-    lines.insert(fade_index, f'  <rect width="{width}" height="{height}" fill="url(#fade)"/>')
+def write_svg(path, width, height, below, above, background=BACKGROUND, fade=True):
+    """Writes an image as an SVG: the background, the shapes `below`, the fade, then `above`.
+
+    With `background` None the image is transparent; with `fade` off nothing is drawn between
+    the two layers.
+    """
+    lines = []
+    if fade:
+        stops = "\n".join(
+            f'      <stop offset="{offset}" stop-color="{background}" stop-opacity="{opacity}"/>'
+            for offset, opacity in FADE_STOPS
+        )
+        lines += ["  <defs>", '    <radialGradient id="fade" cx="0.5" cy="0.5" r="0.5">', stops, "    </radialGradient>", "  </defs>"]
+    if background:
+        lines.append(f'  <rect width="{width}" height="{height}" fill="{background}"/>')
+    lines += [f'  <path fill="{colour}" d="{svg_path(ops)}"/>' for ops, colour in below if ops]
+    if fade:
+        lines.append(f'  <rect width="{width}" height="{height}" fill="url(#fade)"/>')
+    lines += [f'  <path fill="{colour}" d="{svg_path(ops)}"/>' for ops, colour in above if ops]
     path.write_text(
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">\n'
-        "  <title>Mallet</title>\n"
-        "  <defs>\n"
-        '    <radialGradient id="fade" cx="0.5" cy="0.5" r="0.5">\n'
-        f"{stops}\n"
-        "    </radialGradient>\n"
-        "  </defs>\n"
-        f'  <rect width="{width}" height="{height}" fill="{BACKGROUND}"/>\n'
-        + "\n".join(lines)
-        + "\n</svg>\n",
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {number(width)} {number(height)}" '
+        f'width="{number(width)}" height="{number(height)}">\n'
+        "  <title>Mallet</title>\n" + "\n".join(lines) + "\n</svg>\n",
         encoding="utf-8",
     )
 
@@ -377,49 +437,62 @@ def mpl_path(ops):
     return MplPath(vertices, kinds)
 
 
-def fade_image(width, height):
+def hex_rgb(colour):
+    """A "#rrggbb" colour as three floats from 0 to 1."""
+    return [int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+
+
+def fade_image(width, height, background):
     """The background colour with the fade's opacity, matching the SVG's radial gradient."""
     ys, xs = np.mgrid[0:height, 0:width]
     distance = np.hypot((xs + 0.5 - width / 2) / (width / 2), (ys + 0.5 - height / 2) / (height / 2))
     alpha = np.interp(distance, [s[0] for s in FADE_STOPS], [s[1] for s in FADE_STOPS])
-    rgb = [int(BACKGROUND[i : i + 2], 16) / 255 for i in (1, 3, 5)]
     image = np.empty((height, width, 4))
-    image[..., :3] = rgb
+    image[..., :3] = hex_rgb(background)
     image[..., 3] = alpha
     return image
 
 
-def write_png(path, width, height, below, above):
-    """Writes the banner as a PNG drawn from the same shapes as the SVG."""
-    figure = plt.figure(figsize=(width / 100, height / 100), dpi=100, facecolor=BACKGROUND)
+def render(width, height, below, above, background=BACKGROUND, fade=True, scale=1):
+    """Draws the same layers as write_svg() into a Pillow image `scale` times as large."""
+    pixel_width, pixel_height = round(width * scale), round(height * scale)
+    face = (*hex_rgb(background), 1) if background else (0, 0, 0, 0)
+    figure = plt.figure(figsize=(pixel_width / 100, pixel_height / 100), dpi=100, facecolor=face)
     axes = figure.add_axes((0, 0, 1, 1))
     axes.set_xlim(0, width)
     axes.set_ylim(height, 0)
     axes.set_axis_off()
-    axes.set_facecolor(BACKGROUND)
+    axes.patch.set_alpha(0)
     order = 0
     for ops, colour in below:
         if ops:
             axes.add_patch(PathPatch(mpl_path(ops), facecolor=colour, edgecolor="none", lw=0, zorder=order))
             order += 1
-    axes.imshow(fade_image(width, height), extent=(0, width, height, 0), interpolation="nearest", zorder=order)
-    order += 1
+    if fade:
+        image = fade_image(pixel_width, pixel_height, background)
+        axes.imshow(image, extent=(0, width, height, 0), interpolation="nearest", zorder=order)
+        axes.set_xlim(0, width)
+        axes.set_ylim(height, 0)
+        order += 1
     for ops, colour in above:
         if ops:
             axes.add_patch(PathPatch(mpl_path(ops), facecolor=colour, edgecolor="none", lw=0, zorder=order))
             order += 1
     figure.canvas.draw()
-    image = Image.frombuffer("RGBA", figure.canvas.get_width_height(), figure.canvas.buffer_rgba())
+    image = Image.frombuffer("RGBA", figure.canvas.get_width_height(), figure.canvas.buffer_rgba()).copy()
     plt.close(figure)
-    if image.size != (width, height):
-        image = image.resize((width, height), Image.LANCZOS)
-    image.convert("RGB").save(path, optimize=True)
+    if image.size != (pixel_width, pixel_height):
+        image = image.resize((pixel_width, pixel_height), Image.LANCZOS)
+    return image.convert("RGB") if background else image
+
+
+def write_png(path, width, height, below, above, background=BACKGROUND, fade=True, scale=1):
+    """Writes an image as a PNG drawn from the same layers as write_svg()."""
+    render(width, height, below, above, background, fade, scale).save(path, optimize=True)
 
 
 def main():
-    font_path = find_font()
-    name_font = load_font(font_path, 700, 32)
-    tagline_font = load_font(font_path, 400, 14)
+    name_font, tagline_font = load_fonts()
     OUT.mkdir(exist_ok=True)
     for ratio, width, height in BANNERS:
         below = grid_ops(width, height)
