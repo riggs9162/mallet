@@ -34,9 +34,11 @@ use crate::view2d::{Axis2D, View2D};
 use crate::view3d::Camera3D;
 
 mod agent;
+mod brush_entities;
 mod clipboard;
 
 pub use agent::AgentView;
+pub use brush_entities::DEFAULT_SOLID_ENTITY;
 
 pub use clipboard::{Clipboard, PasteAt, PasteOptions, MAX_COPIES};
 

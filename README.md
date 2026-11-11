@@ -111,6 +111,8 @@ These follow Hammer++'s default keybindings.
 | Ctrl+L / Ctrl+I | Flip the selection horizontally / vertically in the 2D view used last |
 | Shift+L | Toggle texture lock |
 | Shift+T | Apply Current Texture: put the current texture on every face of the selected brushes, or on the faces the texture tool selected (also the paint roller in the tool palette and Edit > Apply Current Texture) |
+| Ctrl+T | Tie to Entity: make the selected brushes a `func_detail` and open Object Properties to choose another class, such as `func_door`; changing the class adds its default keyvalues. With a brush entity in the selection, asks whether to add the other brushes to it instead (also toEntity in the side panel) |
+| Ctrl+Shift+W | Move to World: put the brushes of the selected brush entities back into the world and remove those entities (also toWorld in the side panel) |
 | Entity tool: click in 3D | Create an entity of the class chosen under New entity on the brush face under the cursor |
 | Entity tool: click in 2D views, then Enter | Place the new entity's marker (each view sets its two axes, snapped to the grid), then create it |
 | Drag with the Block tool, then Enter | Create a box brush; drag inside it to move it, drag handles in any view to resize it (its depth starts from the last block) |

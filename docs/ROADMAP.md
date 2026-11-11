@@ -50,8 +50,8 @@ The tools a mapper reaches for every few minutes.
 
 ### Entities and groups
 
-- [ ] Tie to Entity (Ctrl+T), adding brushes to an existing brush entity when asked. Hammer
-- [ ] Move to World (Ctrl+Shift+W). Hammer
+- [x] Tie to Entity (Ctrl+T), adding brushes to an existing brush entity when asked. Hammer
+- [x] Move to World (Ctrl+Shift+W). Hammer
 - [ ] Group and Ungroup (Ctrl+G, Ctrl+U). Hammer
 - [ ] Ignore Groups (Ctrl+W), and the Objects and Solids selection modes in the side panel. Hammer
 

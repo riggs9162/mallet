@@ -486,6 +486,9 @@ impl MalletApp {
                         .small()
                         .color(Color32::GRAY),
                 );
+                if let Some(action) = super::entity_tools::brush_entity_buttons(ui, editor, &self.keymap) {
+                    self.dispatch(action, editor);
+                }
                 ui.separator();
 
                 ui.label(RichText::new("Selection").strong());
@@ -589,6 +592,7 @@ impl MalletApp {
                 let _ = editor.switch_tab((editor.active_tab() + step) % count);
             }
             Action::Compile => self.open_compile_window(editor),
+            Action::TieToEntity => self.tie_to_entity(editor),
             Action::CompileAgain => {
                 let preset = editor.config.compile.last_preset.clone();
                 if editor.is_untitled() {

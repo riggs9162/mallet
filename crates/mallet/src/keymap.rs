@@ -52,6 +52,12 @@ pub enum Action {
     /// Split the face between the two selected vertices.
     SplitFace,
     Properties,
+    /// Make the selected brushes a brush entity, or add them to the selected one, as
+    /// Hammer's Tie to Entity does.
+    TieToEntity,
+    /// Turn the selected brush entities back into world brushes, as Hammer's Move to
+    /// World does.
+    MoveToWorld,
     /// Open the compile window (Hammer's Run Map).
     Compile,
     /// Compile again with the preset used last.
@@ -278,6 +284,8 @@ impl KeyMap {
                 (Action::DecalTool, Chord::shift(Key::D)),
                 (Action::SplitFace, Chord::ctrl(Key::F)),
                 (Action::Properties, Chord::alt(Key::Enter)),
+                (Action::TieToEntity, Chord::ctrl(Key::T)),
+                (Action::MoveToWorld, Chord::ctrl_shift(Key::W)),
                 (Action::Compile, Chord::key(Key::F9)),
                 (Action::CompileAgain, Chord::shift(Key::F9)),
                 (Action::SelectAll, Chord::ctrl_shift(Key::A)),

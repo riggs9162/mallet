@@ -283,6 +283,21 @@ pub fn definitions() -> Value {
             &[]
         ),
         tool(
+            "tie_to_entity",
+            "Hammer's Tie to Entity (Ctrl+T): make the selected world brushes, and the brushes of selected brush              entities, into one new brush entity of classname (func_detail unless given) with the class's              default keyvalues, or with into, add them to that brush entity instead. Emptied entities are              removed. Selects the entity. Undoable. Returns its id.",
+            json!({
+                "classname": { "type": "string", "description": "Class of the new entity, such as func_door; default func_detail." },
+                "into": { "type": "integer", "description": "Id of a brush entity to add the brushes to instead of making a new one." }
+            }),
+            &[],
+        ),
+        tool(
+            "move_to_world",
+            "Hammer's Move to World (Ctrl+Shift+W): put the brushes of the selected brush entities back into the              world and remove those entities. Selects the brushes. Undoable.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "create_block",
             "Create an axis-aligned box brush in the world between two corners and select it. Undoable. \
              Returns the new brush id.",
@@ -1452,6 +1467,28 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         "set_pivot" => {
             let point = optional_numbers::<3>(args, "point")?.map(DVec3::from_array);
             editor.set_pivot(point);
+            Ok(ToolResult::json(&selection_json(editor)))
+        }
+        "tie_to_entity" => {
+            let into = args.get("into").and_then(Value::as_u64);
+            let id = match into {
+                Some(into) => {
+                    let into = u32::try_from(into).map_err(|_| "\"into\" is not an entity id")?;
+                    editor.tie_to_existing_entity(into)?;
+                    into
+                }
+                None => {
+                    let classname = args
+                        .get("classname")
+                        .and_then(Value::as_str)
+                        .unwrap_or(crate::editor::DEFAULT_SOLID_ENTITY);
+                    editor.tie_to_new_entity(classname)?
+                }
+            };
+            Ok(ToolResult::json(&json!({ "entity": id, "message": editor.message })))
+        }
+        "move_to_world" => {
+            editor.move_to_world()?;
             Ok(ToolResult::json(&selection_json(editor)))
         }
         "delete_selection" => {
