@@ -2692,7 +2692,8 @@ fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<To
         "destroy_displacement" => {
             let count = editor.destroy_displacements(&sides)?;
             Ok(ToolResult::text(format!(
-                "Destroyed {count} displacements. Undo with the undo tool."
+                "Destroyed {}. Undo with the undo tool.",
+                crate::editor::displacement_count(count)
             )))
         }
         "get_displacement" => Ok(report(
@@ -2796,9 +2797,10 @@ fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<To
                 other => return Err(format!("unknown action \"{other}\"")),
             };
             let mut result = report(editor, false);
-            result
-                .content
-                .insert(0, crate::mcp::Content::Text(format!("{count} displacements changed.")));
+            result.content.insert(
+                0,
+                crate::mcp::Content::Text(format!("Changed {}.", crate::editor::displacement_count(count))),
+            );
             Ok(result)
         }
         other => Err(format!("unknown displacement tool \"{other}\"")),

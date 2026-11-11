@@ -156,6 +156,15 @@ impl DisplacementTool {
     }
 }
 
+/// "1 displacement" or "3 displacements", for messages.
+pub fn displacement_count(count: usize) -> String {
+    if count == 1 {
+        "1 displacement".to_owned()
+    } else {
+        format!("{count} displacements")
+    }
+}
+
 /// A displacement face of the map, with the id of the brush it belongs to.
 type Placed = (u32, Patch);
 
@@ -232,10 +241,11 @@ impl Editor {
                 .any(|side| sides.contains(&side.id) && side.dispinfo().is_some())
         });
         self.replace_displaced(solids, None)?;
-        self.message = if skipped > 0 {
-            format!("Made {made} displacements of power {power}; {skipped} faces without four sides were left alone")
-        } else {
-            format!("Made {made} displacements of power {power}")
+        let made_text = displacement_count(made);
+        self.message = match skipped {
+            0 => format!("Made {made_text} of power {power}"),
+            1 => format!("Made {made_text} of power {power}; 1 face without four sides was left alone"),
+            _ => format!("Made {made_text} of power {power}; {skipped} faces without four sides were left alone"),
         };
         Ok(made)
     }
@@ -261,7 +271,7 @@ impl Editor {
             return Err("none of the selected faces is a displacement".to_owned());
         }
         self.replace_displaced(solids, None)?;
-        self.message = format!("Destroyed {count} displacements");
+        self.message = format!("Destroyed {}", displacement_count(count));
         Ok(count)
     }
 
@@ -311,14 +321,14 @@ impl Editor {
     /// `sides`. Returns how many displacements changed.
     pub fn sew_displacements(&mut self, sides: &BTreeSet<u32>) -> Result<usize, String> {
         self.edit_patches(sides, |patches| Ok(displacement::sew(patches)))
-            .inspect(|count| self.message = format!("Sewed {count} displacements"))
+            .inspect(|count| self.message = format!("Sewed {}", displacement_count(*count)))
     }
 
     /// Hammer's Subdivide: rounds the displacements among `sides` off as one smooth
     /// surface. Returns how many changed.
     pub fn subdivide_displacements(&mut self, sides: &BTreeSet<u32>) -> Result<usize, String> {
         self.edit_patches(sides, displacement::subdivide)
-            .inspect(|count| self.message = format!("Subdivided {count} displacements"))
+            .inspect(|count| self.message = format!("Subdivided {}", displacement_count(*count)))
     }
 
     /// Hammer's Noise: raises every vertex of the displacements among `sides` by a
@@ -334,7 +344,7 @@ impl Editor {
         self.edit_patches(sides, |patches| {
             Ok(displacement::noise(patches, min, max, rockiness, seed))
         })
-        .inspect(|count| self.message = format!("Added noise to {count} displacements"))
+        .inspect(|count| self.message = format!("Added noise to {}", displacement_count(*count)))
     }
 
     /// Hammer's Invert Alpha on the displacements among `sides`. Returns how many changed.
@@ -346,7 +356,7 @@ impl Editor {
             }
             Ok((0..patches.len()).collect())
         })
-        .inspect(|count| self.message = format!("Inverted the alpha of {count} displacements"))
+        .inspect(|count| self.message = format!("Inverted the alpha of {}", displacement_count(*count)))
     }
 
     /// Sets how far the displacements among `sides` sit off their faces, as Hammer's

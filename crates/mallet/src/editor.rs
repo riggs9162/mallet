@@ -47,8 +47,8 @@ mod views;
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
 pub use displacements::{
-    effect_label, AxisChoice, DisplacementMode, DisplacementTool, DEFAULT_ALPHA, DEFAULT_DISTANCE, DEFAULT_POWER,
-    DEFAULT_RADIUS,
+    displacement_count, effect_label, AxisChoice, DisplacementMode, DisplacementTool, DEFAULT_ALPHA,
+    DEFAULT_DISTANCE, DEFAULT_POWER, DEFAULT_RADIUS,
 };
 pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
