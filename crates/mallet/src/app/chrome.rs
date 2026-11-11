@@ -241,7 +241,7 @@ impl MalletApp {
                     .icon_button(
                         ui,
                         icon::HAMMER,
-                        "Compile",
+                        "Run Map",
                         Some(Action::Compile),
                         editor.compile_open,
                         TOOLBAR_ICON_SIZE,
@@ -599,7 +599,7 @@ impl MalletApp {
                 let step = if action == Action::NextTab { 1 } else { count - 1 };
                 let _ = editor.switch_tab((editor.active_tab() + step) % count);
             }
-            Action::Compile => self.open_compile_window(editor),
+            Action::Compile => self.run_map(editor),
             Action::TieToEntity => self.tie_to_entity(editor),
             Action::MakeHollow => self.open_hollow_dialog(editor),
             Action::GoToBrush => self.open_go_to_brush(),

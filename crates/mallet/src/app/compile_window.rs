@@ -73,6 +73,8 @@ enum Command {
     GoTo(DVec3),
     GoToLeak,
     ClearLeak,
+    /// Back to Hammer's normal Run Map dialog.
+    Normal,
 }
 
 /// Facts the window shows that come from the editor, gathered before drawing so the
@@ -223,6 +225,7 @@ impl MalletApp {
                 }
                 Command::GoToLeak => editor.go_to_leak(),
                 Command::ClearLeak => editor.clear_pointfile(),
+                Command::Normal => self.run_map_normal(editor),
             }
         }
     }
@@ -238,6 +241,13 @@ fn header(
     changed: &mut bool,
 ) {
     ui.horizontal(|ui| {
+        if ui
+            .button("Normal...")
+            .on_hover_text("Hammer's normal Run Map dialog: run BSP, VIS and RAD, HDR and the game, nothing more")
+            .clicked()
+        {
+            commands.push(Command::Normal);
+        }
         ui.label(RichText::new(icon::FILE).size(18.0));
         let map = ui.label(RichText::new(&facts.map_title).strong());
         if let Ok(context) = &facts.context {

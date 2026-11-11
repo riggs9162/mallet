@@ -701,6 +701,11 @@ pub struct CompileOptions {
     pub output_lines: usize,
     /// The preset the compile window starts with and Shift+F9 runs.
     pub last_preset: String,
+    /// Whether F9 opens the compile window rather than the normal Run Map dialog, as
+    /// Hammer remembers its expert mode.
+    pub expert: bool,
+    /// The normal Run Map dialog's choices.
+    pub run_map: crate::compile::RunMapOptions,
 }
 
 impl Default for CompileOptions {
@@ -714,6 +719,8 @@ impl Default for CompileOptions {
             compile_folder: crate::compile::COMPILE_FOLDER.to_owned(),
             output_lines: 50_000,
             last_preset: "Normal".to_owned(),
+            expert: false,
+            run_map: crate::compile::RunMapOptions::default(),
         }
     }
 }

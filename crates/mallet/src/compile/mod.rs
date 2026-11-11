@@ -3,6 +3,7 @@
 //! picked from a catalog and free extra arguments. Steps can use variables such as
 //! `{bsp}` and `{gamedir}`, so custom tools fit into the same chain.
 
+mod run_map;
 pub mod runner;
 mod session;
 
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, ToolKind};
 
+pub use run_map::{RunBsp, RunMapOptions, RunPass};
 pub use runner::{CompileJob, Outcome, Severity, StepStatus};
 pub use session::COMPILE_FOLDER;
 

@@ -185,6 +185,7 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 
 ## Milestone 7: lighting and compiling
 
+- [x] Hammer's normal Run Map dialog (F9), with Expert... for the compile window and remembering which was used. Hammer
 - [ ] Bake through VRAD and read the lightmaps back into the lighting preview. Builds on the existing preview
 - [ ] Static prop lighting in the preview, per vertex or per texel as VRAD does it. H++
 - [ ] Raytraced preview mode. Hammer (Orange Box "3D raytrace preview", low priority)

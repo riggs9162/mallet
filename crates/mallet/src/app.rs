@@ -15,6 +15,7 @@ mod new_objects;
 mod options;
 mod paste_special;
 mod properties;
+mod run_map;
 mod texture_browser;
 mod texture_tool;
 mod transform_window;
@@ -243,6 +244,8 @@ pub struct MalletApp {
     map_dialogs: map_dialogs::MapDialogs,
     /// The Camera tool's drag in a 2D view, if any.
     camera_drag: Option<camera_tool::CameraDrag>,
+    /// Whether the normal Run Map dialog is open.
+    run_map_open: bool,
 }
 
 impl MalletApp {
@@ -287,6 +290,7 @@ impl MalletApp {
             arch: brush_tools::ArchDialog::default(),
             map_dialogs: map_dialogs::MapDialogs::default(),
             camera_drag: None,
+            run_map_open: false,
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -453,7 +457,7 @@ impl MalletApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    menu_item(ui, &self.keymap, "Compile...", Action::Compile, &mut chosen);
+                    menu_item(ui, &self.keymap, "Run Map...", Action::Compile, &mut chosen);
                     menu_item(ui, &self.keymap, "Compile Again", Action::CompileAgain, &mut chosen);
                     ui.separator();
                     if ui.button("Exit").clicked() {
@@ -1735,6 +1739,7 @@ impl eframe::App for MalletApp {
         self.arch_window(ctx, &mut editor);
         self.map_dialogs(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
+        self.run_map_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);
         self.face_edit_window(ctx, &mut editor);
         self.vertex_merge_window(ctx, &mut editor);

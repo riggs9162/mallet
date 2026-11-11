@@ -98,7 +98,7 @@ These follow Hammer++'s default keybindings.
 | Shift+C | Camera tool: drag with the left button in a 3D view to turn the camera where you look, and with the right button to slide it across the view. In a 2D view every camera of the map shows as a blue circle with a line to where it looks: drag from empty space to put the camera there, aimed where the drag ends (hold Shift to add another camera instead), drag a circle or a line's end to move or re-aim that camera (Ctrl moves both), Page Up and Page Down switch cameras and Delete removes the one shown. Cameras are saved in the map, as Hammer saves them |
 | Shift+G | Magnify tool: left-click a 2D view to zoom in and right-click to zoom out, around the cursor |
 | Alt+Enter or double-click | Object Properties for the selection: keyvalues, outputs, inputs and flags from the game's FGD. Angles get Hammer's compass with Up and Down, models a Browse... button, and colours a colour picker; fields apply when you leave them, and Apply applies what is still being typed. Turn SmartEdit off to see every key as plain text |
-| F9 / Shift+F9 | Open the compile window / compile again with the preset used last |
+| F9 / Shift+F9 | Run Map: Hammer's normal compile dialog, or the compile window after Expert... / compile again with the preset used last |
 | Click | In 2D, click a brush's centre × or its outline to select it; in 3D, click it (or aim the crosshair at it in mouselook). Props are hit where their model is, so clicks through gaps reach what is behind; only when nothing else is hit does a prop's box count. Entities are selected whole; Ctrl+click toggles |
 | Drag on empty space | Select everything fully inside the rectangle (Ctrl adds) |
 | Drag the selection | Move it so its corner snaps to the grid, with texture lock; hold Shift on release to clone |
@@ -336,8 +336,14 @@ Mallet Options.
 
 ## Compiling
 
-The hammer icon on the toolbar (or F9) opens the compile window, which works like
-CompilePal. A preset is a list of steps: VBSP, VVIS, VRAD, SourceCubemap, BSPZip repack,
+F9, File > Run Map or the hammer icon on the toolbar opens Hammer's Run Map dialog: Run
+BSP, Run VIS and Run RAD, each No, Normal or Fast (BSP can update only the entities), HDR,
+whether to start the game afterwards and the game's additional parameters. OK compiles,
+copies the map into the game and starts it there, with the choices saved as the "Run Map"
+preset. Expert... opens the compile window, and F9 keeps opening it until its Normal...
+button goes back, as Hammer remembers its expert mode.
+
+The compile window works like CompilePal. A preset is a list of steps: VBSP, VVIS, VRAD, SourceCubemap, BSPZip repack,
 VBSPInfo, copying the BSP to the game, starting the game, or any program you add. Tick
 each tool's options, add extra arguments, reorder steps, and keep as many presets as
 you like; Fast, Normal, Final, Entities only and Cubemaps come built in. Custom steps
