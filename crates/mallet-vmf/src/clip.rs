@@ -102,7 +102,7 @@ pub fn split_solid(
 }
 
 /// The part of `solid` behind the plane through `points`, or `None` when nothing is left.
-fn half(solid: &Solid, points: [DVec3; 3], material: &str, ids: &mut IdAllocator) -> Option<Solid> {
+pub(crate) fn half(solid: &Solid, points: [DVec3; 3], material: &str, ids: &mut IdAllocator) -> Option<Solid> {
     let normal = Plane::from_points(points)?.normal;
     let (u, v) = world_axes(normal);
     let mut piece = solid.clone();

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use mallet_vmf::carve::carve_solid;
+use mallet_vmf::carve::Carver;
 use mallet_vmf::clip::{remap_side_list, renumber_sides, ClipError};
 use mallet_vmf::edit::Edit;
 use mallet_vmf::{IdAllocator, Solid, Vmf};
@@ -14,9 +14,11 @@ use crate::scene::Owner;
 impl Editor {
     /// Hammer's Carve: every selected brush, and every brush of a selected entity, cuts
     /// its shape out of the other brushes it overlaps, in the world and in brush entities.
-    /// The pieces stay where their brush was, each new face takes the texture of the
-    /// carving face it lies on, and overlays on cut faces keep them. The carving brushes
-    /// stay selected. One undo step. Returns how many brushes were carved.
+    /// The pieces stay where their brush was: plain slabs beyond the carving brush's
+    /// bounding box and one convex piece per carving face inside it, never long slivers
+    /// (see [`Carver::carve`]). Each new face takes the texture of the carving face it lies
+    /// on, and overlays on cut faces keep them. The carving brushes stay selected. One undo
+    /// step. Returns how many brushes were carved.
     pub fn carve(&mut self) -> Result<usize, String> {
         let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
         let carvers = selected_solids(vmf, &self.selection)?;
@@ -24,6 +26,7 @@ impl Editor {
             return Err("select the brushes to carve with".to_owned());
         }
         let carver_ids: BTreeSet<u32> = carvers.iter().filter_map(Solid::id).collect();
+        let carvers: Vec<Carver> = carvers.iter().filter_map(Carver::new).collect();
         let mut ids = IdAllocator::for_map(vmf);
         let mut edits = Vec::new();
         let mut faces: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -40,7 +43,7 @@ impl Editor {
                 for carver in &carvers {
                     let mut next = Vec::with_capacity(pieces.len());
                     for piece in pieces {
-                        match carve_solid(&piece, carver, &mut ids) {
+                        match carver.carve(&piece, &mut ids) {
                             Ok(Some(outside)) => {
                                 changed = true;
                                 next.extend(outside);

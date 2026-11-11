@@ -319,7 +319,8 @@ pub fn definitions() -> Value {
         tool(
             "carve",
             "Hammer's Carve (Ctrl+Shift+C): cut the shape of the selected brushes out of every other brush they \
-             overlap, in the world and in brush entities. New faces take the carving face's material. Undoable.",
+             overlap, in the world and in brush entities. Each brush is left as slabs beyond the carver's bounds and one \
+             convex piece per carving face around the hole. New faces take the carving face's material. Undoable.",
             json!({}),
             &[],
         ),

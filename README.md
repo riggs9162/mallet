@@ -117,7 +117,7 @@ These follow Hammer++'s default keybindings.
 | Ctrl+W | Switch the selection mode at the top of the side panel: Groups (a click picks a whole group or entity), Objects (one brush, or one whole entity, even inside a group) and Solids (one brush, even inside a brush entity) |
 | Shift+X | Clipping tool: drag a line in a 2D view, Shift+X again to switch between keeping both halves or either one, Enter to clip; C switches to three-point clipping, Ctrl+drag a point moves the whole line and O shows the size of each piece |
 | Ctrl+G / Ctrl+U | Group the selected objects / break up the groups the selection is in, as in Hammer (also on the Tools and right-click menus) |
-| Ctrl+Shift+C | Carve: cut the shape of the selected brushes out of the brushes they overlap, as in Hammer; the new faces take the carving brush's textures |
+| Ctrl+Shift+C | Carve: cut the shape of the selected brushes out of the brushes they overlap, leaving one clean wedge per carving face around the hole instead of Hammer's slivers; the new faces take the carving brush's textures |
 | Tools > Make Hollow... | Turn the selected brushes into walls of the width asked for (32 at first; negative builds the walls outside), one per face, grouped, as in Hammer; also on the right-click menu |
 | Ctrl+Shift+W | Move to World: put the brushes of the selected brush entities back into the world and remove those entities (also toWorld in the side panel) |
 | Entity tool: pick a class | The drop-down beside Entity tool in the side panel lists every point entity of the game's FGD; type in the box under it to narrow the list |

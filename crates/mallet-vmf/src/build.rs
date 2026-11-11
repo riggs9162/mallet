@@ -55,15 +55,7 @@ pub fn convex_solid(planes: &[Plane], inside: DVec3, material: &str, ids: &mut I
         .filter(|plane| plane.normal.is_finite() && plane.normal.length() > 0.5)
         .map(|plane| {
             let normal = plane.normal.normalize();
-            let center = inside - normal * (normal.dot(inside) - plane.dist);
-            let along = normal.any_orthonormal_vector();
-            let across = normal.cross(along);
-            let points = [
-                center + along * PLANE_POINT_SPREAD,
-                center,
-                center + across * PLANE_POINT_SPREAD,
-            ]
-            .map(round_point);
+            let points = plane_points(&Plane { normal, ..*plane }, inside);
             let (u, v) = face_axes(normal);
             (points, u, v)
         })
@@ -76,6 +68,22 @@ pub fn convex_solid(planes: &[Plane], inside: DVec3, material: &str, ids: &mut I
     }
     let kept: Vec<([DVec3; 3], DVec3, DVec3)> = built.iter().map(|face| faces[face.side]).collect();
     Some(solid_from_sides(&kept, material, ids))
+}
+
+/// Three points on `plane`, wound like a side's plane so that their normal is the plane's,
+/// placed around the point of the plane nearest `near` and rounded as a convex brush's
+/// plane points are.
+pub(crate) fn plane_points(plane: &Plane, near: DVec3) -> [DVec3; 3] {
+    let normal = plane.normal;
+    let center = near - normal * plane.distance(near);
+    let along = normal.any_orthonormal_vector();
+    let across = normal.cross(along);
+    [
+        center + along * PLANE_POINT_SPREAD,
+        center,
+        center + across * PLANE_POINT_SPREAD,
+    ]
+    .map(round_point)
 }
 
 fn round_point(point: DVec3) -> DVec3 {
