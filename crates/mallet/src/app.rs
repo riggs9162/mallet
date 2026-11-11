@@ -10,6 +10,7 @@ mod decal_tools;
 mod entity_tools;
 pub(crate) use compile_window::count;
 mod model_browser;
+mod new_objects;
 mod options;
 mod paste_special;
 mod properties;

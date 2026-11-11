@@ -9,7 +9,7 @@ use egui_phosphor::regular as icon;
 use mallet_vmf::light::{LightingGroup, CATALOGUE};
 
 use super::{run, save_as_dialog, MalletApp};
-use crate::editor::{Editor, Tool, ENTITY_CLASSES};
+use crate::editor::{Editor, Tool};
 use crate::keymap::Action;
 use crate::transform::{GizmoMode, HandleMode};
 
@@ -445,24 +445,18 @@ impl MalletApp {
                 });
                 ui.separator();
 
-                ui.label(RichText::new("New entity").strong());
+                ui.label(RichText::new("New objects").strong());
+                ui.horizontal(|ui| {
+                    ui.label("Entity tool");
+                    super::new_objects::entity_class_menu(ui, editor);
+                    lighting_menu(ui, editor);
+                });
                 ui.add(
                     egui::TextEdit::singleline(&mut editor.entity_class)
                         .desired_width(f32::INFINITY)
                         .hint_text("classname"),
                 )
-                .on_hover_text("Class the entity tool creates");
-                ui.horizontal(|ui| {
-                    ui.menu_button(format!("{} Common classes", icon::LIST), |ui| {
-                        for class in ENTITY_CLASSES {
-                            if ui.selectable_label(editor.entity_class == *class, *class).clicked() {
-                                editor.entity_class = (*class).to_owned();
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                    lighting_menu(ui, editor);
-                });
+                .on_hover_text("Class the entity tool creates; type to narrow the list beside Entity tool");
                 if editor.class_takes_model(&editor.entity_class) {
                     let mut browse = false;
                     ui.horizontal(|ui| {

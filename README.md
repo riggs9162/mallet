@@ -114,6 +114,7 @@ These follow Hammer++'s default keybindings.
 | Ctrl+T | Tie to Entity: make the selected brushes a `func_detail` and open Object Properties to choose another class, such as `func_door`; changing the class adds its default keyvalues. With a brush entity in the selection, asks whether to add the other brushes to it instead (also toEntity in the side panel) |
 | Tools > Make Hollow... | Turn the selected brushes into walls of the width asked for (32 at first; negative builds the walls outside), one per face, grouped, as in Hammer; also on the right-click menu |
 | Ctrl+Shift+W | Move to World: put the brushes of the selected brush entities back into the world and remove those entities (also toWorld in the side panel) |
+| Entity tool: pick a class | The drop-down beside Entity tool in the side panel lists every point entity of the game's FGD; type in the box under it to narrow the list |
 | Entity tool: click in 3D | Create an entity of the class chosen under New entity on the brush face under the cursor |
 | Entity tool: click in 2D views, then Enter | Place the new entity's marker (each view sets its two axes, snapped to the grid), then create it |
 | Drag with the Block tool, then Enter | Create a box brush; drag inside it to move it, drag handles in any view to resize it (its depth starts from the last block) |
