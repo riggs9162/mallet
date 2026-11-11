@@ -9,6 +9,7 @@ mod brush_tools;
 mod decal_tools;
 mod entity_tools;
 pub(crate) use compile_window::count;
+mod map_dialogs;
 mod model_browser;
 mod new_objects;
 mod options;
@@ -102,6 +103,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ViewFront,
     Action::ViewTextured,
     Action::ViewLighting,
+    Action::GoToBrush,
     Action::Transform,
     Action::SnapToGrid,
     Action::SnapToGridIndividually,
@@ -234,6 +236,8 @@ pub struct MalletApp {
     hollow: brush_tools::HollowDialog,
     /// The Arch Properties dialog and the settings it remembers.
     arch: brush_tools::ArchDialog,
+    /// Go to Brush Number, Go to Coordinates and Show Information.
+    map_dialogs: map_dialogs::MapDialogs,
 }
 
 impl MalletApp {
@@ -276,6 +280,7 @@ impl MalletApp {
             tie_prompt: None,
             hollow: brush_tools::HollowDialog::default(),
             arch: brush_tools::ArchDialog::default(),
+            map_dialogs: map_dialogs::MapDialogs::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -481,6 +486,9 @@ impl MalletApp {
                         menu_item(ui, keymap, "Smaller Grid", Action::GridSmaller, &mut chosen);
                         menu_item(ui, keymap, "Larger Grid", Action::GridLarger, &mut chosen);
                     });
+                    ui.separator();
+                    menu_item(ui, keymap, "Show Information...", Action::MapInformation, &mut chosen);
+                    menu_item(ui, keymap, "Map Properties...", Action::MapProperties, &mut chosen);
                 });
                 ui.menu_button("View", |ui| {
                     let keymap = &self.keymap;
@@ -504,6 +512,8 @@ impl MalletApp {
                     ui.separator();
                     menu_item(ui, keymap, "Center Views on Selection", Action::CenterViews2D, &mut chosen);
                     menu_item(ui, keymap, "Center 3D Views on Selection", Action::CenterView3D, &mut chosen);
+                    menu_item(ui, keymap, "Go to Coordinates...", Action::GoToCoordinates, &mut chosen);
+                    menu_item(ui, keymap, "Go to Brush Number...", Action::GoToBrush, &mut chosen);
                     ui.separator();
                     if ui.checkbox(&mut show_net_graph, "Net Graph").clicked() {
                         ui.close_menu();
@@ -1704,6 +1714,7 @@ impl eframe::App for MalletApp {
         self.tie_prompt_window(ctx, &mut editor);
         self.hollow_window(ctx, &mut editor);
         self.arch_window(ctx, &mut editor);
+        self.map_dialogs(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
         self.compile_window(ctx, &mut editor);
         self.face_edit_window(ctx, &mut editor);
@@ -2382,7 +2393,14 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ViewTextured => editor.set_slot_mode(editor.active_slot, ViewMode::Textured),
         Action::ViewLighting => editor.set_slot_mode(editor.active_slot, ViewMode::Lighting),
         Action::NextViewType => editor.cycle_2d_view(editor.active_slot),
-        Action::Properties => editor.properties_open = true,
+        Action::MapProperties => {
+            editor.properties_world = true;
+            editor.properties_open = true;
+        }
+        Action::Properties => {
+            editor.properties_world = false;
+            editor.properties_open = true;
+        }
         Action::MoveToWorld => report(editor.move_to_world().map(drop), editor),
         Action::Carve => report(editor.carve().map(drop), editor),
         Action::Options => editor.options_open = true,

@@ -141,6 +141,7 @@ impl MalletApp {
             });
         if !open {
             editor.properties_open = false;
+            editor.properties_world = false;
         }
         let stale_pick = editor.face_pick.as_ref().is_some_and(|pick| {
             !editor.properties_open || pick.ids != snapshot.ids || pick.tab != editor.active_tab_id()

@@ -132,6 +132,7 @@ These follow Hammer++'s default keybindings.
 | F2 / F3 / F4 / F5 / Ctrl+F5 | Show the top, side or front 2D view, the 3D textured view or the lighting preview in the viewport under the mouse; Tab switches a 2D viewport to the next 2D view |
 | 1 to 9 and 0 over a 2D view | Preset zooms: 5 is one pixel per unit, each key below halves it and each above doubles it |
 | 1 / 2 over the 3D view | Draw less / more of the map, like Hammer's far clipping plane |
+| Ctrl+Shift+G | Go to Brush Number: select a brush by its number and centre the views on it; View > Go to Coordinates centres them on a point |
 | Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the camera forward |
 | Arrow keys over a 2D view with nothing to nudge | Pan the view |
 | Middle-drag or Space+drag | Pan a 2D view |

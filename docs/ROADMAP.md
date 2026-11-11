@@ -69,7 +69,7 @@ The tools a mapper reaches for every few minutes.
 - [x] Preset zoom levels 1 to 9 in 2D, and Ctrl with the mouse wheel zooming every 2D view. Hammer
 - [x] Center Views on Selection (Ctrl+E) and Center 3D View on Selection (Ctrl+Shift+E). Hammer
 - [x] 3D view clipping plane on 1 and 2. Hammer
-- [ ] Go to Coordinates and Go to Brush Number (Ctrl+Shift+G). Hammer
+- [x] Go to Coordinates and Go to Brush Number (Ctrl+Shift+G). Hammer
 - [ ] Camera tool (Shift+C): several cameras, switched with Page Up and Page Down. Hammer
 - [ ] Magnify tool (Shift+G). Hammer
 - [ ] Drag select: Ctrl+click and drag selects everything under the crosshair. H++
@@ -171,8 +171,8 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 ## Milestone 6: files, checks and safety
 
 - [ ] Check for Problems (Alt+P) with Go To and Fix, and Fix All. Hammer
-- [ ] Map Information dialog: counts of solids, faces, entities, textures and memory. Hammer
-- [ ] Map Properties shortcut for worldspawn (skybox, detail material, map version). Hammer
+- [x] Map Information dialog: counts of solids, faces, entities and textures. Hammer
+- [x] Map Properties shortcut for worldspawn (skybox, detail material, map version). Hammer
 - [ ] Autosave every few minutes into a backup folder, with a number of copies kept. Hammer
 - [ ] Crash recovery: an error message and autosaved maps when Mallet crashes. H++
 - [ ] Precise vertex data saved alongside planes so brushes never drift, with an option to turn it off. H++

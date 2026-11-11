@@ -300,6 +300,9 @@ pub struct Editor {
     pub maximized: Option<usize>,
     /// The viewport slot the mouse was over last, which the view keys act on.
     pub active_slot: usize,
+    /// Whether Object Properties shows the map's worldspawn, as Map > Map Properties
+    /// opens it, rather than the selection.
+    pub properties_world: bool,
     pub camera: Camera3D,
     pub grid: f64,
     /// Whether drags and new points snap to the grid, as Hammer's Map > Snap to Grid.
@@ -444,6 +447,7 @@ impl Default for Editor {
             layout: [ViewMode::Textured, ViewMode::Top, ViewMode::Front, ViewMode::Side],
             maximized: None,
             active_slot: 0,
+            properties_world: false,
             camera: Camera3D::new(),
             grid: DEFAULT_GRID,
             snap_to_grid: true,

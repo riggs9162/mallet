@@ -32,6 +32,9 @@ impl Editor {
             .as_ref()
             .and_then(|document| document.vmf.world())
             .and_then(Entity::id);
+        if self.properties_world {
+            return world.into_iter().collect();
+        }
         let mut ids = BTreeSet::new();
         for owner in &self.selection {
             match owner {

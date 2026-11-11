@@ -598,6 +598,9 @@ impl MalletApp {
             Action::Compile => self.open_compile_window(editor),
             Action::TieToEntity => self.tie_to_entity(editor),
             Action::MakeHollow => self.open_hollow_dialog(editor),
+            Action::GoToBrush => self.open_go_to_brush(),
+            Action::GoToCoordinates => self.open_go_to_point(editor),
+            Action::MapInformation => self.open_map_information(),
             Action::CreateBlock if editor.tool == Tool::Block && editor.block_shape == Shape::Arch => {
                 self.open_arch_dialog(editor)
             }

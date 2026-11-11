@@ -90,6 +90,14 @@ pub enum Action {
     ViewLighting,
     /// Switch the 2D viewport under the mouse to the next 2D view.
     NextViewType,
+    /// Select a brush by its number and centre the views on it.
+    GoToBrush,
+    /// Centre the views on typed coordinates.
+    GoToCoordinates,
+    /// Open Object Properties for the map's worldspawn.
+    MapProperties,
+    /// Show counts of the map's brushes, faces, entities and textures.
+    MapInformation,
     /// Open the Transform dialog.
     Transform,
     /// Move the selection so its corner lands on the grid.
@@ -324,6 +332,7 @@ impl KeyMap {
                 (Action::ViewTextured, Chord::key(Key::F5)),
                 (Action::ViewLighting, Chord::ctrl(Key::F5)),
                 (Action::NextViewType, Chord::key(Key::Tab)),
+                (Action::GoToBrush, Chord::ctrl_shift(Key::G)),
                 (Action::Transform, Chord::ctrl(Key::M)),
                 (Action::SnapToGrid, Chord::ctrl(Key::B)),
                 (Action::SnapToGridIndividually, Chord::ctrl_shift(Key::B)),
