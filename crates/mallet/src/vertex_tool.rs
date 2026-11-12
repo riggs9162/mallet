@@ -437,6 +437,22 @@ impl Editor {
         self.vertex.merge_prompt = overlapping;
     }
 
+    /// Whether the arrow keys move handles: the vertex tool is active and some are selected.
+    pub fn nudges_vertices(&self) -> bool {
+        self.tool == Tool::Vertex && !self.vertex.selected.is_empty()
+    }
+
+    /// Moves the selected handles by `offset` as one undo step, as the arrow keys do with
+    /// Hammer's vertex tool. Nothing moves while a drag or the merge question is open.
+    pub fn nudge_vertices(&mut self, offset: DVec3) {
+        if self.vertex.drag.is_some() || self.vertex.merge_prompt {
+            return;
+        }
+        self.begin_vertex_drag();
+        self.drag_vertices(offset);
+        self.end_vertex_drag();
+    }
+
     /// Answers the merge question: merging keeps the drag, otherwise it is undone.
     pub fn answer_vertex_merge(&mut self, merge: bool) {
         self.vertex.merge_prompt = false;
@@ -479,5 +495,64 @@ impl Editor {
             .map_err(|error| error.to_string())?;
         self.message = "Split the face; move a vertex on the split to bend it".to_owned();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod nudge_tests {
+    use super::*;
+    use crate::editor::SelectMode;
+
+    /// A 128 unit cube with the vertex tool on it and its four top corners selected.
+    fn editor_with_top_selected() -> Editor {
+        let mut editor = Editor::default();
+        editor.new_map();
+        let block = editor.create_block(DVec3::splat(-64.0), DVec3::splat(64.0)).unwrap();
+        editor.select([Owner::Solid(block)], SelectMode::Replace);
+        editor.set_tool(Tool::Vertex);
+        editor.sync_vertex_tool();
+        editor.vertex_select_where(|point| point.z > 0.0, false);
+        editor
+    }
+
+    fn highest(editor: &Editor) -> f64 {
+        editor
+            .vertex
+            .handles()
+            .iter()
+            .map(|handle| handle.picked.position().z)
+            .fold(f64::MIN, f64::max)
+    }
+
+    #[test]
+    fn a_nudge_moves_the_selected_corners_and_undoes_as_one_step() {
+        let mut editor = editor_with_top_selected();
+        assert!(editor.nudges_vertices());
+        editor.nudge_vertices(DVec3::new(0.0, 0.0, 16.0));
+        assert_eq!(highest(&editor), 80.0);
+        assert_eq!(editor.vertex.selected.len(), 4, "the moved corners stay selected");
+        editor.nudge_vertices(DVec3::new(0.0, 0.0, 16.0));
+        assert_eq!(highest(&editor), 96.0);
+
+        assert!(editor.step_history(false).unwrap());
+        editor.sync_vertex_tool();
+        assert_eq!(highest(&editor), 80.0);
+    }
+
+    #[test]
+    fn nothing_is_nudged_without_selected_corners() {
+        let mut editor = editor_with_top_selected();
+        editor.clear_vertex_selection();
+        assert!(!editor.nudges_vertices());
+        editor.nudge_vertices(DVec3::new(0.0, 0.0, 16.0));
+        assert_eq!(highest(&editor), 64.0);
+    }
+
+    #[test]
+    fn a_nudge_into_a_flat_brush_is_refused() {
+        let mut editor = editor_with_top_selected();
+        editor.nudge_vertices(DVec3::new(0.0, 0.0, -128.0));
+        assert_eq!(highest(&editor), 64.0);
+        assert!(editor.vertex.invalid.is_empty());
     }
 }

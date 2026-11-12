@@ -2769,14 +2769,18 @@ fn run(action: Action, editor: &mut Editor) {
     }
 }
 
+/// Whether the arrow keys have something to move: the selection with the Selection tool,
+/// or the selected corners and edges with the Vertex tool.
+fn nudges(editor: &Editor) -> bool {
+    editor.config.transform.arrow_nudge
+        && (editor.nudges_vertices() || (editor.tool == Tool::Select && !editor.selection.is_empty()))
+}
+
 /// Moves the selection with the arrow keys in a hovered 2D view, along the view's axes:
-/// one grid step, or one unit with Ctrl, as Hammer's nudge does.
+/// one grid step, or one unit with Ctrl, as Hammer's nudge does. With the Vertex tool the
+/// selected corners and edges move instead of the whole brushes.
 fn nudge(ui: &egui::Ui, view: &View2D, editor: &mut Editor) {
-    if !editor.config.transform.arrow_nudge
-        || editor.tool != Tool::Select
-        || editor.selection.is_empty()
-        || ui.ctx().wants_keyboard_input()
-    {
+    if !nudges(editor) || ui.ctx().wants_keyboard_input() {
         return;
     }
     let (step, offset) = ui.input(|input| {
@@ -2794,8 +2798,14 @@ fn nudge(ui: &egui::Ui, view: &View2D, editor: &mut Editor) {
         }
         (step, offset)
     });
-    if offset != DVec2::ZERO {
-        report(editor.move_selection(view.axis.lift(offset * step)), editor);
+    if offset == DVec2::ZERO {
+        return;
+    }
+    let offset = view.axis.lift(offset * step);
+    if editor.nudges_vertices() {
+        editor.nudge_vertices(offset);
+    } else {
+        report(editor.move_selection(offset), editor);
     }
 }
 
@@ -2847,8 +2857,7 @@ fn view_keys(ui: &egui::Ui, view_index: usize, editor: &mut Editor) {
             view.set_scale(scale);
         }
     }
-    let nudges = editor.config.transform.arrow_nudge && editor.tool == Tool::Select && !editor.selection.is_empty();
-    if pan != DVec2::ZERO && !nudges {
+    if pan != DVec2::ZERO && !nudges(editor) {
         let view = &mut editor.views[view_index];
         view.center += pan * PAN_PIXELS / view.scale;
     }
