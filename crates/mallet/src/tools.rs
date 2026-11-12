@@ -682,8 +682,9 @@ pub fn definitions() -> Value {
             "The displacements among the given sides, the selected faces, or every face of the selected brushes: \
              side and brush id, power, vertices a side, start position, elevation, collision flags, the face's \
              corners in row order, the box around the surface and the range of its alpha. With vertices, also \
-             every vertex's position and alpha (0 shows a blended material's first texture, 255 its second), \
-             row by row: rows run from the first corner towards the second, each row towards the fourth.",
+             every vertex's position and alpha (0 shows a blended material's first texture, 255 its second) \
+             and, for four-texture blends, its texture weights, row by row: rows run from the first corner \
+             towards the second, each row towards the fourth, and vertex index = row * size + column.",
             json!({
                 "sides": { "type": "array", "items": { "type": "integer" } },
                 "vertices": { "type": "boolean" }
@@ -712,6 +713,43 @@ pub fn definitions() -> Value {
                 "value": { "type": "number" },
                 "radius": { "type": "number", "exclusiveMinimum": 0 },
                 "falloff": { "type": "string", "enum": ["soft", "hard"] },
+                "autosew": { "type": "boolean" }
+            }),
+            &["points"],
+        ),
+        tool(
+            "sculpt_displacement",
+            "Hammer's Sculpt tool: a brush that is a circle on the camera viewport, dragged through points given \
+             in pixels from its top-left corner as a screenshot of the camera shows them, as one stroke that \
+             undoes in one step. Sculpts only displacements among the given sides, the selected faces, or every \
+             face of the selected brushes. Tool push (default) moves the vertices under the brush along \
+             direction, most in the middle: brush_center (default) follows the surface under the middle of the \
+             brush, screen moves towards the camera, x, y or z along an axis; reverse pulls instead of pushing. \
+             carve moves them by profile (heights from 0 to 1 at even steps across the stroke from its left \
+             edge to its right; default a trench) along the stroke from point to point. smooth evens them out. \
+             blend paints texture 1 to 4 of a four-texture blend material such as Lightmapped_4WayBlend by \
+             amount percent a step (default 25), reverse taking it away. radius is in pixels (default 60); \
+             distance is in units (default 8), or with offset_mode adaptive, percent of the brush's size in the \
+             world; smoothing, falloff_position (default 25) and falloff_final (default 0) are percentages; \
+             density attenuated moves each vertex once a stroke instead of every step; autosew (default true) \
+             joins the edges sculpted displacements share.",
+            json!({
+                "sides": { "type": "array", "items": { "type": "integer" } },
+                "points": { "type": "array", "items": vec2.clone(), "minItems": 1 },
+                "tool": { "type": "string", "enum": ["push", "carve", "smooth", "blend"] },
+                "radius": { "type": "number", "exclusiveMinimum": 0 },
+                "direction": { "type": "string", "enum": ["brush_center", "screen", "x", "y", "z"] },
+                "reverse": { "type": "boolean" },
+                "offset_mode": { "type": "string", "enum": ["absolute", "adaptive"] },
+                "distance": { "type": "number" },
+                "percent": { "type": "number" },
+                "smoothing": { "type": "number", "minimum": 0, "maximum": 100 },
+                "density": { "type": "string", "enum": ["additive", "attenuated"] },
+                "falloff_position": { "type": "number", "minimum": 0, "maximum": 100 },
+                "falloff_final": { "type": "number", "minimum": 0, "maximum": 100 },
+                "profile": { "type": "array", "items": { "type": "number" }, "minItems": 2 },
+                "texture": { "type": "integer", "minimum": 1, "maximum": 4 },
+                "amount": { "type": "number", "minimum": 0, "maximum": 100 },
                 "autosew": { "type": "boolean" }
             }),
             &["points"],
@@ -1442,7 +1480,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             )))
         }
         "create_displacement" | "destroy_displacement" | "get_displacement" | "paint_displacement"
-        | "edit_displacements" => displacement_tool(editor, name, args),
+        | "sculpt_displacement" | "edit_displacements" => displacement_tool(editor, name, args),
         "show_texture_browser" => {
             editor.texture_browser_open = args.get("open").and_then(Value::as_bool).unwrap_or(true);
             editor.texture_browser_filter = optional_string(args, "filter")?.map(str::to_owned);
@@ -2775,6 +2813,111 @@ fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<To
             }
             Ok(report(editor, false))
         }
+        "sculpt_displacement" => {
+            let points = args
+                .get("points")
+                .and_then(Value::as_array)
+                .filter(|points| !points.is_empty())
+                .ok_or("\"points\" must be a list of [x, y] pixels of the camera viewport")?
+                .iter()
+                .map(|point| {
+                    let numbers: Option<Vec<f64>> = point.as_array()?.iter().map(Value::as_f64).collect();
+                    let [x, y]: [f64; 2] = numbers?.try_into().ok()?;
+                    Some(DVec2::new(x, y))
+                })
+                .collect::<Option<Vec<DVec2>>>()
+                .ok_or("every point must be two numbers")?;
+            let mut settings = crate::editor::SculptSettings::default();
+            let tool = optional_string(args, "tool")?.unwrap_or("push");
+            settings.tool = match tool {
+                "push" | "smooth" => crate::editor::SculptTool::Push,
+                "carve" => crate::editor::SculptTool::Carve,
+                "blend" => crate::editor::SculptTool::Blend,
+                other => return Err(format!("unknown tool \"{other}\"")),
+            };
+            settings.direction = match optional_string(args, "direction")?.unwrap_or("brush_center") {
+                "brush_center" => crate::editor::SculptDirection::BrushCenter,
+                "screen" => crate::editor::SculptDirection::Screen,
+                "x" => crate::editor::SculptDirection::X,
+                "y" => crate::editor::SculptDirection::Y,
+                "z" => crate::editor::SculptDirection::Z,
+                other => return Err(format!("unknown direction \"{other}\"")),
+            };
+            settings.adaptive = match optional_string(args, "offset_mode")?.unwrap_or("absolute") {
+                "absolute" => false,
+                "adaptive" => true,
+                other => return Err(format!("unknown offset mode \"{other}\"")),
+            };
+            settings.attenuated = match optional_string(args, "density")?.unwrap_or("additive") {
+                "additive" => false,
+                "attenuated" => true,
+                other => return Err(format!("unknown density \"{other}\"")),
+            };
+            let percentage = |key: &str, default: f64| -> Result<f64, String> {
+                Ok(optional_number(args, key)?.unwrap_or(default).clamp(0.0, 100.0))
+            };
+            settings.distance = optional_number(args, "distance")?.unwrap_or(settings.distance);
+            settings.percent = optional_number(args, "percent")?.unwrap_or(settings.percent);
+            settings.smoothing = percentage("smoothing", settings.smoothing)?;
+            settings.falloff_position = percentage("falloff_position", settings.falloff_position)?;
+            settings.falloff_final = percentage("falloff_final", settings.falloff_final)?;
+            settings.blend_amount = percentage("amount", settings.blend_amount)?;
+            settings.texture = optional_number(args, "texture")?.map_or(settings.texture, |texture| {
+                (texture.round() as i64).clamp(1, 4) as usize - 1
+            });
+            settings.autosew = args.get("autosew").and_then(Value::as_bool).unwrap_or(true);
+            if let Some(profile) = args.get("profile").filter(|profile| !profile.is_null()) {
+                settings.profile = profile
+                    .as_array()
+                    .and_then(|values| {
+                        values
+                            .iter()
+                            .map(|value| Some(value.as_f64()?.clamp(0.0, 1.0)))
+                            .collect()
+                    })
+                    .filter(|profile: &Vec<f64>| profile.len() >= 2)
+                    .ok_or("\"profile\" must be a list of at least two numbers from 0 to 1")?;
+            }
+            let reverse = args.get("reverse").and_then(Value::as_bool).unwrap_or(false);
+            let radius = optional_number(args, "radius")?.unwrap_or(crate::editor::DEFAULT_SCULPT_RADIUS);
+            if radius.is_nan() || radius <= 0.0 {
+                return Err("\"radius\" must be above zero".to_owned());
+            }
+            let slot = editor.slot_for(ShotTarget::Camera)?;
+            let rect = editor.viewport_rects[slot];
+            let to_window = |editor: &Editor, point: DVec2| -> Result<DVec2, String> {
+                let at = editor.viewport_point(ShotTarget::Camera, point)?;
+                Ok(DVec2::new(f64::from(at.x), f64::from(at.y)))
+            };
+            settings.radius = to_window(editor, points[0] + DVec2::X * radius)?.distance(to_window(editor, points[0])?);
+            let stroke = crate::scene::next_generation();
+            let mut memory = mallet_vmf::displacement::StrokeMemory::default();
+            let mut previous = None;
+            let mut changed = 0;
+            for point in points {
+                let center = to_window(editor, point)?;
+                changed += editor.sculpt_step(
+                    &sides,
+                    &settings,
+                    rect,
+                    center,
+                    previous.unwrap_or(center),
+                    reverse,
+                    tool == "smooth",
+                    &mut memory,
+                    stroke,
+                )?;
+                previous = Some(center);
+            }
+            if changed == 0 {
+                return Err(
+                    "the brush changed nothing: put it over the displacements, with brush_center or adaptive over \
+                     one of them, and give carve at least two points"
+                        .to_owned(),
+                );
+            }
+            Ok(report(editor, false))
+        }
         "edit_displacements" => {
             let count = match string_arg(args, "action")? {
                 "sew" => editor.sew_displacements(&sides)?,
@@ -2839,6 +2982,9 @@ fn displacement_json(solid: u32, patch: &Patch, vertices: bool) -> Value {
             surface.positions.iter().map(|position| point(*position)).collect()
         ));
         json["alphas"] = json!(rows(surface.alphas.iter().map(|alpha| json!(round(*alpha))).collect()));
+        if let Some(weights) = &surface.weights {
+            json["weights"] = json!(rows(weights.iter().map(|weights| json!(weights.map(round))).collect()));
+        }
     }
     json
 }

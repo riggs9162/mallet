@@ -1,16 +1,18 @@
 //! The texture tool's Displacement tab and painting displacements in the 3D view, as
 //! Hammer's Face Edit sheet does them: Create, Destroy, Paint Geometry, Paint Alpha,
-//! Invert Alpha, Subdivide, Noise and Sew, with the settings of the tool in use.
+//! Invert Alpha, Sculpt, Subdivide, Noise and Sew, with the settings of the tool in use.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Response, RichText, Stroke};
-use glam::DVec3;
-use mallet_vmf::displacement::{Effect, Falloff, MAX_POWER, MIN_POWER};
+use glam::{DVec2, DVec3};
+use mallet_vmf::displacement::{Effect, Falloff, StrokeMemory, CARVE_PROFILE, MAX_POWER, MIN_POWER};
 
 use super::{MalletApp, PointerState};
-use crate::editor::{effect_label, AxisChoice, DisplacementMode, Editor, Tool};
+use crate::editor::{
+    effect_label, AxisChoice, DisplacementMode, Editor, SculptDirection, SculptSettings, SculptTool, Tool,
+};
 use crate::faces::FaceInfo;
 use crate::scene::next_generation;
 use crate::view3d::Camera3D;
@@ -23,6 +25,34 @@ const BRUSH_COLOR: Color32 = Color32::from_rgb(255, 220, 60);
 const BRUSH_SEGMENTS: usize = 48;
 const MUTED: Color32 = Color32::from_gray(140);
 const BUTTON_SIZE: egui::Vec2 = egui::vec2(76.0, 34.0);
+/// How far, in points, a sculpt brush moves before it applies again.
+const SCULPT_SPACING: f32 = 3.0;
+/// The smallest and largest sculpt brush radius, in points.
+const SCULPT_RADII: std::ops::RangeInclusive<f64> = 4.0..=1000.0;
+
+/// A sculpt stroke in progress in a 3D view.
+#[derive(Debug)]
+pub(super) struct SculptStroke {
+    slot: usize,
+    /// The undo group of the stroke's steps.
+    group: u64,
+    /// Ctrl was held when it began: pull, or take the texture away.
+    reverse: bool,
+    /// Shift was held when it began: smooth.
+    smooth: bool,
+    /// Where the brush last applied, and when.
+    last: Option<(Instant, Pos2)>,
+    /// How far Attenuated has moved each vertex this stroke.
+    memory: StrokeMemory,
+}
+
+/// A right-button drag resizing the sculpt brush: where it began and the radius then.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BrushResize {
+    slot: usize,
+    start: Pos2,
+    radius: f64,
+}
 
 /// A paint stroke in progress in a 3D view.
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +88,16 @@ impl Default for DisplacementDrafts {
             elevation: 0.0,
             scale: 1.0,
         }
+    }
+}
+
+/// A button of the Displacement tab's tool grid that picks the tool clicks in the 3D
+/// view use.
+fn mode_button(ui: &mut egui::Ui, editor: &mut Editor, mode: DisplacementMode, name: &str, hint: &str) {
+    let on = editor.displacement.mode == mode;
+    let button = egui::Button::new(name).selected(on).min_size(BUTTON_SIZE);
+    if ui.add(button).on_hover_text(hint).clicked() {
+        editor.displacement.mode = mode;
     }
 }
 
@@ -105,11 +145,7 @@ pub(super) fn displacement_tab(
                      second texture; the right button takes it away",
                 ),
             ] {
-                let on = editor.displacement.mode == mode;
-                let button = egui::Button::new(name).selected(on).min_size(BUTTON_SIZE);
-                if ui.add(button).on_hover_text(hint).clicked() {
-                    editor.displacement.mode = mode;
-                }
+                mode_button(ui, editor, mode, name, hint);
             }
             if tool_button(
                 ui,
@@ -119,11 +155,12 @@ pub(super) fn displacement_tab(
             ) {
                 result = Some(editor.invert_displacement_alpha(&sides));
             }
-            tool_button(
+            mode_button(
                 ui,
+                editor,
+                DisplacementMode::Sculpt,
                 "Sculpt",
-                false,
-                "Sculpting is not in Mallet yet; use Paint Geometry",
+                "Push, carve, smooth or blend the selected displacements with a brush that is a circle on the screen",
             );
             ui.end_row();
             if tool_button(
@@ -182,6 +219,7 @@ pub(super) fn displacement_tab(
         }
         DisplacementMode::PaintGeometry => paint_settings(ui, editor, false),
         DisplacementMode::PaintAlpha => paint_settings(ui, editor, true),
+        DisplacementMode::Sculpt => sculpt_settings(ui, &mut editor.displacement.sculpt),
     }
     ui.add_space(4.0);
     let summary = if faces.is_empty() {
@@ -345,7 +383,299 @@ fn paint_settings(ui: &mut egui::Ui, editor: &mut Editor, alpha: bool) {
     ui.label(RichText::new(hint).small().color(MUTED));
 }
 
+/// The Sculpt panel, laid out like Hammer's: the tool, the brush, how far it moves
+/// vertices and which way, and Push's falloff, Carve's profile or Blend's texture.
+fn sculpt_settings(ui: &mut egui::Ui, settings: &mut SculptSettings) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Sculpt").strong());
+        for (tool, name, hint) in [
+            (
+                SculptTool::Push,
+                "Push",
+                "Push the vertices under the brush out, most in the middle",
+            ),
+            (
+                SculptTool::Carve,
+                "Carve",
+                "Carve the profile below along the stroke, as for a road or a ditch",
+            ),
+            (
+                SculptTool::Blend,
+                "Blend",
+                "Paint one of the textures of a four-texture blend material, such as a Lightmapped_4WayBlend",
+            ),
+        ] {
+            ui.selectable_value(&mut settings.tool, tool, name).on_hover_text(hint);
+        }
+    });
+    egui::Grid::new("sculpt_settings")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Brush size");
+            ui.add(
+                egui::Slider::new(&mut settings.radius, SCULPT_RADII)
+                    .logarithmic(true)
+                    .suffix(" px"),
+            )
+            .on_hover_text("The brush's radius on the screen; right-drag sideways in the 3D view to change it");
+            ui.end_row();
+            if settings.tool == SculptTool::Blend {
+                ui.label("Texture");
+                ui.horizontal(|ui| {
+                    for texture in 0..4 {
+                        ui.radio_value(&mut settings.texture, texture, (texture + 1).to_string());
+                    }
+                });
+                ui.end_row();
+                ui.label("Amount");
+                ui.add(egui::Slider::new(&mut settings.blend_amount, 0.0..=100.0).suffix(" %"))
+                    .on_hover_text("How much of the texture each step paints in the middle of the brush");
+                ui.end_row();
+                return;
+            }
+            ui.label("Offset mode");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut settings.adaptive, false, "Absolute")
+                    .on_hover_text("Move vertices by the distance below");
+                ui.radio_value(&mut settings.adaptive, true, "Adaptive").on_hover_text(
+                    "Move vertices by a share of the brush's size in the world, so near and far feel alike",
+                );
+            });
+            ui.end_row();
+            if settings.adaptive {
+                ui.label("Offset percent");
+                ui.add(egui::Slider::new(&mut settings.percent, 0.0..=100.0).suffix(" %"));
+            } else {
+                ui.label("Offset distance");
+                ui.add(egui::Slider::new(&mut settings.distance, 0.0..=128.0).logarithmic(true));
+            }
+            ui.end_row();
+            ui.label("Smoothing");
+            ui.add(egui::Slider::new(&mut settings.smoothing, 0.0..=100.0).suffix(" %"))
+                .on_hover_text("How much the moved vertices are evened out with their neighbours");
+            ui.end_row();
+            ui.label("Density");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut settings.attenuated, false, "Additive")
+                    .on_hover_text("Every pass of the brush moves the vertices again");
+                ui.radio_value(&mut settings.attenuated, true, "Attenuated")
+                    .on_hover_text("A stroke moves each vertex once, however often the brush passes over it");
+            });
+            ui.end_row();
+            ui.label("Normal direction");
+            egui::ComboBox::from_id_salt("sculpt_direction")
+                .selected_text(settings.direction.label())
+                .show_ui(ui, |ui| {
+                    for direction in SculptDirection::ALL {
+                        ui.selectable_value(&mut settings.direction, direction, direction.label());
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Brush Center follows the surface under the middle of the brush, Screen moves towards the \
+                     camera, and Selected uses the face picked with Alt+right-click",
+                );
+            ui.end_row();
+            if settings.tool == SculptTool::Push {
+                ui.label("Falloff position");
+                ui.add(egui::Slider::new(&mut settings.falloff_position, 0.0..=100.0).suffix(" %"))
+                    .on_hover_text("How much of the brush, from its middle, moves vertices the whole way");
+                ui.end_row();
+                ui.label("Falloff final");
+                ui.add(egui::Slider::new(&mut settings.falloff_final, 0.0..=100.0).suffix(" %"))
+                    .on_hover_text("How much of the way vertices at the brush's edge still move");
+                ui.end_row();
+            }
+        });
+    if settings.tool == SculptTool::Carve {
+        ui.label("Profile across the stroke, left to right; drag the points:");
+        profile_graph(ui, &mut settings.profile);
+        ui.horizontal(|ui| {
+            for (name, profile) in [
+                ("Trench", CARVE_PROFILE.to_vec()),
+                ("V", vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.75, 0.5, 0.25, 0.0]),
+                (
+                    "Round",
+                    (0..9)
+                        .map(|step| (std::f64::consts::PI * f64::from(step) / 8.0).sin())
+                        .collect(),
+                ),
+                ("Ledge", vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0]),
+            ] {
+                if ui.small_button(name).clicked() {
+                    settings.profile = profile;
+                }
+            }
+        });
+    }
+    if settings.tool != SculptTool::Blend {
+        ui.checkbox(&mut settings.autosew, "Autosew")
+            .on_hover_text("Keep the edges of neighbouring selected displacements joined while sculpting");
+    }
+    ui.label(
+        RichText::new(
+            "Drag over the selected displacements in the 3D view. Ctrl pulls (or takes the texture away), Shift \
+             smooths, right-drag sideways resizes the brush, and Alt+right-click picks the Selected direction.",
+        )
+        .small()
+        .color(MUTED),
+    );
+}
+
+/// Carve's profile as a graph whose points can be dragged up and down: the middle of
+/// the stroke in the middle, its edges at the sides, full depth at the top.
+fn profile_graph(ui: &mut egui::Ui, profile: &mut Vec<f64>) {
+    if profile.len() < 2 {
+        *profile = CARVE_PROFILE.to_vec();
+    }
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(260.0, 90.0), egui::Sense::click_and_drag());
+    let last = (profile.len() - 1) as f32;
+    let point = |index: usize, value: f64| {
+        egui::pos2(
+            rect.left() + rect.width() * index as f32 / last,
+            rect.bottom() - rect.height() * value as f32,
+        )
+    };
+    if response.clicked() || response.dragged() {
+        if let Some(position) = response.interact_pointer_pos() {
+            let index = ((position.x - rect.left()) / rect.width() * last)
+                .round()
+                .clamp(0.0, last) as usize;
+            profile[index] = f64::from(((rect.bottom() - position.y) / rect.height()).clamp(0.0, 1.0));
+        }
+    }
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, Color32::from_gray(24));
+    painter.line_segment(
+        [
+            egui::pos2(rect.center().x, rect.top()),
+            egui::pos2(rect.center().x, rect.bottom()),
+        ],
+        Stroke::new(1.0_f32, Color32::from_gray(60)),
+    );
+    let points: Vec<Pos2> = profile
+        .iter()
+        .enumerate()
+        .map(|(index, value)| point(index, *value))
+        .collect();
+    painter.add(egui::Shape::line(points.clone(), Stroke::new(1.5_f32, BRUSH_COLOR)));
+    for at in points {
+        painter.circle_filled(at, 3.5, Color32::WHITE);
+    }
+}
+
 impl MalletApp {
+    /// Sculpts the selected displacements while the Sculpt tool of the Displacement tab
+    /// is in use, as Hammer's: a left-button stroke applies the brush as it moves and
+    /// again every [`PAINT_INTERVAL`] while held still, all as one undo step, with Ctrl
+    /// reversing it and Shift smoothing; a right-button drag sideways resizes the brush;
+    /// and Alt+right-click takes the face under the mouse as the Selected direction.
+    fn sculpt_displacements_3d(
+        &mut self,
+        slot: usize,
+        rect: Rect,
+        response: &Response,
+        editor: &mut Editor,
+        pointer: &PointerState,
+    ) -> bool {
+        let hovered = response
+            .hover_pos()
+            .or(pointer.position.filter(|_| response.is_pointer_button_down_on()));
+        if response.secondary_clicked() && pointer.modifiers.alt {
+            if let Some(position) = hovered {
+                let (origin, direction) = editor.camera.ray(rect, position);
+                match editor.scene.surface_face(origin, direction) {
+                    Some((_, normal)) => {
+                        editor.displacement.sculpt.direction = SculptDirection::Selected;
+                        editor.displacement.sculpt.selected = normal;
+                        editor.message = "Sculpting along the normal of the face picked".to_owned();
+                    }
+                    None => editor.message = "Alt+right-click a face to sculpt along its normal".to_owned(),
+                }
+            }
+        }
+        if response.drag_started_by(PointerButton::Secondary) && !pointer.modifiers.alt {
+            self.brush_resize = pointer.press_origin.map(|start| BrushResize {
+                slot,
+                start,
+                radius: editor.displacement.sculpt.radius,
+            });
+        }
+        if let Some(resize) = self.brush_resize.filter(|resize| resize.slot == slot) {
+            if response.dragged_by(PointerButton::Secondary) {
+                if let Some(position) = pointer.position {
+                    let radius = resize.radius + f64::from(position.x - resize.start.x);
+                    editor.displacement.sculpt.radius = radius.clamp(*SCULPT_RADII.start(), *SCULPT_RADII.end());
+                }
+                self.sculpt_brush = Some((slot, resize.start));
+                return true;
+            }
+            self.brush_resize = None;
+        }
+        if let Some(position) = hovered {
+            self.sculpt_brush = Some((slot, position));
+            response.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        let held = response.is_pointer_button_down_on()
+            && response
+                .ctx
+                .input(|input| input.pointer.button_down(PointerButton::Primary));
+        if !held {
+            if self.sculpt_stroke.as_ref().is_some_and(|stroke| stroke.slot == slot) {
+                self.sculpt_stroke = None;
+            }
+            return true;
+        }
+        let Some(position) = hovered else {
+            return true;
+        };
+        let stroke = self.sculpt_stroke.get_or_insert_with(|| SculptStroke {
+            slot,
+            group: next_generation(),
+            reverse: pointer.modifiers.ctrl,
+            smooth: pointer.modifiers.shift,
+            last: None,
+            memory: StrokeMemory::default(),
+        });
+        if stroke.slot != slot {
+            return true;
+        }
+        response.ctx.request_repaint_after(PAINT_INTERVAL);
+        let settings = editor.displacement.sculpt.clone();
+        let carving = settings.tool == SculptTool::Carve && !stroke.smooth;
+        let previous = stroke.last.map_or(position, |(_, at)| at);
+        let moved = previous.distance(position) >= SCULPT_SPACING;
+        let due = match stroke.last {
+            None => !carving,
+            Some((when, _)) => moved || (!carving && when.elapsed() >= PAINT_INTERVAL),
+        };
+        if !due {
+            if stroke.last.is_none() {
+                stroke.last = Some((Instant::now(), position));
+            }
+            return true;
+        }
+        stroke.last = Some((Instant::now(), position));
+        let to_point = |at: Pos2| DVec2::new(f64::from(at.x), f64::from(at.y));
+        let sides = editor.displacement_sides();
+        let result = editor.sculpt_step(
+            &sides,
+            &settings,
+            rect,
+            to_point(position),
+            to_point(previous),
+            stroke.reverse,
+            stroke.smooth,
+            &mut stroke.memory,
+            stroke.group,
+        );
+        if let Err(error) = result {
+            editor.message = error;
+        }
+        true
+    }
+
     /// Paints the selected displacements while a paint tool of the Displacement tab is
     /// in use: pressing the left or right button over them starts a stroke, which
     /// applies the brush as it moves and again every [`PAINT_INTERVAL`] while held still,
@@ -361,12 +691,19 @@ impl MalletApp {
         if self.brush_spot.is_some_and(|spot| spot.slot == slot) {
             self.brush_spot = None;
         }
+        if self.sculpt_brush.is_some_and(|(at, _)| at == slot) {
+            self.sculpt_brush = None;
+        }
         let painting = editor.tool == Tool::Texture && editor.displacement.painting() && !editor.camera.mouse_look();
-        if !painting {
+        let sculpting = painting && editor.displacement.mode == DisplacementMode::Sculpt;
+        if !sculpting && self.sculpt_stroke.as_ref().is_some_and(|stroke| stroke.slot == slot) {
+            self.sculpt_stroke = None;
+        }
+        if !painting || sculpting {
             if self.paint_stroke.is_some_and(|stroke| stroke.slot == slot) {
                 self.paint_stroke = None;
             }
-            return false;
+            return sculpting && self.sculpt_displacements_3d(slot, rect, response, editor, pointer);
         }
         let sides = editor.displacement_sides();
         let hovered = response
@@ -419,6 +756,15 @@ impl MalletApp {
             editor.message = error;
         }
         true
+    }
+}
+
+/// The sculpt brush under the mouse in viewport `slot`: a circle of its radius on the
+/// screen.
+pub(super) fn draw_sculpt_brush(painter: &egui::Painter, slot: usize, spot: Option<(usize, Pos2)>, radius: f64) {
+    if let Some((_, center)) = spot.filter(|(at, _)| *at == slot) {
+        painter.circle_stroke(center, radius as f32, Stroke::new(1.5_f32, BRUSH_COLOR));
+        painter.circle_filled(center, 2.0, BRUSH_COLOR);
     }
 }
 

@@ -39,6 +39,9 @@ pub enum DisplacementMode {
     /// Hammer's Paint Alpha: dragging paints the selected displacements' alpha, and
     /// dragging with the right button takes it away.
     PaintAlpha,
+    /// Hammer's Sculpt: a brush that is a circle on the screen pushes, carves, smooths or
+    /// blends the selected displacements as it is dragged over them.
+    Sculpt,
 }
 
 /// The direction Paint Geometry moves vertices in, as Hammer's dialog offers it.
@@ -104,6 +107,8 @@ pub struct DisplacementTool {
     pub noise_min: f64,
     pub noise_max: f64,
     pub rockiness: f64,
+    /// The Sculpt panel's settings.
+    pub sculpt: super::SculptSettings,
 }
 
 impl Default for DisplacementTool {
@@ -121,6 +126,7 @@ impl Default for DisplacementTool {
             noise_min: 0.0,
             noise_max: 16.0,
             rockiness: 0.5,
+            sculpt: super::SculptSettings::default(),
         }
     }
 }
@@ -406,7 +412,7 @@ impl Editor {
 
     /// Writes the changed patches into their brushes as one edit, or as a step of the
     /// undo group `group`. Returns how many patches changed.
-    fn store_patches(
+    pub(super) fn store_patches(
         &mut self,
         owners: &[u32],
         patches: &[Patch],
@@ -454,6 +460,6 @@ impl Editor {
 }
 
 /// Splits placed patches into their brushes' ids and the patches, in the same order.
-fn split(placed: Vec<Placed>) -> (Vec<u32>, Vec<Patch>) {
+pub(super) fn split(placed: Vec<Placed>) -> (Vec<u32>, Vec<Patch>) {
     placed.into_iter().unzip()
 }

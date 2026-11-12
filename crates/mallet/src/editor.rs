@@ -42,6 +42,7 @@ mod displacements;
 mod groups;
 mod hollow;
 mod primitives;
+mod sculpt;
 mod views;
 
 pub use agent::AgentView;
@@ -52,6 +53,7 @@ pub use displacements::{
 };
 pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
+pub use sculpt::{SculptDirection, SculptSettings, SculptTool, DEFAULT_SCULPT_RADIUS};
 
 pub use clipboard::{Clipboard, PasteAt, PasteOptions, MAX_COPIES};
 

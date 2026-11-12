@@ -249,6 +249,12 @@ pub struct MalletApp {
     paint_select: Option<paint_select::PaintSelect>,
     /// Where the displacement paint brush sits under the mouse.
     brush_spot: Option<displacement_tool::BrushSpot>,
+    /// The displacement sculpt stroke in progress, if any.
+    sculpt_stroke: Option<displacement_tool::SculptStroke>,
+    /// The right-button drag resizing the sculpt brush, if any.
+    brush_resize: Option<displacement_tool::BrushResize>,
+    /// The viewport slot and point the sculpt brush is drawn at.
+    sculpt_brush: Option<(usize, Pos2)>,
     /// The Paste Special dialog's settings, kept between pastes as Hammer does.
     paste_options: editor::PasteOptions,
     /// The modifiers held on their own and when they went down, for the key hints.
@@ -312,6 +318,9 @@ impl MalletApp {
             paint_stroke: None,
             paint_select: None,
             brush_spot: None,
+            sculpt_stroke: None,
+            brush_resize: None,
+            sculpt_brush: None,
             paste_options: editor::PasteOptions::default(),
             hint_modifiers: None,
             status_bar_top: 0.0,
@@ -1111,6 +1120,12 @@ impl MalletApp {
                     slot,
                     self.brush_spot,
                     editor.displacement.radius,
+                );
+                displacement_tool::draw_sculpt_brush(
+                    &painter,
+                    slot,
+                    self.sculpt_brush,
+                    editor.displacement.sculpt.radius,
                 );
                 decal_tools::draw_overlay_handles(&painter, &editor.camera, rect, editor);
                 if style == CameraStyle::Lit {
