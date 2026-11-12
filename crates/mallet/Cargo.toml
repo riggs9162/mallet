@@ -31,5 +31,10 @@ libc = "0.2"
 [target.'cfg(not(windows))'.dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
 
+# Sound output for the sound preview. On Linux the mix is piped to a player program
+# instead, so the build needs no ALSA headers and the program no sound library.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = "0.18"
+
 [build-dependencies]
 embed-resource = "3"

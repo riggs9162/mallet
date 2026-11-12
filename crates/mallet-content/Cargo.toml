@@ -7,5 +7,6 @@ publish.workspace = true
 
 [dependencies]
 mallet-kv.workspace = true
+symphonia = { version = "0.6", default-features = false, features = ["mp3"] }
 texpresso = "2"
 vmdl = "0.2"

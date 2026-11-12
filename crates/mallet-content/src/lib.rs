@@ -11,6 +11,7 @@ pub mod filesystem;
 pub mod material;
 pub mod model;
 pub mod physics;
+pub mod sound;
 pub mod vpk;
 pub mod vtf;
 
@@ -26,3 +27,4 @@ pub use model::{
     ModelVertex,
 };
 pub use physics::{load_collision, parse_collision, CollisionModel, CollisionSolid};
+pub use sound::{decode_sound, load_sound, SoundData};
