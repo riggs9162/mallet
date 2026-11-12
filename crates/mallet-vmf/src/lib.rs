@@ -17,6 +17,7 @@ mod model;
 pub mod overlay;
 pub mod primitive;
 pub mod sides;
+pub mod sound;
 pub mod texture;
 pub mod transform;
 pub mod vertex;
