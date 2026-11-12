@@ -80,7 +80,7 @@ impl MalletApp {
     ) -> bool {
         let held = response.is_pointer_button_down_on() && response.ctx.input(|input| input.pointer.primary_down());
         let start = pointer.press_origin.filter(|origin| {
-            self.drag.is_none() && matches!(Self::begin_drag(slot, view, rect, *origin, editor), Drag::Marquee { .. })
+            self.drag.is_none() && matches!(Self::begin_drag(slot, view, rect, *origin, editor, false), Drag::Marquee { .. })
         });
         let frame = StrokeFrame {
             held,

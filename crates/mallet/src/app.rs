@@ -157,8 +157,9 @@ enum Drag {
     },
     /// Moving the pivot rotations turn around.
     Pivot { view: usize },
-    /// Drawing a selection rectangle.
-    Marquee { view: usize, start: DVec2 },
+    /// Drawing a selection rectangle; with `add`, set when Ctrl was held at the press,
+    /// what it covers joins the selection instead of replacing it.
+    Marquee { view: usize, start: DVec2, add: bool },
     /// Drawing a new block, from a grid-snapped corner.
     NewBlock { view: usize, start: DVec2 },
     /// Moving the pending block.
@@ -1430,8 +1431,13 @@ impl MalletApp {
 
     /// Chooses the drag that a left-button press at `origin` starts with the active tool:
     /// resizing from a handle, moving from inside the box, or starting a new marquee or block.
-    fn begin_drag(index: usize, view: &View2D, rect: Rect, origin: Pos2, editor: &Editor) -> Drag {
+    /// With the selection tool, Ctrl always starts a marquee that adds to the selection, as in
+    /// Hammer, even over the selected objects or their handles.
+    fn begin_drag(index: usize, view: &View2D, rect: Rect, origin: Pos2, editor: &Editor, add: bool) -> Drag {
         let start = view.to_world(rect, origin);
+        if add && editor.tool == Tool::Select {
+            return Drag::Marquee { view: index, start, add };
+        }
         let target = editor.handle_box();
         let mode = editor.display_overlay().handle_mode;
         let handle = target.and_then(|bounds| view.hit_handle(rect, &bounds, origin, mode));
@@ -1463,7 +1469,7 @@ impl MalletApp {
                 start,
                 anchor: editor.scene.selection_anchor(),
             },
-            (Tool::Select, ..) => Drag::Marquee { view: index, start },
+            (Tool::Select, ..) => Drag::Marquee { view: index, start, add },
             (Tool::Block, Some(bounds), Some(handle), _) => Drag::ResizeBlock {
                 view: index,
                 start,
@@ -1485,7 +1491,7 @@ impl MalletApp {
                 | Tool::Camera
                 | Tool::Magnify,
                 ..,
-            ) => Drag::Marquee { view: index, start },
+            ) => Drag::Marquee { view: index, start, add },
             (Tool::Block, ..) => Drag::NewBlock {
                 view: index,
                 start: snap(start, editor.snap_step()),
@@ -1653,7 +1659,7 @@ impl MalletApp {
         }
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
-                self.drag = Some(Self::begin_drag(index, view, rect, origin, editor));
+                self.drag = Some(Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers.ctrl));
             }
         }
 
@@ -1788,10 +1794,10 @@ fn finish_drag(drag: Drag, editor: &mut Editor, modifiers: Modifiers) -> Result<
             _ => Ok(()),
         },
         Drag::Pivot { .. } | Drag::ClipPoint { .. } => Ok(()),
-        Drag::Marquee { .. } => {
+        Drag::Marquee { add, .. } => {
             if let Some((axis, a, b)) = editor.overlay.marquee.take() {
                 let owners = editor.scene.owners_inside(axis, a, b, editor.solid_picks());
-                let mode = if modifiers.ctrl {
+                let mode = if add {
                     SelectMode::Add
                 } else {
                     SelectMode::Replace
