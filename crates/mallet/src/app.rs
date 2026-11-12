@@ -53,7 +53,7 @@ use crate::view3d::Camera3D;
 use crate::{mcp, tools};
 
 /// How close, in pixels, a press has to be to a clip point to drag it.
-const CLIP_POINT_REACH_PIXELS: f32 = 6.0;
+const CLIP_POINT_REACH_PIXELS: f32 = 8.0;
 /// How close, in pixels, a press has to be to the pivot to drag it.
 const PIVOT_REACH_PIXELS: f32 = 7.0;
 /// How far, in pixels, an arrow key pans a 2D view with nothing to nudge.
@@ -171,9 +171,10 @@ enum Drag {
         bounds: Bounds,
         handle: Handle,
     },
-    /// Placing or moving one of the clipping tool's points, or with `whole`, moving all
+    /// Placing or moving one of the clipping tool's points. With `grabbed` the drag began
+    /// on a point that was already placed, so holding Ctrl moves all
     /// of them together by the grabbed one.
-    ClipPoint { view: usize, point: usize, whole: bool },
+    ClipPoint { view: usize, point: usize, grabbed: bool },
 }
 
 impl Drag {
@@ -1072,12 +1073,15 @@ impl MalletApp {
                     let hit = editor.scene.pick_face(origin, direction, &editor.models);
                     editor.texture_click(hit, pointer.modifiers);
                 }
-                Tool::Clip if editor.clipper.three_point => match editor.scene.surface_hit(origin, direction) {
-                    Some(point) => {
-                        editor.add_clip_point_3d(point);
+                Tool::Clip if editor.clipper.three_point && !editor.clipper.placed() => {
+                    match editor.scene.surface_hit(origin, direction) {
+                        Some(point) => {
+                            editor.add_clip_point_3d(point);
+                        }
+                        None => editor.message = "Click on a brush face to place a clip point".to_owned(),
                     }
-                    None => editor.message = "Click on a brush face to place a clip point".to_owned(),
-                },
+                }
+                Tool::Clip => editor.cycle_clip_keep(),
                 Tool::Vertex => {
                     if let Some(owner) = editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks()) {
                         pick(editor, Some(owner), pointer.modifiers);
@@ -1085,7 +1089,7 @@ impl MalletApp {
                 }
                 Tool::Overlay => editor.overlay_tool_click(origin, direction, pointer.modifiers.ctrl),
                 Tool::Decal => editor.decal_tool_click(origin, direction),
-                Tool::Block | Tool::Clip | Tool::Camera | Tool::Magnify => {}
+                Tool::Block | Tool::Camera | Tool::Magnify => {}
             }
         }
         if editor.tool == Tool::Camera && !looking {
@@ -1565,10 +1569,11 @@ impl MalletApp {
         box_contains(view.axis, &bounds, view.to_world(rect, pointer)).then_some(egui::CursorIcon::Move)
     }
 
-    /// Runs the clipping tool in one 2D view: a drag from empty space draws a new clip
-    /// line (or, with three-point clipping, places a point), a drag from a point moves
-    /// it, a Ctrl+drag from a point moves the whole line or every point, as in Hammer,
-    /// and a click places a three-point clip point.
+    /// Runs the clipping tool in one 2D view, as Hammer does: a drag away from the points
+    /// draws a new clip line (or, with three-point clipping, starts over with a new
+    /// point), a drag from a point moves it, or with Ctrl held the whole line or every
+    /// point, and a click away from the points switches which pieces are kept. A
+    /// three-point clip that still lacks points takes the click as its next point.
     fn use_clip_2d(
         &mut self,
         index: usize,
@@ -1579,34 +1584,32 @@ impl MalletApp {
         pointer: &PointerState,
     ) {
         let reach = f64::from(CLIP_POINT_REACH_PIXELS) / view.scale;
-        let begin = |editor: &mut Editor, at: Pos2| {
-            let world = view.to_world(rect, at);
-            match editor.clip_point_at(view.axis, world, reach) {
-                Some(point) => (point, true),
-                None if editor.clipper.three_point => (editor.add_clip_point_2d(view.axis, world), false),
-                None => (editor.start_clip_line(view.axis, world), false),
-            }
-        };
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
-                let (point, grabbed) = begin(editor, origin);
+                let world = view.to_world(rect, origin);
+                let (point, grabbed) = match editor.clip_point_at(view.axis, world, reach) {
+                    Some(point) => (point, true),
+                    None if editor.clipper.three_point => (editor.add_clip_point_2d(view.axis, world), false),
+                    None => (editor.start_clip_line(view.axis, world), false),
+                };
                 self.drag = Some(Drag::ClipPoint {
                     view: index,
                     point,
-                    whole: grabbed && pointer.modifiers.ctrl,
+                    grabbed,
                 });
             }
         }
         if let Some(Drag::ClipPoint {
             view: dragged,
             point,
-            whole,
+            grabbed,
         }) = self.drag
         {
             if dragged == index {
+                response.ctx.set_cursor_icon(egui::CursorIcon::Move);
                 if let Some(position) = pointer.position {
                     let world = view.to_world(rect, position);
-                    if whole {
+                    if grabbed && pointer.modifiers.ctrl {
                         editor.move_clip_points(point, view.axis, world);
                     } else {
                         editor.move_clip_point(point, view.axis, world);
@@ -1618,9 +1621,16 @@ impl MalletApp {
             }
             return;
         }
-        if response.clicked_by(PointerButton::Primary) && editor.clipper.three_point {
-            if let Some(position) = pointer.position {
-                begin(editor, position);
+        let hovered = response
+            .hover_pos()
+            .map(|position| view.to_world(rect, position))
+            .and_then(|world| editor.clip_point_at(view.axis, world, reach));
+        if hovered.is_some() {
+            response.ctx.set_cursor_icon(egui::CursorIcon::Move);
+        }
+        if response.clicked_by(PointerButton::Primary) && hovered.is_none() {
+            if let Some(position) = response.interact_pointer_pos().or(pointer.position) {
+                editor.clip_click_2d(view.axis, view.to_world(rect, position));
             }
         }
     }
@@ -2635,7 +2645,10 @@ fn run(action: Action, editor: &mut Editor) {
         Action::TextureTool => editor.set_tool(Tool::Texture),
         Action::ApplyCurrentTexture => report(editor.apply_current_texture().map(drop), editor),
         Action::ClipTool if editor.tool == Tool::Clip => editor.cycle_clip_keep(),
-        Action::ClipTool => editor.set_tool(Tool::Clip),
+        Action::ClipTool => {
+            editor.set_tool(Tool::Clip);
+            editor.message = editor.clip_tool_hint();
+        }
         Action::ClipThreePoint if editor.tool == Tool::Clip => editor.toggle_three_point_clip(),
         Action::ClipThreePoint => {}
         Action::ClipMeasurements if editor.tool == Tool::Clip => editor.toggle_clip_measurements(),

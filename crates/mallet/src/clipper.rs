@@ -5,9 +5,11 @@
 //! as in Hammer++) the plane goes through three points placed in the 2D views or on
 //! surfaces in the 3D view. As in Hammer, the selection stays red, the pieces a clip
 //! keeps are outlined in white and the clip line is cyan between its two white points.
-//! Shift+X, or clicking the tool again, cycles which pieces are kept: both, then one
-//! side, then the other. Ctrl+dragging a point moves the whole line, O shows the size of
-//! each kept piece in the 2D views, and Enter clips.
+//! Clicking in a view away from the points, pressing Shift+X or clicking the tool again
+//! cycles which pieces are kept: one side, then the other, then both. Dragging away from
+//! the points draws a new line, Ctrl+dragging a point moves the whole line, O shows the
+//! size of each kept piece in the 2D views, Enter clips and Esc drops the line, then
+//! goes back to the selection tool.
 
 use std::collections::HashMap;
 
@@ -119,6 +121,11 @@ impl Clipper {
         Plane::from_points(points)?;
         Some(points)
     }
+
+    /// Whether a clip is ready for Enter: a line in two-point mode, or all three points.
+    pub fn placed(&self) -> bool {
+        self.points.len() == if self.three_point { 3 } else { 2 }
+    }
 }
 
 impl Editor {
@@ -136,11 +143,38 @@ impl Editor {
         self.refresh_clip_preview();
     }
 
-    /// Moves on to keeping the next half, in Hammer's order: both, front, back.
+    /// Moves on to keeping the next half, in Hammer's order: front, back, both.
     pub fn cycle_clip_keep(&mut self) {
         self.clipper.keep = self.clipper.keep.next();
         self.message = format!("Clipping keeps {}", self.clipper.keep.label());
         self.refresh_clip_preview();
+    }
+
+    /// A click in a 2D view away from the clip points. As in Hammer it switches which
+    /// pieces are kept, like Shift+X; while a three-point clip still lacks points it
+    /// places the next one instead.
+    pub fn clip_click_2d(&mut self, axis: Axis2D, at: DVec2) {
+        if self.clipper.three_point && !self.clipper.placed() {
+            self.add_clip_point_2d(axis, at);
+        } else {
+            self.cycle_clip_keep();
+        }
+    }
+
+    /// The status bar hint for the clipping tool, shown when it is picked.
+    pub fn clip_tool_hint(&self) -> String {
+        if self.selection.is_empty() {
+            return "Clipping tool: select the brushes to cut with the selection tool first".to_owned();
+        }
+        let place = if self.clipper.three_point {
+            "place three points in the 2D views or on faces in the 3D view"
+        } else {
+            "drag a line across the selection in a 2D view"
+        };
+        format!(
+            "Clipping tool: {place}; click or Shift+X switches the kept side (now {}), Enter clips",
+            self.clipper.keep.label()
+        )
     }
 
     /// Drops the clip points. Returns whether there were any.
@@ -158,6 +192,10 @@ impl Editor {
         let point = self.clip_point_in_view(axis, at, None);
         self.clipper.points = vec![point, point];
         self.clipper.axis = Some(axis);
+        self.message = format!(
+            "Clip line: Enter clips, keeping {}; click away from the line to switch sides",
+            self.clipper.keep.label()
+        );
         self.refresh_clip_preview();
         1
     }
@@ -166,11 +204,15 @@ impl Editor {
     /// centre of the selection, or of the points already placed. Once three points exist
     /// the next one starts over. Returns its index.
     pub fn add_clip_point_2d(&mut self, axis: Axis2D, at: DVec2) -> usize {
+        if self.clipper.points.len() >= 3 {
+            self.clipper.points.clear();
+        }
         let point = self.clip_point_in_view(axis, at, None);
         self.add_clip_point(point)
     }
 
     /// Adds a three-point clip point where the 3D view's ray meets a surface, on the grid.
+    /// Once three points exist the next one starts over.
     pub fn add_clip_point_3d(&mut self, point: DVec3) -> usize {
         let step = self.snap_step();
         let snapped = (point / step).round() * step + DVec3::ZERO;
@@ -184,7 +226,10 @@ impl Editor {
         self.clipper.points.push(point);
         let count = self.clipper.points.len();
         self.message = match count {
-            3 => format!("Clip plane placed; Enter clips, keeping {}", self.clipper.keep.label()),
+            3 => format!(
+                "Clip plane placed; Enter clips, keeping {}; click away from the points to switch sides",
+                self.clipper.keep.label()
+            ),
             _ => format!("Clip point {count} of 3 placed"),
         };
         self.refresh_clip_preview();
