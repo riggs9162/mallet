@@ -137,7 +137,7 @@ const KEY_ACTIONS: &[Action] = &[
 /// and `anchor` the point a move snaps to the grid.
 #[derive(Clone, Copy, Debug)]
 enum Drag {
-    /// Moving the selection, or cloning it when Shift is held at release.
+    /// Moving the selection, or a clone of it when Shift is held.
     Move { view: usize, start: DVec2, anchor: DVec3 },
     /// Resizing the selection with one of its handles.
     Resize {
@@ -177,6 +177,15 @@ enum Drag {
 }
 
 impl Drag {
+    /// Whether holding Shift makes this drag change a clone of the selection instead,
+    /// as in Hammer: moving, resizing, rotating and skewing all clone.
+    fn clones(self) -> bool {
+        matches!(
+            self,
+            Self::Move { .. } | Self::Resize { .. } | Self::Rotate { .. } | Self::Skew { .. }
+        )
+    }
+
     fn view(self) -> usize {
         match self {
             Self::Move { view, .. }
@@ -208,6 +217,8 @@ pub struct MalletApp {
     title: String,
     mcp_url: Option<String>,
     drag: Option<Drag>,
+    /// Whether Shift was held when the current 2D or gizmo drag began, so it clones.
+    clone_drag: bool,
     /// Each viewport slot's GPU image as registered with egui.
     slot_textures: [Option<egui::TextureId>; 4],
     /// Where the cursor was when mouselook started, to put it back afterwards.
@@ -298,6 +309,7 @@ impl MalletApp {
             title: String::new(),
             mcp_url: None,
             drag: None,
+            clone_drag: false,
             slot_textures: [None; 4],
             look_return: None,
             closing: None,
@@ -1230,6 +1242,7 @@ impl MalletApp {
                 let bounds = editor.scene.selection_bounds();
                 let anchor = editor.scene.selection_anchor();
                 self.gizmo_drag = GizmoDrag::begin(slot, gizmo, part, camera, rect, origin, bounds, anchor);
+                self.clone_drag = pointer.modifiers.shift;
             }
         }
         let Some(drag) = self.gizmo_drag.filter(|drag| drag.slot == slot) else {
@@ -1242,7 +1255,11 @@ impl MalletApp {
             return hovered.is_some();
         };
         response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-        let angle_step = editor.config.transform.angle_step(pointer.modifiers.shift);
+        let cloning = self.clone_drag || pointer.modifiers.shift;
+        let angle_step = editor
+            .config
+            .transform
+            .angle_step(pointer.modifiers.shift && !self.clone_drag);
         let change = pointer
             .position
             .and_then(|position| drag.change(&editor.camera, rect, position, editor.snap_step(), angle_step));
@@ -1250,8 +1267,7 @@ impl MalletApp {
             editor.overlay.transform = Some(Remap {
                 matrix: change.matrix(),
             });
-            // Shift at release clones a move, so the originals stay in view.
-            editor.overlay.cloning = pointer.modifiers.shift && matches!(change, GizmoChange::Move(_));
+            editor.overlay.cloning = cloning;
             if let GizmoChange::Rotate(matrix) = change {
                 let degrees = mallet_vmf::transform::matrix_angles(mallet_vmf::transform::linear_part(&matrix));
                 editor.message = format!(
@@ -1267,11 +1283,17 @@ impl MalletApp {
             let center = drag.gizmo.center;
             let result = match change {
                 Some(GizmoChange::Move(offset)) if offset != DVec3::ZERO => {
-                    if pointer.modifiers.shift {
+                    if cloning {
                         editor.clone_selection(offset)
                     } else {
                         editor.move_selection(offset)
                     }
+                }
+                Some(GizmoChange::Rotate(matrix)) if matrix != glam::DMat4::IDENTITY && cloning => {
+                    editor.clone_selection_and("rotated", |editor| editor.transform_selection(matrix, true, center))
+                }
+                Some(GizmoChange::Scale(matrix)) if matrix != glam::DMat4::IDENTITY && cloning => {
+                    editor.clone_selection_and("scaled", |editor| editor.transform_selection(matrix, false, center))
                 }
                 Some(GizmoChange::Rotate(matrix)) if matrix != glam::DMat4::IDENTITY => editor
                     .transform_selection(matrix, true, center)
@@ -1660,6 +1682,7 @@ impl MalletApp {
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
                 self.drag = Some(Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers.ctrl));
+                self.clone_drag = pointer.modifiers.shift;
             }
         }
 
@@ -1687,8 +1710,8 @@ impl MalletApp {
             return;
         };
 
-        // Shift at release clones instead of moving, so the originals stay in view.
-        editor.overlay.cloning = matches!(drag, Drag::Move { .. }) && pointer.modifiers.shift;
+        let cloning = drag.clones() && (self.clone_drag || pointer.modifiers.shift);
+        editor.overlay.cloning = cloning;
         if let Some(position) = pointer.position {
             let world = view.to_world(rect, position);
             match drag {
@@ -1706,7 +1729,8 @@ impl MalletApp {
                     let center = view.axis.project(pivot);
                     let (from, to) = (start - center, world - center);
                     let mut degrees = from.perp_dot(to).atan2(from.dot(to)).to_degrees();
-                    if let Some(step) = editor.config.transform.angle_step(pointer.modifiers.shift) {
+                    let flip_snap = pointer.modifiers.shift && !self.clone_drag;
+                    if let Some(step) = editor.config.transform.angle_step(flip_snap) {
                         degrees = transform::snap_angle(degrees, step);
                     }
                     let [horizontal, vertical, _] = view.axis.axes();
@@ -1751,45 +1775,63 @@ impl MalletApp {
 
         if response.drag_stopped() {
             self.drag = None;
-            if let Err(error) = finish_drag(drag, editor, pointer.modifiers) {
+            if let Err(error) = finish_drag(drag, editor, cloning) {
                 editor.message = error;
             }
         }
     }
 }
 
-/// Applies a finished drag: moves, clones or resizes the selection, or selects what the
-/// marquee covers. Block drags only change the pending block, which Enter creates.
-fn finish_drag(drag: Drag, editor: &mut Editor, modifiers: Modifiers) -> Result<(), String> {
+/// Applies a finished drag: moves, resizes, rotates or skews the selection, or with
+/// `cloning` (Shift held) does that to a clone of it, or selects what the marquee covers.
+/// Block drags only change the pending block, which Enter creates.
+fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), String> {
     match drag {
         Drag::Move { .. } => {
             let Some(remap) = editor.overlay.transform.take() else {
                 return Ok(());
             };
             let offset = remap.offset();
-            match (offset == DVec3::ZERO, modifiers.shift) {
+            match (offset == DVec3::ZERO, cloning) {
                 (true, _) => Ok(()),
                 (false, true) => editor.clone_selection(offset),
                 (false, false) => editor.move_selection(offset),
             }
         }
         Drag::Resize { bounds, .. } => match editor.overlay.transform.take() {
-            Some(remap) if remap.map_bounds(&bounds) != bounds => editor.resize_selection(remap.map_bounds(&bounds)),
+            Some(remap) if remap.map_bounds(&bounds) != bounds => {
+                let to = remap.map_bounds(&bounds);
+                if cloning {
+                    editor.clone_selection_and("resized", |editor| editor.resize_selection(to))
+                } else {
+                    editor.resize_selection(to)
+                }
+            }
             _ => Ok(()),
         },
         Drag::Rotate { pivot, .. } => match editor.overlay.transform.take() {
             Some(remap) if remap.matrix != glam::DMat4::IDENTITY => {
-                editor.transform_selection(remap.matrix, true, pivot)?;
-                editor.message = "Rotated selection".to_owned();
-                Ok(())
+                let rotate = |editor: &mut Editor| editor.transform_selection(remap.matrix, true, pivot);
+                if cloning {
+                    editor.clone_selection_and("rotated", rotate)
+                } else {
+                    rotate(editor)?;
+                    editor.message = "Rotated selection".to_owned();
+                    Ok(())
+                }
             }
             _ => Ok(()),
         },
         Drag::Skew { bounds, .. } => match editor.overlay.transform.take() {
             Some(remap) if remap.matrix != glam::DMat4::IDENTITY => {
-                editor.transform_selection(remap.matrix, false, bounds.min)?;
-                editor.message = "Skewed selection".to_owned();
-                Ok(())
+                let skew = |editor: &mut Editor| editor.transform_selection(remap.matrix, false, bounds.min);
+                if cloning {
+                    editor.clone_selection_and("skewed", skew)
+                } else {
+                    skew(editor)?;
+                    editor.message = "Skewed selection".to_owned();
+                    Ok(())
+                }
             }
             _ => Ok(()),
         },

@@ -700,6 +700,17 @@ impl History {
         Ok(())
     }
 
+    /// Joins the latest `count` undo steps into one, so a single undo reverts them all,
+    /// latest first. Does nothing when fewer steps are recorded.
+    pub fn join_latest(&mut self, count: usize) {
+        if count < 2 || self.undo.len() < count {
+            return;
+        }
+        let joined: Vec<Edit> = self.undo.drain(self.undo.len() - count..).rev().collect();
+        self.undo.push(Edit::Batch(joined));
+        self.last_group = None;
+    }
+
     /// Undoes the latest edit. Returns `false` when there is nothing to undo.
     pub fn undo(&mut self, vmf: &mut Vmf) -> Result<bool, EditError> {
         self.last_group = None;

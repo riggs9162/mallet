@@ -1351,6 +1351,32 @@ impl Editor {
         Ok(())
     }
 
+    /// Clones the selection where it is, then runs `change` on the copies, the way a
+    /// Shift+drag of a resize, rotate or skew handle works in Hammer: the originals stay
+    /// and the clone and its change undo together. When `change` fails, the clone is
+    /// undone and the originals are selected again. `verb` names the change for the
+    /// status bar, such as "rotated".
+    pub fn clone_selection_and(
+        &mut self,
+        verb: &str,
+        change: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let originals = self.selection.clone();
+        self.clone_selection(DVec3::ZERO)?;
+        let count = self.selection.len();
+        if let Err(error) = change(self) {
+            self.step_history(false)?;
+            self.select(originals, SelectMode::Replace);
+            return Err(error);
+        }
+        if let Some(document) = self.document.as_mut() {
+            document.history.join_latest(2);
+        }
+        let noun = if count == 1 { "object" } else { "objects" };
+        self.message = format!("Cloned and {verb} {count} {noun}");
+        Ok(())
+    }
+
     /// Hides the selected brushes and entities, as Hammer's Hide Selection does. Hidden
     /// objects leave the views and the selection until shown again. Undoable. Returns how
     /// many were hidden.
