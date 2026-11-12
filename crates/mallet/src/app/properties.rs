@@ -90,6 +90,8 @@ enum Change {
     Select(u32),
     /// Open the model browser to pick a model for this key.
     BrowseModel(String),
+    /// Open the soundscape browser to pick a soundscape for this key.
+    BrowseSoundscape(String),
     /// Start picking faces for this side list key in the 3D view, or stop when it is
     /// being picked already.
     PickFaces(String),
@@ -125,6 +127,7 @@ impl MalletApp {
         let mut open = true;
         let mut changes = Vec::new();
         let mut browse_model = None;
+        let mut browse_soundscape = None;
         egui::Window::new(title)
             .id(egui::Id::new("object_properties"))
             .open(&mut open)
@@ -166,6 +169,10 @@ impl MalletApp {
                     browse_model = Some(key);
                     Ok(())
                 }
+                Change::BrowseSoundscape(key) => {
+                    browse_soundscape = Some(key);
+                    Ok(())
+                }
                 Change::PickFaces(key) => {
                     if snapshot.picking.as_ref() == Some(&key) {
                         editor.stop_face_pick();
@@ -185,6 +192,13 @@ impl MalletApp {
                 key,
             };
             self.open_model_browser(editor, pick);
+        }
+        if let Some(key) = browse_soundscape {
+            let pick = super::model_browser::Pick::Keys {
+                ids: snapshot.ids.clone(),
+                key,
+            };
+            self.open_soundscape_browser(editor, pick);
         }
     }
 }
@@ -599,7 +613,32 @@ fn property_editor(
             egui::TextEdit::singleline(&mut current.clone()).desired_width(width),
         );
     }
+    let names_soundscape = property.name.eq_ignore_ascii_case("soundscape")
+        && snapshot
+            .classname
+            .as_deref()
+            .is_some_and(crate::editor::class_plays_soundscape);
     match property.kind.as_str() {
+        _ if names_soundscape => {
+            ui.horizontal(|ui| {
+                let width = (width - 92.0).max(80.0);
+                let (response, committed) =
+                    text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
+                if let Some(text) = committed {
+                    changes.push(Change::SetKey(property.name.clone(), text));
+                }
+                if ui
+                    .button(format!("{} Browse...", icon::WAVEFORM))
+                    .on_hover_text("Soundscape browser: see what each soundscape plays, listen and pick one")
+                    .clicked()
+                {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::BrowseSoundscape(property.name.clone()));
+                }
+                response
+            })
+            .inner
+        }
         "choices" if !property.choices.is_empty() => {
             let effective = if matches!(value, Value::Missing) {
                 property.default.as_str()

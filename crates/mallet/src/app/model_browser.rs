@@ -1726,13 +1726,13 @@ fn warnings(classes: &[String], is_static: Option<bool>, collision: bool) -> Vec
 
 /// The words of a search: every plain word must be in a name, and no word that started
 /// with `!` may be.
-struct Search {
+pub(super) struct Search {
     wanted: Vec<String>,
     unwanted: Vec<String>,
 }
 
 impl Search {
-    fn parse(text: &str) -> Self {
+    pub(super) fn parse(text: &str) -> Self {
         let mut search = Self {
             wanted: Vec::new(),
             unwanted: Vec::new(),
@@ -1748,7 +1748,7 @@ impl Search {
         search
     }
 
-    fn matches(&self, name: &str) -> bool {
+    pub(super) fn matches(&self, name: &str) -> bool {
         self.wanted.iter().all(|word| contains(name, word)) && !self.unwanted.iter().any(|word| contains(name, word))
     }
 }

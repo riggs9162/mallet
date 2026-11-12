@@ -88,6 +88,8 @@ pub struct Config {
     pub texture_browser_view: TextureBrowserView,
     /// What the model browser shows, as it was last left.
     pub model_browser_view: ModelBrowserView,
+    /// What the soundscape browser shows, as it was last left.
+    pub soundscape_browser_view: SoundscapeBrowserView,
     pub interface: InterfaceOptions,
     pub agents: AgentOptions,
     pub discord: DiscordOptions,
@@ -497,6 +499,23 @@ pub enum ModelKinds {
     Static,
     /// Models with a collision model, which physics props need.
     Physics,
+}
+
+/// The soundscape browser's filters, kept between runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundscapeBrowserView {
+    /// Show only soundscapes the map's entities use.
+    pub used_only: bool,
+    /// Text the search box held.
+    pub filter: String,
+    /// Earlier searches, the latest first.
+    pub filter_history: Vec<String>,
+    /// The script file the list is narrowed to, if any, such as
+    /// `scripts/soundscapes_town.txt`.
+    pub file: Option<String>,
+    /// Switch what is being listened to along with the selection.
+    pub follow_selection: bool,
 }
 
 /// The model browser's filters and layout, kept between runs.

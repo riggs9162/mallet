@@ -20,6 +20,7 @@ mod paste_special;
 mod problems_window;
 mod properties;
 mod run_map;
+mod soundscape_browser;
 mod texture_browser;
 mod texture_tool;
 mod transform_window;
@@ -241,6 +242,8 @@ pub struct MalletApp {
     texture_browser: texture_browser::TextureBrowserState,
     /// The model browser's listing, thumbnails and preview.
     model_browser: model_browser::ModelBrowserState,
+    /// The soundscape browser's list and filters.
+    soundscape_browser: soundscape_browser::SoundscapeBrowserState,
     /// The Object Properties window's tab, drafts and other state.
     properties: properties::PropertiesState,
     /// The interface scale last applied from Mallet Options, so the window's own zoom
@@ -321,6 +324,7 @@ impl MalletApp {
             face_edit: texture_tool::FaceEditState::default(),
             texture_browser: texture_browser::TextureBrowserState::default(),
             model_browser: model_browser::ModelBrowserState::default(),
+            soundscape_browser: soundscape_browser::SoundscapeBrowserState::default(),
             options: options::OptionsState::default(),
             properties: properties::PropertiesState::default(),
             applied_scale: None,
@@ -486,6 +490,7 @@ impl MalletApp {
         let mut choose_game = false;
         let mut choose_fgds = false;
         let mut browse_models = false;
+        let mut browse_soundscapes = false;
         let mut recent = RecentChoice::None;
         let mut show_net_graph = editor.config.view.net_graph;
         let mut sound_preview = editor.config.sound.preview;
@@ -679,6 +684,17 @@ impl MalletApp {
                         browse_models = true;
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Soundscape Browser...")
+                        .on_hover_text(
+                            "See what each of the game's soundscapes plays, listen to it, and pick one for the \
+                             selected soundscape entities or for new ones",
+                        )
+                        .clicked()
+                    {
+                        browse_soundscapes = true;
+                        ui.close_menu();
+                    }
                     menu_item(ui, &self.keymap, "Transform...", Action::Transform, &mut chosen);
                     menu_item(
                         ui,
@@ -739,6 +755,9 @@ impl MalletApp {
         }
         if browse_models {
             editor.model_browser_open = true;
+        }
+        if browse_soundscapes {
+            editor.soundscape_browser_open = true;
         }
         if choose_game {
             choose_game_dir(editor);
@@ -1959,6 +1978,7 @@ impl eframe::App for MalletApp {
         self.vertex_merge_window(ctx, &mut editor);
         self.texture_browser_window(ctx, &mut editor);
         self.model_browser_window(ctx, &mut editor);
+        self.soundscape_browser_window(ctx, &mut editor);
         self.options_window(ctx, &mut editor);
         self.about_window(ctx, &mut editor);
         self.transform_window(ctx, &mut editor);

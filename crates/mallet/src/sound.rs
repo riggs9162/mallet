@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use glam::DVec3;
 use mallet_content::{load_sound, GameFs, Materials, SoundData, Surface};
 use mallet_vmf::sound::{
-    distance_gain, distant_variant_mix, obscured_gain, pan, split_sound_name, AmbientGeneric, Emit, Listener,
-    MapSounds, Random, SoundCharacters, SoundScripts, SoundSink, SoundscapeChooser, SoundscapeLibrary,
+    distance_gain, distant_variant_mix, obscured_gain, pan, split_sound_name, AmbientGeneric, AudioParams, Emit,
+    Listener, MapSounds, Random, SoundCharacters, SoundScripts, SoundSink, SoundscapeChooser, SoundscapeLibrary,
     SoundscapePlayer, PITCH_NORM,
 };
 use serde::Serialize;
@@ -44,6 +44,12 @@ const ONE_SHOT_PATIENCE: f64 = 1.5;
 const OBSCURED_FADE_TIME: f64 = 0.25;
 /// How long to wait before trying a failed sound device again.
 const DEVICE_RETRY: Duration = Duration::from_secs(3);
+/// The entity id a soundscape listened to from the soundscape browser plays under,
+/// which no map entity has.
+const LISTEN_ENTITY: u32 = u32::MAX;
+/// How far from the listener the eight sound positions of a soundscape listened to
+/// lie, as the game's `playsoundscape` console command places them.
+const LISTEN_RADIUS: f64 = 36.0;
 /// Decoded sounds kept beyond the ones playing, in bytes.
 const SOUND_CACHE_BYTES: usize = 192 * 1024 * 1024;
 /// Tool materials that stop no trace, for when the game's materials cannot be read.
@@ -76,6 +82,8 @@ enum SoundFile {
 struct SoundFiles {
     filesystem: Option<Arc<GameFs>>,
     files: HashMap<String, SoundFile>,
+    /// Whether each file asked about is among the game's files.
+    present: HashMap<String, bool>,
     requests: Option<Sender<String>>,
     results: Option<Receiver<(String, Result<SoundData, String>)>>,
 }
@@ -150,6 +158,16 @@ impl SoundFiles {
     fn get(&self, file: &str) -> Option<&SoundFile> {
         self.files.get(file)
     }
+
+    /// Whether a file under `sound/` is among the game's files; `None` without a game.
+    fn has(&mut self, file: &str) -> Option<bool> {
+        if let Some(present) = self.present.get(file) {
+            return Some(*present);
+        }
+        let present = self.filesystem.as_ref()?.exists(&format!("sound/{file}"));
+        self.present.insert(file.to_owned(), present);
+        Some(present)
+    }
 }
 
 /// What a worker thread read of the game's scripts.
@@ -172,6 +190,9 @@ struct Scripts {
     game_sounds: Option<SoundScripts>,
     /// Whether the load in progress or done includes the game sound scripts.
     with_game_sounds: bool,
+    /// How many times the scripts have been read, so lists made from them know when to
+    /// start over.
+    generation: u64,
     errors: Vec<String>,
 }
 
@@ -207,6 +228,7 @@ impl Scripts {
                     self.game_sounds = scripts.game_sounds;
                 }
                 self.errors = scripts.errors;
+                self.generation += 1;
                 self.loaded = true;
                 self.loading = None;
                 true
@@ -408,6 +430,9 @@ pub struct SoundStatus {
     /// The loudest sample of the mix lately, 1 being full scale.
     pub peak: f32,
     pub scripts: ScriptStatus,
+    /// The soundscape being listened to from the soundscape browser, which plays in
+    /// place of the map's.
+    pub listening: Option<String>,
     /// The soundscape entity in charge, when one is.
     pub soundscape: Option<SoundscapeStatus>,
     pub voices: Vec<VoiceStatus>,
@@ -428,6 +453,9 @@ impl SoundStatus {
         let ambients = self.ambient_generics.iter().filter(|ambient| ambient.playing).count();
         let mut warning = missing > 0;
         let mut text = match &self.soundscape {
+            _ if self.listening.is_some() => {
+                format!("Listening to {}", self.listening.as_deref().unwrap_or_default())
+            }
             _ if self.scripts.loading && self.scripts.soundscapes == 0 => {
                 "Reading the game's sound scripts...".to_owned()
             }
@@ -544,6 +572,9 @@ pub struct SoundFrame<'a> {
     pub tab: u64,
     /// Whether a map is open.
     pub open: bool,
+    /// Whether the soundscape browser is showing, which needs the scripts read even
+    /// while the preview is off.
+    pub browsing: bool,
 }
 
 /// The sound preview's state.
@@ -570,6 +601,11 @@ pub struct SoundPreview {
     solid_materials: HashMap<String, bool>,
     /// Start the soundscape again at the next update, after its scripts were read anew.
     restart: bool,
+    /// Whether ambient generics play: not while a soundscape is listened to.
+    ambients_on: bool,
+    /// The soundscape the browser is listening to, and the sound positions it got
+    /// around the listener once it started.
+    listening: Option<(String, Option<[Option<DVec3>; 8]>)>,
     status: SoundStatus,
 }
 
@@ -598,6 +634,8 @@ impl Default for SoundPreview {
             scene_generation: 0,
             solid_materials: HashMap::new(),
             restart: false,
+            ambients_on: false,
+            listening: None,
             status: SoundStatus::default(),
         }
     }
@@ -622,9 +660,46 @@ impl SoundPreview {
             .collect()
     }
 
-    /// Whether the preview is running and should be updated again soon.
+    /// The game's soundscapes, as far as they have been read.
+    pub fn library(&self) -> &SoundscapeLibrary {
+        &self.scripts.soundscapes
+    }
+
+    /// A number that changes whenever the scripts have been read again.
+    pub fn library_generation(&self) -> u64 {
+        self.scripts.generation
+    }
+
+    /// Plays a soundscape by name in place of the map's, whether or not the preview is
+    /// on, the way the game's `playsoundscape` console command does: its sound positions
+    /// lie around the listener. `None` goes back to what the map plays.
+    pub fn listen(&mut self, name: Option<&str>) {
+        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        if self.listening.as_ref().map(|(playing, _)| playing.as_str()) == name {
+            return;
+        }
+        if name.is_none() {
+            self.stop_player();
+        }
+        self.listening = name.map(|name| (name.to_owned(), None));
+    }
+
+    /// The soundscape being listened to, if any.
+    pub fn listening(&self) -> Option<&str> {
+        self.listening.as_ref().map(|(name, _)| name.as_str())
+    }
+
+    /// Whether a sound a script names is among the game's files; `None` when no game
+    /// folder is set.
+    pub fn has_sound(&mut self, wave: &str) -> Option<bool> {
+        let (_, file) = split_sound_name(wave);
+        self.files.has(&file)
+    }
+
+    /// Whether the preview is running or reading scripts, and should be updated again
+    /// soon.
     pub fn running(&self) -> bool {
-        self.status.running
+        self.status.running || self.scripts.loading.is_some()
     }
 
     /// Reads the game's sound scripts again and starts the soundscape over, after a
@@ -637,7 +712,8 @@ impl SoundPreview {
     /// One update: follows the camera and the map, starts and stops sounds, and sets
     /// every playing sound's volume for each speaker.
     pub fn update(&mut self, mut frame: SoundFrame<'_>) {
-        if !frame.options.preview || !frame.open {
+        let playing = self.listening.is_some() || (frame.options.preview && frame.open);
+        if !playing && !frame.browsing {
             self.shut_down();
             return;
         }
@@ -652,14 +728,25 @@ impl SoundPreview {
         };
         self.last_update = Some(now);
         self.time += step;
-        self.open_output(now);
-        self.mixer.keep_alive(self.master(&frame));
 
         let filesystem = frame.materials.as_ref().map(|materials| materials.shared_filesystem());
         self.files.set_game(filesystem.clone());
         self.files.poll();
 
         let map = &frame.scene.sounds;
+        if !playing {
+            if self.scripts.update(filesystem.as_ref(), &frame.map_name, false) {
+                self.restart = true;
+            }
+            self.go_quiet();
+            self.status = SoundStatus {
+                scripts: self.script_status(),
+                ..SoundStatus::default()
+            };
+            return;
+        }
+        self.open_output(now);
+        self.mixer.keep_alive(self.master(&frame));
         if self.tab != Some(frame.tab) {
             self.silence();
             self.tab = Some(frame.tab);
@@ -671,7 +758,8 @@ impl SoundPreview {
             self.last_choice = f64::NEG_INFINITY;
             self.learn_materials(frame.scene, frame.materials.as_deref_mut());
         }
-        let want_game_sounds = frame.options.ambient_generics
+        let want_game_sounds = self.listening.is_none()
+            && frame.options.ambient_generics
             && map
                 .ambients
                 .iter()
@@ -706,7 +794,39 @@ impl SoundPreview {
             })
         };
 
-        if frame.options.soundscapes {
+        if let Some((name, positions)) = &mut self.listening {
+            let listener = &frame.listener;
+            let positions = *positions.get_or_insert_with(|| {
+                std::array::from_fn(|index| {
+                    let angle = std::f64::consts::FRAC_PI_4 * (index + 1) as f64;
+                    let around = listener.forward * angle.cos() - listener.right * angle.sin();
+                    Some(listener.position + around * LISTEN_RADIUS * std::f64::consts::SQRT_2)
+                })
+            });
+            let audio = AudioParams {
+                entity: Some(LISTEN_ENTITY),
+                soundscape: name.clone(),
+                positions,
+            };
+            let mut channels = Channels {
+                voices: &mut self.voices,
+                next_handle: &mut self.next_handle,
+                mixer: &self.mixer,
+                time: self.time,
+                source: VoiceSource::Soundscape,
+            };
+            if self.scripts.loaded {
+                let restart = std::mem::take(&mut self.restart);
+                self.player.set_params(
+                    Some(&audio),
+                    restart,
+                    &self.scripts.soundscapes,
+                    self.time,
+                    &mut channels,
+                );
+            }
+            self.player.update(self.time, step, listener, &mut channels);
+        } else if frame.options.soundscapes && frame.options.preview {
             if self.time - self.last_choice >= CHOOSE_INTERVAL {
                 self.last_choice = self.time;
                 self.chooser.update(map, frame.listener.position, &brush_blocked);
@@ -733,7 +853,9 @@ impl SoundPreview {
             self.stop_soundscape();
         }
 
-        self.update_ambients(map, frame.options.ambient_generics, step);
+        let ambients = frame.options.ambient_generics && frame.options.preview && self.listening.is_none();
+        self.ambients_on = ambients;
+        self.update_ambients(map, ambients, step);
         self.update_voices(&frame.listener, frame.options.occlusion, step, &world_blocked);
         self.status = self.describe(&frame);
         self.solid_materials = solid;
@@ -791,6 +913,13 @@ impl SoundPreview {
 
     /// Switches the preview off: silence, and the sound device is given back.
     fn shut_down(&mut self) {
+        self.go_quiet();
+        self.last_update = None;
+        self.status = SoundStatus::default();
+    }
+
+    /// Stops playing and gives the sound device back, keeping the scripts read so far.
+    fn go_quiet(&mut self) {
         if !self.status.running && self.output.is_none() {
             return;
         }
@@ -798,15 +927,33 @@ impl SoundPreview {
         self.output = None;
         self.output_error = None;
         self.output_retry = None;
-        self.last_update = None;
         self.tab = None;
-        self.status = SoundStatus::default();
     }
 
+    /// What was read of the game's sound scripts.
+    fn script_status(&self) -> ScriptStatus {
+        ScriptStatus {
+            loading: self.scripts.loading.is_some(),
+            soundscape_files: self.scripts.soundscape_files,
+            soundscapes: self.scripts.soundscapes.soundscapes.len(),
+            game_sounds: self.scripts.game_sounds.as_ref().map(SoundScripts::len),
+            errors: self.scripts.errors.clone(),
+        }
+    }
+
+    /// Stops the soundscape and forgets which entity was in charge.
     fn stop_soundscape(&mut self) {
         if self.player.playing().is_none() && self.chooser.audio().is_none() {
             return;
         }
+        self.stop_player();
+        self.chooser = SoundscapeChooser::default();
+        self.last_choice = f64::NEG_INFINITY;
+    }
+
+    /// Stops the soundscape's sounds at once, so whichever soundscape is in charge next
+    /// starts from silence.
+    fn stop_player(&mut self) {
         let mixer = &self.mixer;
         self.voices.retain(|voice| {
             let keep = voice.source != VoiceSource::Soundscape;
@@ -823,8 +970,6 @@ impl SoundPreview {
             source: VoiceSource::Soundscape,
         };
         self.player.stop(&mut channels);
-        self.chooser = SoundscapeChooser::default();
-        self.last_choice = f64::NEG_INFINITY;
     }
 
     /// Looks up which of the scene's brush materials stop traces: everything but the
@@ -1025,13 +1170,18 @@ impl SoundPreview {
     }
 
     fn describe(&mut self, frame: &SoundFrame<'_>) -> SoundStatus {
-        let audio = self.chooser.audio();
+        let listening = self.listening.as_ref().map(|(name, positions)| AudioParams {
+            entity: None,
+            soundscape: name.clone(),
+            positions: positions.unwrap_or_default(),
+        });
+        let audio = listening.as_ref().or(self.chooser.audio());
         let soundscape = audio.map(|audio| SoundscapeStatus {
             entity: audio.entity,
             name: audio.soundscape.clone(),
             known: self.scripts.soundscapes.find(&audio.soundscape).is_some(),
             playing: self.player.playing().map(str::to_owned),
-            in_range: self.chooser.in_range(),
+            in_range: listening.is_some() || self.chooser.in_range(),
             dsp: self.player.dsp(),
             random_sounds: self.player.random().len(),
             warnings: self.player.warnings().to_vec(),
@@ -1087,7 +1237,7 @@ impl SoundPreview {
                         spec.modulated
                             .then(|| "Its preset or LFO is left out of the preview.".to_owned())
                     }),
-                    None if !frame.options.ambient_generics => None,
+                    None if !self.ambients_on => None,
                     None if spec.start_silent => Some("Starts silent: plays when an input turns it on.".to_owned()),
                     None if !spec.looped => Some("Not looped: plays when an input asks for it.".to_owned()),
                     None => Some("Its volume is 0.".to_owned()),
@@ -1106,13 +1256,8 @@ impl SoundPreview {
             device: self.output.as_ref().map(|output| output.device.clone()),
             device_error: self.output_error.clone(),
             peak: self.mixer.take_peak(),
-            scripts: ScriptStatus {
-                loading: self.scripts.loading.is_some(),
-                soundscape_files: self.scripts.soundscape_files,
-                soundscapes: self.scripts.soundscapes.soundscapes.len(),
-                game_sounds: self.scripts.game_sounds.as_ref().map(SoundScripts::len),
-                errors: self.scripts.errors.clone(),
-            },
+            scripts: self.script_status(),
+            listening: self.listening.as_ref().map(|(name, _)| name.clone()),
             soundscape,
             voices,
             ambient_generics,

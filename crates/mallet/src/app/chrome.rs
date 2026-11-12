@@ -590,6 +590,24 @@ impl MalletApp {
                         self.open_model_browser(editor, super::model_browser::Pick::NewEntity);
                     }
                 }
+                if crate::editor::class_plays_soundscape(&editor.entity_class) {
+                    let mut browse = false;
+                    ui.horizontal(|ui| {
+                        browse = ui
+                            .button(icon::WAVEFORM)
+                            .on_hover_text("Soundscape browser: pick the soundscape for new entities")
+                            .clicked();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editor.new_soundscape)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("soundscape (the class's default)"),
+                        )
+                        .on_hover_text("Soundscape the entity tool gives new entities of this class");
+                    });
+                    if browse {
+                        self.open_soundscape_browser(editor, super::model_browser::Pick::NewEntity);
+                    }
+                }
                 ui.label(
                     RichText::new("Entity tool: click a surface in 3D, or place in 2D and press Enter")
                         .small()

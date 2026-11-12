@@ -452,6 +452,12 @@ pub struct Editor {
     /// Whether the model browser is showing, and a filter an MCP tool asked for.
     pub model_browser_open: bool,
     pub model_browser_filter: Option<String>,
+    /// Whether the soundscape browser is showing, and a filter an MCP tool asked for.
+    pub soundscape_browser_open: bool,
+    pub soundscape_browser_filter: Option<String>,
+    /// The soundscape the entity tool gives new soundscape entities; empty to keep the
+    /// class's own default.
+    pub new_soundscape: String,
     /// The model the entity tool gives new entities of a class that takes one, such as
     /// `models/props_c17/oildrum001.mdl`; empty to keep the class's own default.
     pub prop_model: String,
@@ -554,6 +560,9 @@ impl Default for Editor {
             texture_browser_filter: None,
             model_browser_open: false,
             model_browser_filter: None,
+            soundscape_browser_open: false,
+            soundscape_browser_filter: None,
+            new_soundscape: String::new(),
             prop_model: String::new(),
             model_list: None,
             window_shot: WindowShot::Idle,
@@ -575,6 +584,14 @@ impl Default for Editor {
             window_tab: None,
         }
     }
+}
+
+/// Whether entities of a class name a soundscape of the game's scripts in their
+/// `soundscape` key. A `trigger_soundscape` names an entity there instead, and a proxy
+/// takes its main soundscape's.
+pub fn class_plays_soundscape(classname: &str) -> bool {
+    let classname = classname.trim();
+    classname.eq_ignore_ascii_case("env_soundscape") || classname.eq_ignore_ascii_case("env_soundscape_triggerable")
 }
 
 /// Locks shared editor state, recovering it if a previous holder panicked.
@@ -938,6 +955,7 @@ impl Editor {
             map_name,
             tab: self.tab_ids[self.active_tab],
             open: self.document.is_some(),
+            browsing: self.soundscape_browser_open,
         };
         self.sound.update(frame);
         self.sound.running()
@@ -1048,13 +1066,35 @@ impl Editor {
     }
 
     /// The keys the entity tool adds to a new entity of the current class: the model
-    /// picked in the model browser, when the class takes one.
+    /// picked in the model browser, when the class takes one, and the soundscape picked
+    /// in the soundscape browser, when the class plays one.
     pub fn entity_tool_keys(&self) -> Vec<(String, String)> {
+        let mut keys = Vec::new();
         let model = self.prop_model.trim();
-        if model.is_empty() || !self.class_takes_model(&self.entity_class) {
-            return Vec::new();
+        if !model.is_empty() && self.class_takes_model(&self.entity_class) {
+            keys.push(("model".to_owned(), model.to_owned()));
         }
-        vec![("model".to_owned(), model.to_owned())]
+        let soundscape = self.new_soundscape.trim();
+        if !soundscape.is_empty() && class_plays_soundscape(&self.entity_class) {
+            keys.push(("soundscape".to_owned(), soundscape.to_owned()));
+        }
+        keys
+    }
+
+    /// The selected entities whose `soundscape` key names a soundscape of the game's
+    /// scripts, which the soundscape browser sets.
+    pub fn soundscape_targets(&self) -> Vec<u32> {
+        self.selection
+            .iter()
+            .filter_map(|owner| match owner {
+                Owner::Entity(id) => Some(*id),
+                Owner::Solid(_) => None,
+            })
+            .filter(|id| {
+                self.entity(*id)
+                    .is_some_and(|entity| class_plays_soundscape(entity.classname()))
+            })
+            .collect()
     }
 
     /// Changes the selection. Owners that are not in the map are ignored. The texture
