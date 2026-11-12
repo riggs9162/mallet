@@ -34,6 +34,7 @@ The tools a mapper reaches for every few minutes.
 ### Vertex tool (Shift+V)
 
 - [x] Drag vertices and edge midpoints in the 2D and 3D views, with grid snapping. Hammer
+- [x] Arrow keys nudge the selected vertices in the 2D views. Hammer
 - [x] Splitting a face by selecting two vertices (Ctrl+F). Hammer
 - [x] Merging vertices that are dragged onto each other, with a prompt. Hammer
 - [x] Live update of the brush and undo inside the tool. H++
