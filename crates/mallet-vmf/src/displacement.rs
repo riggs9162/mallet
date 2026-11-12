@@ -18,6 +18,10 @@ use crate::kv::{Block, Item, Pair};
 use crate::transform::clean;
 use crate::{parse_numbers, parse_vec3, Side};
 
+mod sculpt;
+
+pub use sculpt::{sculpt, SculptBrush, SculptMode, StrokeMemory, CARVE_PROFILE};
+
 /// The name of the block a displacement face keeps its data in.
 pub const BLOCK: &str = "dispinfo";
 /// The smallest power Hammer's Create offers.
@@ -36,8 +40,10 @@ const BUILDABLE_NORMAL: f64 = 0.8;
 const WELD: f64 = 0.1;
 /// What Hammer writes in `allowed_verts`: every vertex is allowed.
 const ALLOWED_VERTS: &str = "-1 -1 -1 -1 -1 -1 -1 -1 -1 -1";
-/// The keys and blocks of a `dispinfo`, in the order Hammer writes them.
-const FIELDS: [&str; 12] = [
+/// The keys and blocks of a `dispinfo`, in the order Hammer writes them. The blocks
+/// after `allowed_verts` hold four-texture blends and are only written when a face has
+/// them.
+const FIELDS: [&str; 18] = [
     "power",
     "startposition",
     "flags",
@@ -50,9 +56,17 @@ const FIELDS: [&str; 12] = [
     "alphas",
     "triangle_tags",
     "allowed_verts",
+    "multiblend",
+    "alphablend",
+    "multiblend_color_0",
+    "multiblend_color_1",
+    "multiblend_color_2",
+    "multiblend_color_3",
 ];
 /// How many of [`FIELDS`] are keys; the rest are blocks.
 const KEY_FIELDS: usize = 5;
+/// Where the four-texture blend blocks start in [`FIELDS`].
+const BLEND_FIELDS: usize = 12;
 
 /// The number of vertices a side of a displacement of this power has.
 pub fn side_size(power: u32) -> usize {
@@ -89,9 +103,38 @@ pub struct Displacement {
     pub triangle_tags: Vec<u32>,
     /// The pairs of the `allowed_verts` block, kept as written.
     pub allowed_verts: Vec<Item>,
+    /// How much of each of a four-texture material's textures shows at each vertex
+    /// (`multiblend`), as Hammer's Sculpt Blend paints them for `Lightmapped_4WayBlend`
+    /// and `MultiBlend` materials; `None` when the face has no such data, which shows
+    /// the first texture alone.
+    pub multiblend: Option<FourWayBlend>,
     /// Keys and blocks Mallet does not know, each with how many known fields came before
     /// it, so they are written back where they were.
     pub extra: Vec<(usize, Item)>,
+}
+
+/// The four-texture blend of a displacement's vertices, as Hammer saves it in the
+/// `multiblend`, `alphablend` and `multiblend_color_0` to `_3` blocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FourWayBlend {
+    /// Each vertex's weight of the four textures, adding up to 1.
+    pub weights: Vec<[f64; 4]>,
+    /// Each vertex's alpha for each texture, which only `MultiBlend` uses.
+    pub alphas: Vec<[f64; 4]>,
+    /// Each texture's tint at each vertex, which only `MultiBlend` uses.
+    pub colors: [Vec<DVec3>; 4],
+}
+
+impl FourWayBlend {
+    /// The blend Hammer starts a displacement with: the first texture everywhere, no
+    /// alpha, and white tints.
+    pub fn new(count: usize) -> Self {
+        Self {
+            weights: vec![[1.0, 0.0, 0.0, 0.0]; count],
+            alphas: vec![[0.0; 4]; count],
+            colors: std::array::from_fn(|_| vec![DVec3::ONE; count]),
+        }
+    }
 }
 
 impl Displacement {
@@ -116,6 +159,7 @@ impl Displacement {
             alphas: vec![0.0; count],
             triangle_tags: vec![tag_for(normal); triangles],
             allowed_verts: vec![Item::Pair(Pair::new("10", ALLOWED_VERTS))],
+            multiblend: None,
             extra: Vec::new(),
         }
     }
@@ -154,6 +198,8 @@ impl Displacement {
                 .map(|index| DVec3::new(values[index * 3], values[index * 3 + 1], values[index * 3 + 2]))
                 .collect::<Vec<_>>()
         };
+        let blended = block.blocks_named("multiblend").next().is_some();
+        let typed_blocks = if blended { FIELDS.len() } else { BLEND_FIELDS };
         let mut seen = [false; FIELDS.len()];
         let mut known = 0;
         let mut extra = Vec::new();
@@ -162,7 +208,7 @@ impl Displacement {
                 Item::Pair(pair) => FIELDS[..KEY_FIELDS]
                     .iter()
                     .position(|name| pair.key.eq_ignore_ascii_case(name)),
-                Item::Block(child) => FIELDS[KEY_FIELDS..]
+                Item::Block(child) => FIELDS[KEY_FIELDS..typed_blocks]
                     .iter()
                     .position(|name| child.name.eq_ignore_ascii_case(name))
                     .map(|index| index + KEY_FIELDS),
@@ -176,6 +222,25 @@ impl Displacement {
             }
         }
         let tags = rows(block, "triangle_tags", size - 1, 2 * (size - 1));
+        let quads = |name: &str| {
+            let values = rows(block, name, size, size * 4);
+            values
+                .chunks(4)
+                .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
+                .collect::<Vec<_>>()
+        };
+        let multiblend = block.blocks_named("multiblend").next().map(|_| FourWayBlend {
+            weights: quads("multiblend"),
+            alphas: quads("alphablend"),
+            colors: std::array::from_fn(|layer| {
+                let name = format!("multiblend_color_{layer}");
+                if block.blocks_named(&name).next().is_some() {
+                    vectors(&name)
+                } else {
+                    vec![DVec3::ONE; count]
+                }
+            }),
+        });
         Some(Self {
             power,
             start: block.get("startposition").and_then(parse_vec3).unwrap_or_default(),
@@ -192,6 +257,7 @@ impl Displacement {
                 || vec![Item::Pair(Pair::new("10", ALLOWED_VERTS))],
                 |child| child.items.clone(),
             ),
+            multiblend,
             extra,
         })
     }
@@ -205,7 +271,7 @@ impl Displacement {
             Item::Block(rows_block(name, &values, size * 3))
         };
         let tags: Vec<f64> = self.triangle_tags.iter().map(|tag| f64::from(*tag)).collect();
-        let fields = [
+        let mut fields = vec![
             Item::Pair(Pair::new("power", self.power.to_string())),
             Item::Pair(Pair::new(
                 "startposition",
@@ -230,6 +296,18 @@ impl Displacement {
                 items: self.allowed_verts.clone(),
             }),
         ];
+        if let Some(blend) = &self.multiblend {
+            let quads = |name: &str, quads: &[[f64; 4]]| {
+                let values: Vec<f64> = quads.iter().flatten().copied().collect();
+                Item::Block(rows_block(name, &values, size * 4))
+            };
+            fields.push(quads("multiblend", &blend.weights));
+            fields.push(quads("alphablend", &blend.alphas));
+            for (layer, colors) in blend.colors.iter().enumerate() {
+                fields.push(vectors(&format!("multiblend_color_{layer}"), colors));
+            }
+        }
+        let count = fields.len();
         let mut block = Block::new(BLOCK);
         let extras_at = |slot: &dyn Fn(usize) -> bool| {
             self.extra
@@ -242,7 +320,7 @@ impl Displacement {
             block.items.extend(extras_at(&|at| at == position));
             block.items.push(field);
         }
-        block.items.extend(extras_at(&|at| at >= FIELDS.len()));
+        block.items.extend(extras_at(&|at| at >= count));
         block
     }
 
@@ -404,6 +482,9 @@ pub struct Surface {
     pub normals: Vec<DVec3>,
     /// Each vertex's alpha, from 0 to 255.
     pub alphas: Vec<f64>,
+    /// Each vertex's weights of a four-texture material's textures, when the
+    /// displacement has them.
+    pub weights: Option<Vec<[f64; 4]>>,
     /// The box around the positions.
     pub bounds: Bounds,
 }
@@ -444,6 +525,7 @@ impl Surface {
             positions: Vec::new(),
             normals: Vec::new(),
             alphas: Vec::new(),
+            weights: None,
             bounds: Bounds::EMPTY,
         };
         surface.refresh(displacement);
@@ -461,6 +543,7 @@ impl Surface {
             .collect();
         self.alphas = displacement.alphas.clone();
         self.alphas.resize(self.flat.len(), 0.0);
+        self.weights = displacement.multiblend.as_ref().map(|blend| blend.weights.clone());
         self.bounds = Bounds::EMPTY;
         for position in &self.positions {
             self.bounds.add_point(*position);
@@ -1440,9 +1523,43 @@ mod tests {
     }
 
     #[test]
+    fn reads_and_writes_four_texture_blends_as_hammer_lays_them_out() {
+        let mut block = floor_patch(&floor()).displacement.to_block();
+        let rows = |name: &str, row: &str| {
+            let mut child = Block::new(name);
+            for index in 0..5 {
+                child.push_pair(format!("row{index}"), row);
+            }
+            Item::Block(child)
+        };
+        block.items.push(rows("multiblend", &["0.25 0.75 0 0"; 5].join(" ")));
+        block.items.push(rows("alphablend", &["0 0 0 0"; 5].join(" ")));
+        for layer in 0..4 {
+            block
+                .items
+                .push(rows(&format!("multiblend_color_{layer}"), &["1 1 1"; 5].join(" ")));
+        }
+        let displacement = Displacement::read(&block).unwrap();
+        let blend = displacement.multiblend.as_ref().unwrap();
+        assert_eq!(blend.weights[7], [0.25, 0.75, 0.0, 0.0]);
+        assert_eq!(blend.colors[3][24], DVec3::ONE);
+        assert_eq!(displacement.to_block(), block);
+
+        let mut lone = floor_patch(&floor()).displacement.to_block();
+        lone.items.push(rows("alphablend", &["0 0 0 0"; 5].join(" ")));
+        let displacement = Displacement::read(&lone).unwrap();
+        assert!(displacement.multiblend.is_none());
+        assert_eq!(
+            displacement.to_block(),
+            lone,
+            "blend blocks without weights are kept as they are"
+        );
+    }
+
+    #[test]
     fn keeps_unknown_keys_and_blocks_where_they_were() {
         let mut block = floor_patch(&floor()).displacement.to_block();
-        block.items.insert(5, Item::Block(Block::new("multiblend")));
+        block.items.insert(5, Item::Block(Block::new("sculpt_history")));
         block.items.push(Item::Pair(Pair::new("custom", "1")));
         let displacement = Displacement::read(&block).unwrap();
         assert_eq!(displacement.to_block(), block);
