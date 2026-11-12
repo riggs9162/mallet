@@ -322,6 +322,19 @@ playing and warns about soundscapes no script defines and sound files that are m
 Room effects (`dsp`), sound mixers, sentences and `ambient_generic` presets and LFOs are
 left out. View > Reload Sound Scripts reads the scripts again after you edit them.
 
+Tools > Soundscape Browser lists every soundscape the game's scripts define, laid out
+like the texture and model browsers: script files on the left, names in the middle with
+the same search (`canals !util`, `*` and `?`), and on the right what the clicked
+soundscape plays: its looping sounds, its sets of random sounds with their timing, the
+soundscapes it plays inside itself, and the sound positions it needs. Sound files the
+game lacks are marked, and so are positions the selected entity does not have. Listen
+plays the soundscape around the 3D camera in place of the map's, whether or not the sound
+preview is on, the way the game's `playsoundscape` command does; with Follow clicks it
+switches to each soundscape you click. Double-click a soundscape, or press Use, to put it
+on the selected `env_soundscape` entities, or to make it the soundscape the Entity tool
+gives new ones. The `soundscape` key in Object Properties has a Browse button that opens
+it too.
+
 ## Texturing
 
 Shift+A opens the Face Edit Sheet, laid out like Hammer++'s. In the 3D view, click a face

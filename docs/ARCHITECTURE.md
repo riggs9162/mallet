@@ -721,6 +721,18 @@ minimized. `sound/output.rs` owns the device on a thread of its own: `cpal` on W
 and macOS, and on Linux a pipe to `pw-cat`, `paplay` or `aplay`, so the Linux build links
 no sound library. Turning the preview off closes the device.
 
+`SoundscapeLibrary::outline` says what a soundscape plays, line by line and through its
+sub-soundscapes, with the sound positions it ends up using once `position`,
+`positionoverride` and `ambientpositionoverride` are applied the way the player applies
+them. `app/soundscape_browser.rs` shows it: a window laid out like the model browser,
+sharing its `Pick` (a key of some entities, or the Entity tool's next entity) and its
+`Search`, over a list sorted by name and rebuilt when `SoundPreview::library_generation`
+changes. While it is open the preview reads the scripts even when it is switched off.
+`SoundPreview::listen` plays one soundscape by name in place of the chooser's pick, with
+eight sound positions in a ring around the camera and no ambient generics; closing the
+browser stops it. `Editor::new_soundscape` is the soundscape `entity_tool_keys` gives new
+`env_soundscape` and `env_soundscape_triggerable` entities.
+
 ## MCP server
 
 The editor starts an MCP server at `http://127.0.0.1:7414/mcp` (Streamable HTTP transport,
@@ -787,7 +799,8 @@ Tools:
 | `set_grid`, `center_views` | Grid size, Snap to Grid and Show Grid, and framing |
 | `set_viewport_type` | Switch a viewport slot between 3D (textured, wireframe, lighting preview) and 2D types |
 | `list_lights` | The map's lights as the lighting preview reads them, the sky light, fog, sky, texture lights in use, the latest frame's lighting numbers and, optionally, the lighting entity catalogue |
-| `sound_preview` | What the sound preview plays: the soundscape entity in charge, every voice with its volume, distance and the gain of each speaker, the scripts read and the mix's peak level; optionally the map's sound entities and the game's soundscape names; turns the preview on or off and reloads the scripts |
+| `sound_preview` | What the sound preview plays: the soundscape entity in charge, every voice with its volume, distance and the gain of each speaker, the scripts read and the mix's peak level; optionally the map's sound entities, the game's soundscape names and what one soundscape plays; turns the preview on or off, listens to a soundscape by name and reloads the scripts |
+| `show_soundscape_browser` | Open the soundscape browser with a search |
 | `set_camera`, `set_view_2d` | Aim the 3D camera, pan and zoom the 2D views |
 | `screenshot` | PNG of one or all viewports, rendered offscreen, or of the whole window (`window`) |
 | `set_entity_outputs` | Replace an entity's outputs |
