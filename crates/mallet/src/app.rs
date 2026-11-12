@@ -2669,6 +2669,9 @@ fn run(action: Action, editor: &mut Editor) {
             if editor.tool == Tool::Texture {
                 editor.clear_face_selection();
             } else if editor.tool == Tool::Vertex && (editor.vertex.merge_prompt || editor.clear_vertex_selection()) {
+            } else if editor.tool == Tool::Clip && !pending {
+                editor.set_tool(Tool::Select);
+                editor.message = "Selection tool".to_owned();
             } else if !pending {
                 editor.clear_selection();
             }
