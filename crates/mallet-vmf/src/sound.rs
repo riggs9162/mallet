@@ -413,6 +413,235 @@ impl SoundscapeLibrary {
     }
 }
 
+/// What a line of a soundscape's outline is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutlineKind {
+    /// The room effect the soundscape sets.
+    Dsp,
+    /// A sound that plays all the time.
+    Loop,
+    /// A set of sounds played now and then; its files follow as [`OutlineKind::Wave`].
+    Random,
+    /// One file of a random set.
+    Wave,
+    /// Another soundscape played inside this one; its own lines follow, one deeper.
+    Soundscape,
+    /// Something the game would warn about.
+    Problem,
+}
+
+/// One line of a soundscape's outline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineRow {
+    /// How deep in sub-soundscapes and wave lists the line sits.
+    pub depth: u32,
+    pub kind: OutlineKind,
+    /// The sound file, the soundscape's name or what the line says.
+    pub text: String,
+    /// Volume, pitch, timing and where it plays, in words.
+    pub detail: String,
+    /// The sound file the line plays, as the script names it.
+    pub wave: Option<String>,
+}
+
+/// What a soundscape plays, in the order its script says it, for people to read.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Outline {
+    pub rows: Vec<OutlineRow>,
+    /// The sound positions it plays at, which its `env_soundscape` has to name with
+    /// `position0` to `position7`; sounds at a position the entity lacks stay silent.
+    pub positions: BTreeSet<i32>,
+}
+
+/// The position settings a sub-soundscape inherits, without the volume.
+#[derive(Clone, Copy)]
+struct OutlinePlace {
+    starting_position: i32,
+    position_override: i32,
+    ambient_position_override: i32,
+    depth: u32,
+}
+
+impl SoundscapeLibrary {
+    /// What the soundscape of that name plays, sub-soundscapes included, or `None` when
+    /// no script defines it.
+    pub fn outline(&self, name: &str) -> Option<Outline> {
+        let soundscape = self.find(name)?;
+        let mut outline = Outline::default();
+        let place = OutlinePlace {
+            starting_position: 0,
+            position_override: -1,
+            ambient_position_override: -1,
+            depth: 0,
+        };
+        self.outline_into(soundscape, place, &mut outline);
+        Some(outline)
+    }
+
+    fn outline_into(&self, soundscape: &Soundscape, place: OutlinePlace, outline: &mut Outline) {
+        let depth = place.depth;
+        let push = |outline: &mut Outline, depth: u32, kind: OutlineKind, text: String, detail: String| {
+            let wave = matches!(kind, OutlineKind::Loop | OutlineKind::Wave).then(|| text.clone());
+            outline.rows.push(OutlineRow {
+                depth,
+                kind,
+                text,
+                detail,
+                wave,
+            });
+        };
+        for item in &soundscape.block.items {
+            match item {
+                Item::Pair(pair) if pair.key.eq_ignore_ascii_case("dsp") => {
+                    if depth == 0 {
+                        let text = format!("Room effect (dsp) {}", leading_integer(&pair.value));
+                        push(outline, depth, OutlineKind::Dsp, text, String::new());
+                    }
+                }
+                Item::Block(block) if block.name.eq_ignore_ascii_case("playlooping") => {
+                    let mut details = Vec::new();
+                    let mut position = -1;
+                    let mut level = "75 dB".to_owned();
+                    for pair in block.pairs() {
+                        match pair.key.to_ascii_lowercase().as_str() {
+                            "volume" => details.push(format!("volume {}", range_text(&pair.value))),
+                            "pitch" => details.push(format!("pitch {}", range_text(&pair.value))),
+                            "position" => position = place.starting_position + leading_integer(&pair.value),
+                            "soundlevel" => level = level_text(&pair.value),
+                            "attenuation" => level = format!("attenuation {}", range_text(&pair.value)),
+                            _ => {}
+                        }
+                    }
+                    if position < 0 {
+                        position = place.ambient_position_override;
+                    } else if place.position_override >= 0 {
+                        position = place.position_override;
+                    }
+                    if position < 0 {
+                        details.push("heard everywhere".to_owned());
+                    } else {
+                        details.push(format!("at position {position}, {level}"));
+                        outline.positions.insert(position);
+                    }
+                    let wave = block.get("wave").unwrap_or("(no sound file)").to_owned();
+                    push(outline, depth, OutlineKind::Loop, wave, details.join(", "));
+                }
+                Item::Block(block) if block.name.eq_ignore_ascii_case("playrandom") => {
+                    let mut details = Vec::new();
+                    let mut position = -1;
+                    let mut random_position = false;
+                    let mut time = "0".to_owned();
+                    let mut level = None;
+                    for pair in block.pairs() {
+                        match pair.key.to_ascii_lowercase().as_str() {
+                            "time" => time = range_text(&pair.value),
+                            "volume" => details.push(format!("volume {}", range_text(&pair.value))),
+                            "pitch" => details.push(format!("pitch {}", range_text(&pair.value))),
+                            "position" if pair.value.trim().eq_ignore_ascii_case("random") => random_position = true,
+                            "position" => position = place.starting_position + leading_integer(&pair.value),
+                            "soundlevel" => level = Some(level_text(&pair.value)),
+                            "attenuation" => level = Some(format!("attenuation {}", range_text(&pair.value))),
+                            _ => {}
+                        }
+                    }
+                    if position < 0 {
+                        position = place.ambient_position_override;
+                    } else if place.position_override >= 0 {
+                        position = place.position_override;
+                        random_position = false;
+                    }
+                    let level = level.unwrap_or_else(|| "no fading with distance".to_owned());
+                    if random_position {
+                        details.push(format!("around the listener, {level}"));
+                    } else if position >= 0 {
+                        details.push(format!("at position {position}, {level}"));
+                        outline.positions.insert(position);
+                    } else {
+                        details.push("heard everywhere".to_owned());
+                    }
+                    let text = format!("One of these every {time} s");
+                    push(outline, depth, OutlineKind::Random, text, details.join(", "));
+                    for list in block.blocks().filter(|list| list.name.eq_ignore_ascii_case("rndwave")) {
+                        for pair in list.pairs() {
+                            push(outline, depth + 1, OutlineKind::Wave, pair.value.clone(), String::new());
+                        }
+                    }
+                }
+                Item::Block(block) if block.name.eq_ignore_ascii_case("playsoundscape") => {
+                    let mut sub = place;
+                    sub.depth += 1;
+                    let mut details = Vec::new();
+                    for pair in block.pairs() {
+                        let number = leading_integer(&pair.value);
+                        match pair.key.to_ascii_lowercase().as_str() {
+                            "volume" => details.push(format!("volume {}", range_text(&pair.value))),
+                            "position" => {
+                                sub.starting_position = place.starting_position + number;
+                                details.push(format!("positions count from {}", sub.starting_position));
+                            }
+                            "positionoverride" if place.position_override < 0 => {
+                                sub.position_override = place.starting_position + number;
+                                sub.ambient_position_override = place.starting_position + number;
+                                details.push(format!("all of it at position {}", sub.position_override));
+                            }
+                            "ambientpositionoverride" if place.ambient_position_override < 0 => {
+                                sub.ambient_position_override = place.starting_position + number;
+                                details.push(format!(
+                                    "sounds heard everywhere move to position {}",
+                                    sub.ambient_position_override
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(name) = block.get("name") else {
+                        continue;
+                    };
+                    push(
+                        outline,
+                        depth,
+                        OutlineKind::Soundscape,
+                        name.to_owned(),
+                        details.join(", "),
+                    );
+                    if sub.depth > MAX_SOUNDSCAPE_RECURSION {
+                        let text = "Nested too deep: the game stops here".to_owned();
+                        push(outline, sub.depth, OutlineKind::Problem, text, String::new());
+                        continue;
+                    }
+                    match self.find(name) {
+                        Some(inner) => self.outline_into(inner, sub, outline),
+                        None => {
+                            let text = "No script defines this soundscape".to_owned();
+                            push(outline, sub.depth, OutlineKind::Problem, text, String::new());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// A script value such as `0.3,0.6` in words: `0.3 to 0.6`.
+fn range_text(value: &str) -> String {
+    let interval = Interval::parse(value);
+    if interval.range == 0.0 {
+        format!("{}", interval.start)
+    } else {
+        format!("{} to {}", interval.start, interval.start + interval.range)
+    }
+}
+
+/// A script's `soundlevel` in words.
+fn level_text(value: &str) -> String {
+    if value.trim().to_ascii_uppercase().starts_with("SNDLVL_") {
+        format!("{} dB", text_to_soundlevel(value))
+    } else {
+        format!("{} dB", range_text(value))
+    }
+}
+
 /// The values of a manifest's lines whose key is one of `keys`.
 fn manifest_values(text: &str, keys: &[&str]) -> Result<Vec<String>, String> {
     let items = mallet_kv::parse(text).map_err(|error| error.to_string())?;
