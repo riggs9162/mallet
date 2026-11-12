@@ -90,14 +90,16 @@ const PALETTE: [PaletteEntry; 12] = [
 ];
 
 impl MalletApp {
-    /// The icon toolbar under the menus.
+    /// The icon toolbar under the menus, with the buttons of Hammer's Map Operations and
+    /// Map View toolbars that Mallet has. It wraps onto a second row when the window is too
+    /// narrow for one.
     pub(super) fn toolbar(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         let mut chosen = None;
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let groups: [&[(&str, &str, Action)]; 3] = [
+                let groups: [&[(&str, &str, Action)]; 7] = [
                     &[
                         (icon::FILE_PLUS, "New map", Action::NewFile),
                         (icon::FOLDER_OPEN, "Open map", Action::OpenFile),
@@ -106,6 +108,46 @@ impl MalletApp {
                     &[
                         (icon::ARROW_U_UP_LEFT, "Undo", Action::Undo),
                         (icon::ARROW_U_UP_RIGHT, "Redo", Action::Redo),
+                    ],
+                    &[
+                        (icon::SCISSORS, "Cut", Action::Cut),
+                        (icon::COPY, "Copy", Action::Copy),
+                        (icon::CLIPBOARD, "Paste", Action::Paste),
+                    ],
+                    &[
+                        (
+                            icon::SUBTRACT_SQUARE,
+                            "Carve: cut the selected brushes' shape out of the brushes they overlap",
+                            Action::Carve,
+                        ),
+                        (icon::SELECTION, "Group the selected objects", Action::Group),
+                        (icon::SELECTION_SLASH, "Ungroup", Action::Ungroup),
+                    ],
+                    &[
+                        (icon::EYE_SLASH, "QuickHide the selected objects", Action::HideSelection),
+                        (
+                            icon::SELECTION_INVERSE,
+                            "QuickHide every object that is not selected",
+                            Action::HideUnselected,
+                        ),
+                        (icon::EYE, "Unhide every QuickHidden object", Action::ShowAllHidden),
+                    ],
+                    &[
+                        (
+                            icon::LINK,
+                            "Tie the selected brushes to an entity (toEntity)",
+                            Action::TieToEntity,
+                        ),
+                        (
+                            icon::LINK_BREAK,
+                            "Move the selected brush entities' brushes to the world (toWorld)",
+                            Action::MoveToWorld,
+                        ),
+                        (
+                            icon::CUBE_TRANSPARENT,
+                            "Make Hollow: turn the selected brushes into walls",
+                            Action::MakeHollow,
+                        ),
                     ],
                     &[
                         (
@@ -118,15 +160,40 @@ impl MalletApp {
                             "Center the 3D view on the selection, or on the map with nothing selected",
                             Action::CenterView3D,
                         ),
+                        (
+                            icon::CORNERS_OUT,
+                            "Maximize the active viewport, or bring the four views back",
+                            Action::MaximizeView,
+                        ),
                     ],
                 ];
-                for group in groups {
-                    for (glyph, name, action) in group {
+                for (index, group) in groups.iter().enumerate() {
+                    for (glyph, name, action) in *group {
+                        let on = *action == Action::MaximizeView && editor.maximized.is_some();
                         if self
-                            .icon_button(ui, glyph, name, Some(*action), false, TOOLBAR_ICON_SIZE)
+                            .icon_button(ui, glyph, name, Some(*action), on, TOOLBAR_ICON_SIZE)
                             .clicked()
                         {
                             chosen = Some(*action);
+                        }
+                    }
+                    if index == 3 {
+                        let hint = format!(
+                            "Toggle group ignore: cycle the selection mode (now {})",
+                            editor.pick_mode.label()
+                        );
+                        if self
+                            .icon_button(
+                                ui,
+                                icon::SELECTION_FOREGROUND,
+                                &hint,
+                                Some(Action::IgnoreGroups),
+                                editor.pick_mode != PickMode::Groups,
+                                TOOLBAR_ICON_SIZE,
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(Action::IgnoreGroups);
                         }
                     }
                     ui.separator();
@@ -215,6 +282,20 @@ impl MalletApp {
                 for (glyph, name, action, on) in toggles {
                     if self
                         .icon_button(ui, glyph, name, Some(action), on, TOOLBAR_ICON_SIZE)
+                        .clicked()
+                    {
+                        chosen = Some(action);
+                    }
+                }
+                ui.separator();
+                let checks: [(&str, &str, Action); 3] = [
+                    (icon::WARNING, "Check for Problems", Action::CheckForProblems),
+                    (icon::LIST_MAGNIFYING_GLASS, "Entity Report", Action::EntityReport),
+                    (icon::GLOBE, "Map Properties: the map's worldspawn", Action::MapProperties),
+                ];
+                for (glyph, name, action) in checks {
+                    if self
+                        .icon_button(ui, glyph, name, Some(action), false, TOOLBAR_ICON_SIZE)
                         .clicked()
                     {
                         chosen = Some(action);

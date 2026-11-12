@@ -83,6 +83,14 @@ with the selection mode, current texture and selection details. Tools that are n
 yet are shown greyed out. Each tab is its own map with its own views, camera, selection
 and undo history; a dot marks unsaved changes.
 
+The toolbar has the buttons of Hammer's Map Operations and Map View toolbars: new, open
+and save, undo and redo, cut, copy and paste, Carve, Group, Ungroup and Toggle Group
+Ignore (which cycles the selection mode), the three QuickHide buttons, toEntity, toWorld
+and Make Hollow, centring the views on the selection and maximising the active view, the
+grid size with Snap to Grid and Show Grid, the texture and rotation locks, the gizmo,
+Check for Problems, Entity Report, Map Properties and Run Map. It wraps onto a second row
+when the window is too narrow for one.
+
 ## Controls
 
 These follow Hammer++'s default keybindings.
