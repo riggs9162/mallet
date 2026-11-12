@@ -672,15 +672,14 @@ impl SoundPreview {
 
     /// Plays a soundscape by name in place of the map's, whether or not the preview is
     /// on, the way the game's `playsoundscape` console command does: its sound positions
-    /// lie around the listener. `None` goes back to what the map plays.
+    /// lie around the listener. Whatever soundscape was playing stops at once, so two
+    /// are never heard over each other. `None` goes back to what the map plays.
     pub fn listen(&mut self, name: Option<&str>) {
         let name = name.map(str::trim).filter(|name| !name.is_empty());
         if self.listening.as_ref().map(|(playing, _)| playing.as_str()) == name {
             return;
         }
-        if name.is_none() {
-            self.stop_player();
-        }
+        self.stop_player();
         self.listening = name.map(|name| (name.to_owned(), None));
     }
 

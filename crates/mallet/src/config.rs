@@ -514,8 +514,10 @@ pub struct SoundscapeBrowserView {
     /// The script file the list is narrowed to, if any, such as
     /// `scripts/soundscapes_town.txt`.
     pub file: Option<String>,
-    /// Switch what is being listened to along with the selection.
-    pub follow_selection: bool,
+    /// Play each soundscape as soon as it is picked in the list, without pressing
+    /// Listen.
+    #[serde(alias = "follow_selection")]
+    pub listen_on_select: bool,
 }
 
 /// The model browser's filters and layout, kept between runs.

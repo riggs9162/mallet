@@ -77,6 +77,14 @@ pub(super) struct SoundscapeBrowserState {
     focus_search: bool,
     /// Scroll the list to the selected soundscape this frame.
     reveal: bool,
+    /// Bring the selected row into view this frame, scrolling no further than needed.
+    follow: bool,
+    /// The selection was just picked by hand, which starts it playing when listening is
+    /// automatic.
+    picked: bool,
+    /// Where the window was last frame, so the arrow keys move through the list only
+    /// while the mouse is over it.
+    window: Option<egui::Rect>,
 }
 
 /// Something the browser asks for once it is drawn.
@@ -153,7 +161,16 @@ impl MalletApp {
         };
         let mut open = true;
         let mut commands = Vec::new();
-        egui::Window::new(title)
+        let over_window = ctx
+            .pointer_hover_pos()
+            .zip(state.window)
+            .is_some_and(|(pointer, window)| window.contains(pointer));
+        let steps = if over_window && !ctx.wants_keyboard_input() {
+            list_steps(ctx)
+        } else {
+            0
+        };
+        let shown = egui::Window::new(title)
             .id(egui::Id::new("soundscape_browser"))
             .open(&mut open)
             .default_size([1040.0, 660.0])
@@ -180,8 +197,15 @@ impl MalletApp {
                     .default_width(DETAILS_WIDTH)
                     .width_range(280.0..=640.0)
                     .show_inside(ui, |ui| state.details(ui, editor, &target, &mut commands));
-                egui::CentralPanel::default().show_inside(ui, |ui| state.list_pane(ui, &used, &target, &mut commands));
+                egui::CentralPanel::default()
+                    .show_inside(ui, |ui| state.list_pane(ui, &used, &target, steps, &mut commands));
             });
+        state.window = shown.map(|shown| shown.response.rect);
+        if std::mem::take(&mut state.picked) && state.view.listen_on_select {
+            if let Some(name) = &state.selected {
+                commands.push(Command::Listen(Some(name.clone())));
+            }
+        }
         state.save_view(ctx, editor);
         for command in commands {
             match command {
@@ -406,12 +430,14 @@ impl SoundscapeBrowserState {
             .collect()
     }
 
-    /// The list of names: a click selects, a double-click uses.
+    /// The list of names: a click selects, a double-click uses, and `steps` rows down
+    /// (or up, when negative) is where the arrow keys move the selection.
     fn list_pane(
         &mut self,
         ui: &mut egui::Ui,
         used: &BTreeMap<String, usize>,
         target: &Target,
+        steps: i32,
         commands: &mut Vec<Command>,
     ) {
         let shown = self.filtered(used);
@@ -429,19 +455,37 @@ impl SoundscapeBrowserState {
             ui.label(RichText::new("No soundscape matches the filters.").color(MUTED));
             return;
         }
+        let row_of = |selected: &Option<String>| {
+            let key = selected.as_ref()?.to_ascii_lowercase();
+            shown.iter().position(|index| listing.entries[*index].key == key)
+        };
+        if steps != 0 {
+            let last = shown.len() as i64 - 1;
+            let row = match row_of(&self.selected) {
+                Some(row) => (row as i64 + i64::from(steps)).clamp(0, last),
+                None if steps > 0 => 0,
+                None => last,
+            };
+            let name = listing.entries[shown[row as usize]].name.clone();
+            if self.selected.as_ref() != Some(&name) {
+                self.selected = Some(name);
+                self.picked = true;
+                self.follow = true;
+            }
+        }
         let selected_key = self.selected.as_ref().map(|name| name.to_ascii_lowercase());
+        let selected_row = row_of(&self.selected);
         let mut area = egui::ScrollArea::vertical()
             .id_salt("soundscape_list")
             .auto_shrink([false, false]);
         if std::mem::take(&mut self.reveal) {
-            if let Some(row) = shown
-                .iter()
-                .position(|index| Some(&listing.entries[*index].key) == selected_key.as_ref())
-            {
+            if let Some(row) = selected_row {
                 let spacing = ui.spacing().item_spacing.y;
                 area = area.vertical_scroll_offset((row as f32 * (ROW_HEIGHT + spacing) - 60.0).max(0.0));
             }
         }
+        let follow = std::mem::take(&mut self.follow);
+        let mut followed = false;
         let mut clicked = None;
         area.show_rows(ui, ROW_HEIGHT, shown.len(), |ui, rows| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -458,6 +502,10 @@ impl SoundscapeBrowserState {
                         text = text.strong();
                     }
                     let label = ui.selectable_label(chosen, text);
+                    if follow && chosen {
+                        label.scroll_to_me(None);
+                        followed = true;
+                    }
                     if label.double_clicked() {
                         commands.push(Command::Use(entry.name.clone()));
                     } else if label.clicked() {
@@ -476,6 +524,11 @@ impl SoundscapeBrowserState {
         });
         if let Some(name) = clicked {
             self.selected = Some(name);
+            self.picked = true;
+        }
+        if follow && !followed && selected_row.is_some() {
+            self.reveal = true;
+            ui.ctx().request_repaint();
         }
     }
 
@@ -490,9 +543,6 @@ impl SoundscapeBrowserState {
         let listening = listening_to
             .as_ref()
             .is_some_and(|playing| playing.eq_ignore_ascii_case(&name));
-        if self.view.follow_selection && listening_to.is_some() && !listening {
-            commands.push(Command::Listen(Some(name.clone())));
-        }
         ui.add_space(4.0);
         ui.label(RichText::new(&name).strong().size(15.0));
         let file = self
@@ -539,8 +589,6 @@ impl SoundscapeBrowserState {
             if volume.drag_stopped() || volume.lost_focus() {
                 editor.save_config();
             }
-            ui.checkbox(&mut self.view.follow_selection, "Follow clicks")
-                .on_hover_text("While listening, switch to each soundscape you click");
         });
         ui.separator();
         let Some((_, Some(outline))) = &self.outline else {
@@ -660,6 +708,15 @@ impl SoundscapeBrowserState {
             ui.separator();
             ui.checkbox(&mut self.view.used_only, "Only used soundscapes")
                 .on_hover_text("Show only the soundscapes the map's entities name");
+            let automatic = ui
+                .checkbox(&mut self.view.listen_on_select, "Listen automatically")
+                .on_hover_text(
+                    "Play each soundscape as soon as you pick it in the list, with a click or with the arrow keys \
+                     while the mouse is over this window, without pressing Listen",
+                );
+            if automatic.changed() && self.view.listen_on_select {
+                self.picked = true;
+            }
             ui.separator();
             if ui
                 .button(format!("{} Reload", icon::ARROWS_CLOCKWISE))
@@ -704,6 +761,27 @@ impl SoundscapeBrowserState {
         editor.config.soundscape_browser_view = self.view.clone();
         editor.save_config();
     }
+}
+
+/// How many rows the arrow, page, Home and End keys pressed this frame move the list's
+/// selection down, or up when negative. The keys are used up, so nothing behind the
+/// window acts on them as well.
+fn list_steps(ctx: &egui::Context) -> i32 {
+    const PAGE: i32 = 12;
+    const END: i32 = 1_000_000;
+    let keys = [
+        (egui::Key::ArrowDown, 1),
+        (egui::Key::ArrowUp, -1),
+        (egui::Key::PageDown, PAGE),
+        (egui::Key::PageUp, -PAGE),
+        (egui::Key::End, END),
+        (egui::Key::Home, -END),
+    ];
+    ctx.input_mut(|input| {
+        keys.iter()
+            .map(|(key, rows)| input.count_and_consume_key(egui::Modifiers::NONE, *key) as i32 * rows)
+            .sum()
+    })
 }
 
 /// A script file's name without its folder, extension and `soundscapes_` prefix.
