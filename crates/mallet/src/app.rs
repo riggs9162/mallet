@@ -1690,13 +1690,12 @@ impl MalletApp {
             if response.clicked_by(PointerButton::Primary) && editor.tool == Tool::Select {
                 if let Some(position) = pointer.position {
                     let tolerance = pick_tolerance(editor) / view.scale;
-                    let hit = editor
-                        .scene
-                        .pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks());
+                    let world = view.to_world(rect, position);
+                    let hit = editor.scene.pick_2d(view.axis, world, tolerance, editor.solid_picks());
                     match hit {
                         Some(owner) if pointer.modifiers.shift => editor.select_picked([owner], SelectMode::Add),
                         None if pointer.modifiers.shift => {}
-                        Some(owner) if editor.selection.contains(&owner) && !pointer.modifiers.ctrl => {
+                        _ if !pointer.modifiers.ctrl && on_selection(editor, view.axis, world, hit) => {
                             editor.overlay.handle_mode = editor.overlay.handle_mode.next();
                             editor.message = format!("{} handles", editor.overlay.handle_mode.label());
                         }
@@ -1861,6 +1860,19 @@ fn snapped_offset(axis: Axis2D, anchor: DVec3, dragged: DVec2, grid: f64) -> DVe
 
 fn box_contains(axis: Axis2D, bounds: &Bounds, point: DVec2) -> bool {
     point.cmpge(axis.project(bounds.min)).all() && point.cmple(axis.project(bounds.max)).all()
+}
+
+/// Whether a click in a 2D view lands on the selection, which switches its handles
+/// instead of picking: anywhere inside the selection's box counts, so there is no need to
+/// aim for an outline or a centre cross. An object that is not selected still takes the
+/// click on its own outline or centre, so it can be picked from inside the box.
+fn on_selection(editor: &Editor, axis: Axis2D, point: DVec2, hit: Option<crate::scene::Owner>) -> bool {
+    match hit {
+        Some(owner) => editor.selection.contains(&owner),
+        None => editor
+            .handle_box()
+            .is_some_and(|bounds| box_contains(axis, &bounds, point)),
+    }
 }
 
 impl eframe::App for MalletApp {

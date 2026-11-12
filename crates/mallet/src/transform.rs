@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::editor::{find_entity, overlay_edits, Editor};
 use crate::scene::Owner;
 
-/// What the handles on a selection do in the 2D views. Clicking a selected object again
-/// cycles through them, as in Hammer.
+/// What the handles on a selection do in the 2D views. Clicking anywhere inside the
+/// selection's box cycles through them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HandleMode {
     /// Resize from the eight edges and corners.
