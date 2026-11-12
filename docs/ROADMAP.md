@@ -86,9 +86,9 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 - [x] Select displacement faces in the texture tool, with the Displacement tab. Hammer
 - [x] Paint Geometry: raise, lower, smooth and set, along the face normal or an axis, soft or hard edges, distance, radius, autosew. Hammer
 - [x] Paint Alpha for blended materials, with Invert Alpha. Hammer
-- [ ] Sculpt mode (push and pull, carve, blend). Hammer
+- [x] Sculpt mode (push and pull, carve, blend). Hammer
 - [x] Sew, Subdivide and Noise. Hammer
-- [ ] Displacement Edge Collapse. Hammer
+- [x] Displacement Edge Collapse. Hammer
 - [x] Elevation and Scale attributes. Hammer
 - [ ] Collision masks: no physics, no hull, no ray collision, and showing walkable surfaces. Hammer
 - [ ] Toggle displacements on and off and a displacement selection mask on the toolbar. Hammer
