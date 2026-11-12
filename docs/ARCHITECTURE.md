@@ -410,8 +410,9 @@ place. `app/vertex_tool.rs` does the picking, the 3D drag planes and the merge q
 
 `mallet_vmf::displacement` holds Hammer's displacements, tested on its own. A face's
 `dispinfo` block stays verbatim in `Side::extra` until a tool changes it. `Displacement::read`
-turns it into typed rows (normals, distances, offsets, offset normals, alphas, triangle tags
-and allowed vertices), and `to_block` writes it back in Hammer's order with the keys and
+turns it into typed rows (normals, distances, offsets, offset normals, alphas, triangle tags,
+allowed vertices and, when a face has them, the four-texture blend's `multiblend`,
+`alphablend` and `multiblend_color` blocks), and `to_block` writes it back in Hammer's order with the keys and
 blocks it does not know where they were, so an untouched displacement saves byte for byte
 and an edited one as Hammer would write it.
 
@@ -438,6 +439,27 @@ fixed, so each face becomes its displacement's vertex grid; the result goes into
 and offset normals, under any painted distances. `noise` adds fractal Perlin noise read at
 each vertex's flat spot, so patches still meet where they share an edge.
 
+`displacement::sculpt` is Hammer's Sculpt tool, whose brush is a circle on the screen: it
+takes a `project` function from world points to the screen, so it is tested without a
+camera. Push weighs each vertex by how far its projection is from the brush's centre, full
+out to the falloff position and falling in a straight line to the final falloff at the edge;
+Carve reads a profile, sampled at even steps, at the vertex's signed distance across the
+segment from the previous brush position to this one; Smooth pulls vertices towards their
+neighbours' average along the direction; Blend adds to or takes from one of a vertex's four
+texture weights and scales them back to a sum of 1. A `StrokeMemory` keeps how far each
+vertex has moved in the stroke, which Attenuated density caps at one step's worth.
+
+`displacement::collapsed_vertices` ports VBSP's `SetupAllowedVerts` from the Source SDK's
+`disp_common.cpp`, for Displacement Edge Collapse. `PowerInfo` rebuilds VBSP's node tree for
+powers 2 to 4: each node depends on two of its parent's side vertices and its four side
+vertices depend on it. Neighbours are found as `SetupEdgeNeighbors` finds them, by corners
+within 0.01 units along every axis: a whole edge, half of a longer edge, or one of two
+shorter edges meeting at its middle, with spans named running up or to the right. A side
+vertex on an edge whose neighbour, its power shifted by the spans, lacks it, or has removed
+it, is removed with everything that depends on it, and the passes repeat until nothing
+changes. `Editor::collapsed_vertex_points` caches the result by geometry generation for the
+pink squares the window draws, and `get_displacement` reports it by vertex index.
+
 In the scene, a brush with displacements shows only them, as VBSP turns its other faces into
 nodraw. Its `SceneFace`s are the displacement faces, each carrying its `Surface`; its edges
 are their triangles, which the 2D views draw as a wireframe; and it has no planes, so every
@@ -446,8 +468,13 @@ uses the triangles instead. The renderer draws the grid with each vertex's own n
 texture coordinates of its flat spot, as the game does. A blended material's `$basetexture2`
 loads under the key `<material>#blend`; where alpha is painted, the triangles are drawn again
 with it as a translucent layer, each vertex as opaque as its alpha, with texture coordinates
-divided by the first texture's size as in the game. The lighting preview lights displacements
-per pixel instead of from luxels laid out on the flat face.
+divided by the first texture's size as in the game. A `Lightmapped_4WayBlend` or `MultiBlend`
+material (`MaterialFacts::four_way`) is drawn the same way with up to three layers instead,
+textures 2 to 4 under the keys `#blend`, `#blend3` and `#blend4`: layer `n` is as opaque as
+its weight's share of the first `n` weights, so drawn in order over the first texture they
+give the weighted mix. Layers of one displacement share a centre, and the stable back to front
+sort keeps them in order. The lighting preview lights displacements per pixel instead of from
+luxels laid out on the flat face.
 
 `editor/displacements.rs` holds the commands, which the Face Edit sheet and the MCP tools
 share. They read the target faces' patches from the map, change them and write the brushes
@@ -456,6 +483,11 @@ and records their old bounds, so the renderer rebuilds the chunks a reshaped bru
 well as the ones it is in. `app/displacement_tool.rs` is the Displacement tab and the 3D
 view's strokes: a stroke applies the brush when the button goes down, whenever the brush has
 moved a quarter of its radius, and every 60 ms while it is held still, all in one undo group.
+`editor/sculpt.rs` holds the Sculpt panel's settings and `Editor::sculpt_step`, one step of a
+sculpt stroke from a point of a 3D view, which works out the direction (the normal under the
+brush's middle, the camera, an axis or a picked face) and, for Adaptive, the offset from the
+brush's size in the world at the depth under its middle; the window and `sculpt_displacement`
+both use it.
 
 ## Compiling
 
@@ -688,8 +720,9 @@ Tools:
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |
 | `create_entity` | Point entity of any class at a position, with extra keyvalues, like the Entity tool |
 | `create_overlay`, `create_decal` | Place an overlay or decal on a brush face, like the Overlay and Decal tools; overlays get their basis and the faces they reach filled in |
-| `create_displacement`, `destroy_displacement`, `get_displacement` | Hammer's Create and Destroy on brush faces, and a displacement's power, corners, bounds and, on request, every vertex's position and alpha |
+| `create_displacement`, `destroy_displacement`, `get_displacement` | Hammer's Create and Destroy on brush faces, and a displacement's power, corners, bounds, collapsed vertices and, on request, every vertex's position, alpha and blend weights |
 | `paint_displacement` | Paint Geometry and Paint Alpha: a stroke of brush dabs at world points, one undo step |
+| `sculpt_displacement` | Hammer's Sculpt tool: Push, Carve, Smooth or Blend along points of the camera viewport, one undo step |
 | `edit_displacements` | Sew, Subdivide, Noise, Invert Alpha, and the elevation and scale attributes |
 | `undo`, `redo` | Step the shared history |
 | `set_grid`, `center_views` | Grid size, Snap to Grid and Show Grid, and framing |

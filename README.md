@@ -324,7 +324,9 @@ Displacements turn a four-sided brush face into a grid of vertices you can sculp
 terrain, as in Hammer. They show in every view: textured, lit and in wireframe in 3D, and as
 their triangles in the 2D views. The rest of a displacement's brush is hidden, as the game
 leaves it out. Materials that blend two textures, such as `nature/blenddirtgrass001a`, fade
-into their second texture where the displacement's alpha is painted.
+into their second texture where the displacement's alpha is painted, and four-texture
+`Lightmapped_4WayBlend` and `MultiBlend` materials mix their textures by the weights the
+Sculpt tool's Blend paints.
 
 Open the Face Edit Sheet (Shift+A), select faces in the 3D view and switch to its
 Displacement tab:
@@ -342,12 +344,27 @@ Displacement tab:
 - **Paint Alpha** paints the blend of a two-texture material in the same way: the left
   button brings in the second texture, the right takes it away, and Raise To sets an exact
   value from 0 to 255. **Invert Alpha** swaps the two textures.
+- **Sculpt** works as Hammer's Sculpt panel, with a brush that is a circle on the screen
+  rather than a sphere in the world. **Push** moves the vertices under it along the normal
+  direction (the surface under the middle of the brush, towards the camera, an axis, or a
+  face picked with Alt+right-click), fully out to the falloff position and fading to the
+  final falloff at the edge. **Carve** moves them by a profile across the stroke, which you
+  draw in a small graph or pick from Trench, V, Round and Ledge, for roads and ditches.
+  **Blend** paints one of the four textures of a four-texture material. The offset is a
+  distance (Absolute) or a share of the brush's size in the world (Adaptive); Smoothing
+  evens out what moves; Attenuated moves each vertex once a stroke instead of every pass
+  (Additive). Ctrl pulls instead of pushing or takes the texture away, Shift smooths, and
+  right-dragging sideways resizes the brush. Each stroke is one undo step.
 - **Sew** joins the edges and corners that the selected displacements share, so no gaps
   open between them; an edge next to a displacement of lower power follows its vertices.
 - **Subdivide** smooths the selected displacements as one surface: Create on all six
   faces of a box, then Subdivide, and it becomes a rounded boulder. Painted heights stay on
   top. **Noise** raises every vertex by a smooth random amount between Min and Max, rougher
   as Rockiness goes up.
+
+View > Displacement Edge Collapse marks in pink the vertices the compiler will leave out
+where a displacement meets a neighbour of a lower power, so no cracks open there, as
+Hammer's toolbar button of that name does.
 
 Displacements move, rotate, copy and paste with their brushes and keep their painted
 shape and alpha. Clipping, Carve, Make Hollow and the vertex tool refuse displacement
