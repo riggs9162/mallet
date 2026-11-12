@@ -681,10 +681,12 @@ pub fn definitions() -> Value {
             "get_displacement",
             "The displacements among the given sides, the selected faces, or every face of the selected brushes: \
              side and brush id, power, vertices a side, start position, elevation, collision flags, the face's \
-             corners in row order, the box around the surface and the range of its alpha. With vertices, also \
-             every vertex's position and alpha (0 shows a blended material's first texture, 255 its second) \
-             and, for four-texture blends, its texture weights, row by row: rows run from the first corner \
-             towards the second, each row towards the fourth, and vertex index = row * size + column.",
+             corners in row order, the box around the surface, the range of its alpha, and the vertices the \
+             compiler collapses where it meets a neighbour of a lower power (collapsed, as indices, as Hammer's \
+             Displacement Edge Collapse shows them). With vertices, also every vertex's position and alpha (0 \
+             shows a blended material's first texture, 255 its second) and, for four-texture blends, its \
+             texture weights, row by row: rows run from the first corner towards the second, each row towards \
+             the fourth, and vertex index = row * size + column.",
             json!({
                 "sides": { "type": "array", "items": { "type": "integer" } },
                 "vertices": { "type": "boolean" }
@@ -2714,10 +2716,11 @@ fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<To
         return Err("pass sides, or select faces or brushes first".to_owned());
     }
     let report = |editor: &Editor, vertices: bool| {
+        let collapsed = editor.collapsed_vertices_by_side();
         let patches: Vec<Value> = editor
             .displacement_patches(&sides)
             .iter()
-            .map(|(solid, patch)| displacement_json(*solid, patch, vertices))
+            .map(|(solid, patch)| displacement_json(*solid, patch, vertices, collapsed.get(&patch.side)))
             .collect();
         ToolResult::json(&json!({ "displacements": patches }))
     };
@@ -2951,7 +2954,7 @@ fn displacement_tool(editor: &mut Editor, name: &str, args: &Value) -> Result<To
 }
 
 /// A displacement as the MCP tools report it, with every vertex when `vertices` is set.
-fn displacement_json(solid: u32, patch: &Patch, vertices: bool) -> Value {
+fn displacement_json(solid: u32, patch: &Patch, vertices: bool, collapsed: Option<&Vec<usize>>) -> Value {
     let round = |value: f64| (value * 1000.0).round() / 1000.0 + 0.0;
     let point = |point: DVec3| json!([round(point.x), round(point.y), round(point.z)]);
     let surface = &patch.surface;
@@ -2976,6 +2979,9 @@ fn displacement_json(solid: u32, patch: &Patch, vertices: bool) -> Value {
         "max": point(surface.bounds.max),
         "alpha": [round(lowest), round(highest)],
     });
+    if let Some(collapsed) = collapsed {
+        json["collapsed"] = json!(collapsed);
+    }
     if vertices {
         let rows = |values: Vec<Value>| -> Vec<Value> { values.chunks(surface.size).map(|row| json!(row)).collect() };
         json["positions"] = json!(rows(

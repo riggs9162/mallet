@@ -32,6 +32,9 @@ pub enum Action {
     ToggleSnapToGrid,
     /// Show or hide the grid in the 2D views, as Hammer's Map > Show Grid does.
     ToggleShowGrid,
+    /// Show the displacement vertices the compiler collapses where a displacement meets a
+    /// neighbour of a lower power, as Hammer's Displacement Edge Collapse button does.
+    ToggleDisplacementEdgeCollapse,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,

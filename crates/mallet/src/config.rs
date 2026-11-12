@@ -765,6 +765,9 @@ impl CompileOptions {
 #[serde(default)]
 pub struct ViewOptions {
     pub net_graph: bool,
+    /// Show the displacement vertices the compiler collapses, as pink squares in the 3D
+    /// views: Hammer's Displacement Edge Collapse.
+    pub collapsed_vertices: bool,
     /// How far the 3D view draws, in units.
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
@@ -805,6 +808,7 @@ impl Default for ViewOptions {
     fn default() -> Self {
         Self {
             net_graph: true,
+            collapsed_vertices: false,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_speed: crate::view3d::DEFAULT_MOVE_SPEED,

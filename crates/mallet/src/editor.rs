@@ -466,6 +466,9 @@ pub struct Editor {
     pub vertex: crate::vertex_tool::VertexState,
     /// The Displacement tab's tool and paint brush settings.
     pub displacement: DisplacementTool,
+    /// Where the vertices are that Displacement Edge Collapse shows, and the geometry
+    /// generation they were worked out for.
+    collapsed_points: Option<(u64, Arc<Vec<DVec3>>)>,
     /// The last block created; new blocks reuse its depth.
     last_block: Bounds,
     /// Camera, top, front and side viewport rectangles from the latest window layout.
@@ -556,6 +559,7 @@ impl Default for Editor {
             texture_lights: Arc::new(TextureLights::new()),
             vertex: Default::default(),
             displacement: DisplacementTool::default(),
+            collapsed_points: None,
             last_block: DEFAULT_BLOCK,
             viewport_rects: quad_rects(Rect::from_min_size(Pos2::ZERO, DEFAULT_AREA), VIEWPORT_GAP),
             pixels_per_point: 1.0,

@@ -1,12 +1,13 @@
 //! Hammer's displacement Sculpt tool on the editor's side: the Sculpt panel's settings,
-//! and one step of a stroke from a point of a 3D view, which the window and the MCP
-//! tools share.
+//! one step of a stroke from a point of a 3D view, which the window and the MCP tools
+//! share, and the vertices Displacement Edge Collapse shows.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use eframe::egui::{Pos2, Rect};
 use glam::{DVec2, DVec3};
-use mallet_vmf::displacement::{self, SculptBrush, SculptMode, StrokeMemory, CARVE_PROFILE};
+use mallet_vmf::displacement::{self, collapsed_vertices, SculptBrush, SculptMode, StrokeMemory, CARVE_PROFILE};
 
 use super::displacements::split;
 use super::Editor;
@@ -198,5 +199,56 @@ impl Editor {
             changed.extend(displacement::sew(&mut patches));
         }
         self.store_patches(&owners, &patches, &changed, Some(stroke))
+    }
+
+    /// Where the vertices are that the compiler collapses where displacements meet
+    /// neighbours of a lower power, which Displacement Edge Collapse shows. They are
+    /// worked out again only when the map's shape changes.
+    pub fn collapsed_vertex_points(&mut self) -> Arc<Vec<DVec3>> {
+        let generation = self.scene.geometry_generation;
+        if let Some((built, points)) = &self.collapsed_points {
+            if *built == generation {
+                return Arc::clone(points);
+            }
+        }
+        let surfaces: Vec<&displacement::Surface> = self
+            .scene
+            .meshes
+            .iter()
+            .flat_map(|mesh| &mesh.faces)
+            .filter_map(|face| face.displacement.as_deref())
+            .collect();
+        let points: Vec<DVec3> = surfaces
+            .iter()
+            .zip(collapsed_vertices(&surfaces))
+            .flat_map(|(surface, collapsed)| {
+                collapsed
+                    .into_iter()
+                    .map(|vertex| surface.positions[vertex])
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let points = Arc::new(points);
+        self.collapsed_points = Some((generation, Arc::clone(&points)));
+        points
+    }
+
+    /// The vertices of each displacement among `sides` the compiler collapses, by side
+    /// id, worked out over every displacement of the map that shows.
+    pub fn collapsed_vertices_by_side(&self) -> std::collections::HashMap<u32, Vec<usize>> {
+        let faces: Vec<(u32, &displacement::Surface)> = self
+            .scene
+            .meshes
+            .iter()
+            .flat_map(|mesh| &mesh.faces)
+            .filter_map(|face| Some((face.side?, face.displacement.as_deref()?)))
+            .collect();
+        let surfaces: Vec<&displacement::Surface> = faces.iter().map(|(_, surface)| *surface).collect();
+        faces
+            .iter()
+            .map(|(side, _)| *side)
+            .zip(collapsed_vertices(&surfaces))
+            .filter(|(_, collapsed)| !collapsed.is_empty())
+            .collect()
     }
 }

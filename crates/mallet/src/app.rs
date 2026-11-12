@@ -577,6 +577,14 @@ impl MalletApp {
                     menu_item(ui, keymap, "QuickHide Unselected Objects", Action::HideUnselected, &mut chosen);
                     menu_item(ui, keymap, "Unhide QuickHide Objects", Action::ShowAllHidden, &mut chosen);
                     ui.separator();
+                    menu_toggle(
+                        ui,
+                        keymap,
+                        "Displacement Edge Collapse",
+                        editor.config.view.collapsed_vertices,
+                        Action::ToggleDisplacementEdgeCollapse,
+                        &mut chosen,
+                    );
                     if ui.checkbox(&mut show_net_graph, "Net Graph").clicked() {
                         ui.close_menu();
                     }
@@ -1127,6 +1135,10 @@ impl MalletApp {
                     self.sculpt_brush,
                     editor.displacement.sculpt.radius,
                 );
+                if editor.config.view.collapsed_vertices {
+                    let points = editor.collapsed_vertex_points();
+                    displacement_tool::draw_collapsed_vertices(&painter, &editor.camera, rect, &points);
+                }
                 decal_tools::draw_overlay_handles(&painter, &editor.camera, rect, editor);
                 if style == CameraStyle::Lit {
                     lighting_notice(&painter, rect, editor);
@@ -2470,6 +2482,17 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ToggleShowGrid => {
             editor.show_grid = !editor.show_grid;
             editor.message = format!("Grid {}", if editor.show_grid { "shown" } else { "hidden" });
+        }
+        Action::ToggleDisplacementEdgeCollapse => {
+            let shown = !editor.config.view.collapsed_vertices;
+            editor.config.view.collapsed_vertices = shown;
+            editor.save_config();
+            editor.message = if shown {
+                "Showing in pink the displacement vertices the compiler collapses next to lower-power neighbours"
+            } else {
+                "Hiding the collapsed displacement vertices"
+            }
+            .to_owned();
         }
         Action::SelectionTool => editor.set_tool(Tool::Select),
         Action::CameraTool => {

@@ -1,6 +1,7 @@
 //! The texture tool's Displacement tab and painting displacements in the 3D view, as
 //! Hammer's Face Edit sheet does them: Create, Destroy, Paint Geometry, Paint Alpha,
-//! Invert Alpha, Sculpt, Subdivide, Noise and Sew, with the settings of the tool in use.
+//! Invert Alpha, Sculpt, Subdivide, Noise and Sew, with the settings of the tool in use,
+//! and the vertices Displacement Edge Collapse shows.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -29,6 +30,10 @@ const BUTTON_SIZE: egui::Vec2 = egui::vec2(76.0, 34.0);
 const SCULPT_SPACING: f32 = 3.0;
 /// The smallest and largest sculpt brush radius, in points.
 const SCULPT_RADII: std::ops::RangeInclusive<f64> = 4.0..=1000.0;
+/// The colour of the vertices Displacement Edge Collapse shows, Hammer's pink.
+const COLLAPSED_COLOR: Color32 = Color32::from_rgb(255, 0, 255);
+/// Half the size, in points, of a collapsed vertex's square.
+const COLLAPSED_HALF_SIZE: f32 = 3.0;
 
 /// A sculpt stroke in progress in a 3D view.
 #[derive(Debug)]
@@ -765,6 +770,17 @@ pub(super) fn draw_sculpt_brush(painter: &egui::Painter, slot: usize, spot: Opti
     if let Some((_, center)) = spot.filter(|(at, _)| *at == slot) {
         painter.circle_stroke(center, radius as f32, Stroke::new(1.5_f32, BRUSH_COLOR));
         painter.circle_filled(center, 2.0, BRUSH_COLOR);
+    }
+}
+
+/// The vertices the compiler collapses where displacements meet neighbours of a lower
+/// power, as small pink squares, as Hammer's Displacement Edge Collapse shows them.
+pub(super) fn draw_collapsed_vertices(painter: &egui::Painter, camera: &Camera3D, rect: Rect, points: &[DVec3]) {
+    for point in points {
+        if let Some(at) = camera.project(rect, *point) {
+            let square = Rect::from_center_size(at, egui::Vec2::splat(COLLAPSED_HALF_SIZE * 2.0));
+            painter.rect_filled(square, 0.0, COLLAPSED_COLOR);
+        }
     }
 }
 
