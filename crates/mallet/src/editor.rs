@@ -55,7 +55,7 @@ pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
 pub use sculpt::{SculptDirection, SculptSettings, SculptTool, DEFAULT_SCULPT_RADIUS};
 
-pub use clipboard::{Clipboard, PasteAt, PasteOptions, MAX_COPIES};
+pub use clipboard::{Clipboard, PasteAt, PasteCursor, PasteOptions, MAX_COPIES};
 
 /// Material given to new brushes until a texture browser exists.
 pub const DEFAULT_MATERIAL: &str = "DEV/DEV_MEASUREGENERIC01B";
@@ -420,9 +420,8 @@ pub struct Editor {
     pub clipboard: Clipboard,
     /// Text to put on the system clipboard, which only the window can do.
     pub system_clipboard: Option<String>,
-    /// The 2D view under the cursor and the grid-snapped point there, where Paste puts
-    /// objects.
-    pub paste_cursor: Option<(Axis2D, DVec2)>,
+    /// Where the mouse is over a viewport, which is where Paste puts objects.
+    pub paste_cursor: Option<PasteCursor>,
     /// Whether the Paste Special dialog is showing, and where it pastes unless told to
     /// start at the original.
     pub paste_special_open: bool,

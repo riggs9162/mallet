@@ -15,16 +15,16 @@ use std::collections::BTreeSet;
 use std::mem::swap;
 use std::path::Path;
 
-use glam::{DVec2, DVec3};
+use glam::DVec3;
 use mallet_vmf::geometry::Bounds;
 
-use super::clipboard::Clipboard;
+use super::clipboard::{Clipboard, PasteCursor};
 use super::{Editor, Tool, ViewMode, DEFAULT_BLOCK};
 use crate::clipper::Clipper;
 use crate::faces::TextureMode;
 use crate::scene::{camera_marker_edges, Overlay, Owner};
 use crate::vertex_tool::VertexState;
-use crate::view2d::{Axis2D, View2D};
+use crate::view2d::View2D;
 use crate::view3d::Camera3D;
 
 /// What the agent sees and has selected in its tab. It starts again whenever the agent
@@ -48,7 +48,7 @@ struct AgentTools {
     texture_mode: TextureMode,
     lifted: Option<mallet_vmf::Side>,
     clipboard: Clipboard,
-    paste_cursor: Option<(Axis2D, DVec2)>,
+    paste_cursor: Option<PasteCursor>,
 }
 
 /// Everything an agent working in its own view has apart from the window.

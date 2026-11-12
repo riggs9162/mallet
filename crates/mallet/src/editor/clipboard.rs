@@ -110,6 +110,20 @@ pub enum PasteAt {
     View { axis: Axis2D, point: DVec2 },
     /// Centred on a point in the world.
     Center(DVec3),
+    /// Resting on a brush face at `point`, where `normal` points out of the face:
+    /// centred on the point across the face and moved out along the normal until they
+    /// touch it. The move is snapped to the grid across the face, and along the normal
+    /// too unless the face lies square to a world axis.
+    Surface { point: DVec3, normal: DVec3 },
+}
+
+/// Where the mouse is over a viewport, for Paste to put objects there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PasteCursor {
+    /// Over a 2D view, at a grid-snapped point of it.
+    View { axis: Axis2D, point: DVec2 },
+    /// Over a 3D view, as the ray from the camera through the cursor.
+    Ray { origin: DVec3, direction: DVec3 },
 }
 
 /// Hammer's Paste Special settings, plus Hammer++'s rotation around the pivot.
@@ -199,11 +213,21 @@ impl Editor {
         }
     }
 
-    /// Where Paste puts objects: under the cursor in the 2D view it is over, or in the
-    /// middle of the 2D view used last, as Hammer does.
+    /// Where Paste puts objects: under the cursor in the 2D view it is over, on the brush
+    /// face under the cursor in a 3D view, or in the middle of the 2D view used last, as
+    /// Hammer does. A 3D view cursor over empty space counts as no cursor.
     pub fn paste_point(&self) -> PasteAt {
-        if let Some((axis, point)) = self.paste_cursor {
-            return PasteAt::View { axis, point };
+        match self.paste_cursor {
+            Some(PasteCursor::View { axis, point }) => return PasteAt::View { axis, point },
+            Some(PasteCursor::Ray { origin, direction }) => {
+                if let Some((hit, normal)) = self.scene.surface_face(origin, direction) {
+                    return PasteAt::Surface {
+                        point: hit.point,
+                        normal,
+                    };
+                }
+            }
+            None => {}
         }
         let view = &self.views[self.active_view.min(self.views.len() - 1)];
         PasteAt::View {
@@ -321,6 +345,10 @@ fn objects(count: usize) -> String {
     }
 }
 
+/// The least a face normal's largest part can be for the face to count as square to a
+/// world axis, so objects pasted on it sit exactly on it even when it is off the grid.
+const SQUARE_FACE: f64 = 0.999;
+
 /// How far pasting at `at` moves objects whose bounds are `bounds`.
 fn paste_shift(at: PasteAt, bounds: &Bounds, grid: f64) -> DVec3 {
     let center = bounds.center();
@@ -333,6 +361,29 @@ fn paste_shift(at: PasteAt, bounds: &Bounds, grid: f64) -> DVec3 {
             for (index, wanted) in [(horizontal, point.x), (vertical, point.y)] {
                 let corner = bounds.min[index] + wanted - center[index];
                 shift[index] = (corner / grid).round() * grid - bounds.min[index];
+            }
+            shift
+        }
+        PasteAt::Surface { point, normal } => {
+            let facing = normal.abs();
+            let out = (0..3).fold(0, |best, index| if facing[index] > facing[best] { index } else { best });
+            let mut shift = DVec3::ZERO;
+            for index in 0..3 {
+                if index != out {
+                    let corner = bounds.min[index] + point[index] - center[index];
+                    shift[index] = (corner / grid).round() * grid - bounds.min[index];
+                    continue;
+                }
+                let upward = normal[out] > 0.0;
+                let resting = if normal[out].abs() > SQUARE_FACE {
+                    (point[out] * 1024.0).round() / 1024.0
+                } else if upward {
+                    (point[out] / grid).ceil() * grid
+                } else {
+                    (point[out] / grid).floor() * grid
+                };
+                let touching = if upward { bounds.min[out] } else { bounds.max[out] };
+                shift[out] = resting - touching;
             }
             shift
         }
@@ -585,6 +636,52 @@ mod tests {
             point: DVec2::new(100.0, -100.0),
         };
         assert_eq!(paste_shift(at, &bounds, 16.0), DVec3::new(64.0, -128.0, 0.0));
+    }
+
+    #[test]
+    fn paste_on_a_surface_rests_on_it() {
+        let bounds = Bounds {
+            min: DVec3::new(0.0, 0.0, 0.0),
+            max: DVec3::new(64.0, 64.0, 32.0),
+        };
+        let floor = PasteAt::Surface {
+            point: DVec3::new(100.0, -100.0, 8.0),
+            normal: DVec3::Z,
+        };
+        assert_eq!(paste_shift(floor, &bounds, 16.0), DVec3::new(64.0, -128.0, 8.0));
+        let ceiling = PasteAt::Surface {
+            point: DVec3::new(100.0, -100.0, 128.0),
+            normal: DVec3::NEG_Z,
+        };
+        assert_eq!(paste_shift(ceiling, &bounds, 16.0), DVec3::new(64.0, -128.0, 96.0));
+        let wall = PasteAt::Surface {
+            point: DVec3::new(-256.0, 40.0, 80.0),
+            normal: DVec3::NEG_X,
+        };
+        assert_eq!(paste_shift(wall, &bounds, 16.0), DVec3::new(-320.0, 16.0, 64.0));
+        let slope = PasteAt::Surface {
+            point: DVec3::new(0.0, 0.0, 20.0),
+            normal: DVec3::new(0.6, 0.0, 0.8),
+        };
+        assert_eq!(paste_shift(slope, &bounds, 16.0), DVec3::new(-32.0, -32.0, 32.0));
+    }
+
+    #[test]
+    fn paste_in_a_3d_view_lands_on_the_face_under_the_cursor() {
+        let mut editor = editor_with_map();
+        editor.create_block(DVec3::ZERO, DVec3::splat(64.0)).unwrap();
+        editor.copy_selection().unwrap();
+        editor.paste_cursor = Some(PasteCursor::Ray {
+            origin: DVec3::new(32.0, 32.0, 512.0),
+            direction: DVec3::NEG_Z,
+        });
+        let at = editor.paste_point();
+        assert!(matches!(at, PasteAt::Surface { normal, .. } if normal == DVec3::Z), "{at:?}");
+        editor.paste_cursor = Some(PasteCursor::Ray {
+            origin: DVec3::new(32.0, 32.0, 512.0),
+            direction: DVec3::Z,
+        });
+        assert!(matches!(editor.paste_point(), PasteAt::View { .. }));
     }
 
     #[test]

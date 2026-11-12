@@ -41,7 +41,7 @@ use crate::branding;
 use crate::canvas::{Canvas, PainterCanvas};
 use crate::config::{self, Config};
 use crate::document::MapFormat;
-use crate::editor::{self, Editor, SelectMode, Tool, ViewMode, WindowShot, VIEWPORT_GAP};
+use crate::editor::{self, Editor, PasteCursor, SelectMode, Tool, ViewMode, WindowShot, VIEWPORT_GAP};
 use crate::gizmo::{Change as GizmoChange, Gizmo, GizmoDrag, Part as GizmoPart};
 use crate::keymap::{self, Action, KeyMap};
 use crate::netgraph::{NetGraph, NetGraphExtra};
@@ -1086,6 +1086,10 @@ impl MalletApp {
             response.clicked_by(PointerButton::Primary)
         };
         let aim = if looking { Some(rect.center()) } else { pointer.position };
+        if let (Some(aim), true) = (aim, response.hovered()) {
+            let (origin, direction) = editor.camera.ray(rect, aim);
+            editor.paste_cursor = Some(PasteCursor::Ray { origin, direction });
+        }
         if let (true, Some(aim), true) = (clicked, aim, picking) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             editor.face_pick_click(origin, direction, pointer.modifiers.ctrl);
@@ -1441,7 +1445,7 @@ impl MalletApp {
         if let Some(position) = response.hover_pos() {
             let point = snap(view.to_world(rect, position), editor.snap_step());
             self.cursor = Some(point);
-            editor.paste_cursor = Some((view.axis, point));
+            editor.paste_cursor = Some(PasteCursor::View { axis: view.axis, point });
         }
     }
 
