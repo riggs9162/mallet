@@ -488,6 +488,8 @@ impl MalletApp {
         let mut browse_models = false;
         let mut recent = RecentChoice::None;
         let mut show_net_graph = editor.config.view.net_graph;
+        let mut sound_preview = editor.config.sound.preview;
+        let mut reload_sounds = false;
         let mut draw_distance = editor.config.view.draw_distance;
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -600,6 +602,20 @@ impl MalletApp {
                         &mut chosen,
                     );
                     if ui.checkbox(&mut show_net_graph, "Net Graph").clicked() {
+                        ui.close_menu();
+                    }
+                    let sound_check = ui.checkbox(&mut sound_preview, "Sound Preview").on_hover_text(
+                        "Hear what a player standing at the 3D camera would: the soundscape there, and the \
+                         ambient_generics that are looped and do not start silent.",
+                    );
+                    if sound_check.clicked() {
+                        ui.close_menu();
+                    }
+                    let reload = ui
+                        .add_enabled(sound_preview, egui::Button::new("Reload Sound Scripts"))
+                        .on_hover_text("Read the game's soundscape and sound scripts again after editing them.");
+                    if reload.clicked() {
+                        reload_sounds = true;
                         ui.close_menu();
                     }
                     let mut gizmo = editor.config.transform.gizmo;
@@ -743,6 +759,14 @@ impl MalletApp {
                 editor.config.recent_maps.clear();
                 editor.save_config();
             }
+        }
+        if sound_preview != editor.config.sound.preview {
+            editor.config.sound.preview = sound_preview;
+            editor.save_config();
+        }
+        if reload_sounds {
+            editor.sound.reload_scripts();
+            editor.message = "Reading the game's sound scripts again.".to_owned();
         }
         if show_net_graph != editor.config.view.net_graph || draw_distance != editor.config.view.draw_distance {
             editor.config.view.net_graph = show_net_graph;
@@ -1160,6 +1184,7 @@ impl MalletApp {
                     displacement_tool::draw_collapsed_vertices(&painter, &editor.camera, rect, &points);
                 }
                 decal_tools::draw_overlay_handles(&painter, &editor.camera, rect, editor);
+                sound_notice(&painter, rect, editor);
                 if style == CameraStyle::Lit {
                     lighting_notice(&painter, rect, editor);
                     let animated = editor.config.lighting.animate
@@ -1885,6 +1910,10 @@ fn on_selection(editor: &Editor, axis: Axis2D, point: DVec2, hit: Option<crate::
     }
 }
 
+/// How often the window redraws while the sound preview runs, so sounds follow the
+/// camera and random sounds play on time while nothing else changes.
+const SOUND_UPDATE_INTERVAL: Duration = Duration::from_millis(40);
+
 impl eframe::App for MalletApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let update_started = Instant::now();
@@ -1943,6 +1972,9 @@ impl eframe::App for MalletApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(egui::Color32::from_gray(30)))
             .show(ctx, |ui| self.viewports(ui, &mut editor, frame));
+        if editor.update_sound(ctx.input(|input| input.focused)) {
+            ctx.request_repaint_after(SOUND_UPDATE_INTERVAL);
+        }
         editor.timings.update_ms = elapsed_ms(update_started);
         editor.frames_drawn += 1;
     }
@@ -2498,6 +2530,30 @@ fn lighting_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
         egui::FontId::proportional(12.0),
         egui::Color32::from_gray(160),
     );
+}
+
+/// Names what the sound preview plays, above the 3D view's bottom-left corner.
+fn sound_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
+    if !editor.config.sound.show_status {
+        return;
+    }
+    let Some((text, warning)) = editor.sound.status().notice(&editor.scene.sounds) else {
+        return;
+    };
+    let color = if warning {
+        egui::Color32::from_rgb(255, 190, 80)
+    } else {
+        egui::Color32::from_gray(200)
+    };
+    let galley = painter.layout_no_wrap(
+        format!("{}  {text}", egui_phosphor::regular::SPEAKER_HIGH),
+        egui::FontId::proportional(12.0),
+        color,
+    );
+    let corner = rect.left_bottom() + egui::vec2(8.0, -26.0 - galley.size().y);
+    let backdrop = Rect::from_min_size(corner, galley.size()).expand2(egui::vec2(5.0, 2.0));
+    painter.rect_filled(backdrop, 3.0, egui::Color32::from_black_alpha(170));
+    painter.galley(corner, galley, color);
 }
 
 /// Tells what clicks in the 3D view do while they pick faces for a keyvalue.

@@ -640,6 +640,11 @@ impl Materials {
         &self.loader.filesystem
     }
 
+    /// The game's mounted files, to keep and read from on another thread.
+    pub fn shared_filesystem(&self) -> Arc<GameFs> {
+        Arc::clone(&self.loader.filesystem)
+    }
+
     /// A loader for worker threads, sharing this game's mounted files.
     pub fn loader(&self) -> MaterialLoader {
         self.loader.clone()

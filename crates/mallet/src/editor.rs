@@ -462,6 +462,8 @@ pub struct Editor {
     /// The texture lights of the game's `lights.rad` and the map's own `.rad` file, for
     /// the lighting preview.
     pub texture_lights: Arc<TextureLights>,
+    /// The sound preview: the soundscape and ambient sounds heard at the 3D camera.
+    pub sound: crate::sound::SoundPreview,
     /// The vertex tool's brushes and selected vertices.
     pub vertex: crate::vertex_tool::VertexState,
     /// The Displacement tab's tool and paint brush settings.
@@ -557,6 +559,7 @@ impl Default for Editor {
             window_shot: WindowShot::Idle,
             gpu: None,
             texture_lights: Arc::new(TextureLights::new()),
+            sound: crate::sound::SoundPreview::default(),
             vertex: Default::default(),
             displacement: DisplacementTool::default(),
             collapsed_points: None,
@@ -909,6 +912,35 @@ impl Editor {
                 Err(self.message.clone())
             }
         }
+    }
+
+    /// Runs the sound preview for the 3D camera: one update of what a player standing
+    /// there would hear. `focused` says whether Mallet is the active window. Returns
+    /// whether the preview is running and wants another update soon.
+    pub fn update_sound(&mut self, focused: bool) -> bool {
+        let map_name = self
+            .document
+            .as_ref()
+            .and_then(|document| document.path.as_ref())
+            .and_then(|path| path.file_stem())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let frame = crate::sound::SoundFrame {
+            options: &self.config.sound,
+            focused,
+            listener: mallet_vmf::sound::Listener {
+                position: self.camera.position,
+                forward: self.camera.forward(),
+                right: self.camera.right(),
+            },
+            scene: &self.scene,
+            materials: self.materials.as_mut(),
+            map_name,
+            tab: self.tab_ids[self.active_tab],
+            open: self.document.is_some(),
+        };
+        self.sound.update(frame);
+        self.sound.running()
     }
 
     /// Rebuilds the wireframes after the map changed, dropping selected items that no

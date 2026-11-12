@@ -93,6 +93,7 @@ pub struct Config {
     pub discord: DiscordOptions,
     pub transform: TransformOptions,
     pub lighting: LightingOptions,
+    pub sound: SoundOptions,
 }
 
 /// How the 3D Lighting Preview viewport lights the map.
@@ -589,6 +590,40 @@ impl Default for AgentOptions {
             enabled: true,
             port: crate::mcp::DEFAULT_PORT,
             own_view: true,
+        }
+    }
+}
+
+/// How the sound preview plays a map's soundscapes and ambient sounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundOptions {
+    /// Play what a player standing at the 3D camera would hear.
+    pub preview: bool,
+    /// The preview's volume, 1 being the game's own at full volume.
+    pub volume: f64,
+    /// Play the soundscape the camera is in.
+    pub soundscapes: bool,
+    /// Play the `ambient_generic`s that are looped and do not start silent.
+    pub ambient_generics: bool,
+    /// Make sounds behind world brushes quieter, as the game does.
+    pub occlusion: bool,
+    /// Fall silent while another program's window is the active one.
+    pub mute_unfocused: bool,
+    /// Name the soundscape playing in the 3D view's corner.
+    pub show_status: bool,
+}
+
+impl Default for SoundOptions {
+    fn default() -> Self {
+        Self {
+            preview: false,
+            volume: 1.0,
+            soundscapes: true,
+            ambient_generics: true,
+            occlusion: true,
+            mute_unfocused: true,
+            show_status: true,
         }
     }
 }

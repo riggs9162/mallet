@@ -41,6 +41,7 @@ pub(super) enum Section {
     Compiling,
     Viewports,
     Lighting,
+    Sound,
     Colors,
     Editing,
     Files,
@@ -51,12 +52,13 @@ pub(super) enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 12] = [
+    const ALL: [Section; 13] = [
         Section::Game,
         Section::Tools,
         Section::Compiling,
         Section::Viewports,
         Section::Lighting,
+        Section::Sound,
         Section::Colors,
         Section::Editing,
         Section::Files,
@@ -73,6 +75,7 @@ impl Section {
             Section::Compiling => (icon::HAMMER, "Compiling"),
             Section::Viewports => (icon::MONITOR, "Viewports"),
             Section::Lighting => (icon::SUN, "Lighting preview"),
+            Section::Sound => (icon::SPEAKER_HIGH, "Sound preview"),
             Section::Colors => (icon::PALETTE, "Colours"),
             Section::Editing => (icon::CUBE, "Editing"),
             Section::Files => (icon::FILES, "Files"),
@@ -91,6 +94,7 @@ impl Section {
             "compiling" => Section::Compiling,
             "viewports" => Section::Viewports,
             "lighting" => Section::Lighting,
+            "sound" => Section::Sound,
             "colors" => Section::Colors,
             "editing" => Section::Editing,
             "files" => Section::Files,
@@ -171,6 +175,7 @@ impl MalletApp {
                                     Section::Compiling => compiling_section(ui, editor, &mut state.dirty),
                                     Section::Viewports => viewports_section(ui, editor, &mut state.dirty),
                                     Section::Lighting => lighting_section(ui, editor, &mut state.dirty),
+                                    Section::Sound => sound_section(ui, editor, &mut state.dirty),
                                     Section::Colors => colors_section(ui, editor, &mut state.dirty),
                                     Section::Editing => editing_section(ui, editor, &mut state.dirty),
                                     Section::Files => files_section(ui, editor, &mut state.dirty),
@@ -1434,6 +1439,110 @@ fn folder_field(ui: &mut egui::Ui, folder: &mut Option<PathBuf>, automatic: &str
         }
     });
     changed
+}
+
+fn sound_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
+    heading(
+        ui,
+        "Sound preview",
+        "Plays what a player standing at the 3D camera would hear, by the game's own rules: the soundscape of \
+         the nearest env_soundscape whose radius the camera is in and whose origin it can see, kept until \
+         another takes over, and the ambient_generics that are looped and do not start silent.",
+    );
+    let sound = &mut editor.config.sound;
+    *dirty |= ui
+        .checkbox(&mut sound.preview, "Play the sound preview")
+        .on_hover_text("Also on the toolbar's speaker button and in View > Sound Preview.")
+        .changed();
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("Volume");
+        let mut percent = sound.volume * 100.0;
+        let slider = egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %").fixed_decimals(0);
+        if ui.add(slider).changed() {
+            sound.volume = percent / 100.0;
+            *dirty = true;
+        }
+    });
+    ui.add_space(6.0);
+    *dirty |= ui
+        .checkbox(&mut sound.soundscapes, "Soundscapes")
+        .on_hover_text(
+            "env_soundscape, env_soundscape_proxy, env_soundscape_triggerable and trigger_soundscape, with the \
+             scripts the game's soundscapes_manifest.txt lists and the map's own scripts/soundscapes_<map>.txt.",
+        )
+        .changed();
+    *dirty |= ui
+        .checkbox(&mut sound.ambient_generics, "Ambient generics that play from the start")
+        .on_hover_text(
+            "Those without Start Silent and without Is NOT Looped, at their volume, pitch, fade in and radius. \
+             A sound file without a loop point plays once, as in the game.",
+        )
+        .changed();
+    *dirty |= ui
+        .checkbox(&mut sound.occlusion, "Quieter behind walls")
+        .on_hover_text("Sounds lose 2.7 dB for each part of them a world brush hides, as in the game.")
+        .changed();
+    *dirty |= ui
+        .checkbox(&mut sound.mute_unfocused, "Silent while another window is active")
+        .on_hover_text("So the preview does not play over the game while you test the map.")
+        .changed();
+    *dirty |= ui
+        .checkbox(&mut sound.show_status, "Name the soundscape in the 3D view")
+        .changed();
+    ui.add_space(10.0);
+    if ui
+        .button("Reload sound scripts")
+        .on_hover_text("Read the game's soundscape and sound scripts again after editing them.")
+        .clicked()
+    {
+        editor.sound.reload_scripts();
+    }
+    ui.add_space(10.0);
+    ui.label(
+        RichText::new(
+            "Room effects (dsp), sound mixers, sentences and ambient_generic presets and LFOs are left out. \
+             Sounds are found the way the game finds them, so a soundscape only plays once its script is in the \
+             game folder.",
+        )
+        .color(MUTED),
+    );
+    let status = editor.sound.status();
+    if status.running {
+        let amber = egui::Color32::from_rgb(255, 190, 80);
+        ui.add_space(10.0);
+        ui.strong("Now");
+        if let Some(error) = &status.device_error {
+            ui.colored_label(amber, format!("No sound device: {error}"));
+        } else if let Some(device) = &status.device {
+            ui.label(format!("Playing on {device}."));
+        }
+        ui.label(format!(
+            "{} soundscapes from {} script files.",
+            status.scripts.soundscapes, status.scripts.soundscape_files
+        ));
+        for error in &status.scripts.errors {
+            ui.colored_label(amber, error);
+        }
+        if let Some(soundscape) = &status.soundscape {
+            for warning in &soundscape.warnings {
+                ui.colored_label(amber, warning);
+            }
+        }
+        for voice in &status.voices {
+            let state = match &voice.note {
+                Some(note) => format!("{}: {note}", voice.state),
+                None => voice.state.to_owned(),
+            };
+            ui.label(RichText::new(format!("{}  ({state})", voice.wave)).color(MUTED));
+        }
+        for ambient in status.ambient_generics.iter().filter(|ambient| !ambient.playing) {
+            if let Some(note) = &ambient.note {
+                let line = format!("ambient_generic {} ({}): {note}", ambient.entity, ambient.sound);
+                ui.label(RichText::new(line).color(MUTED));
+            }
+        }
+    }
 }
 
 fn files_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {

@@ -322,6 +322,21 @@ impl MalletApp {
                     editor.config.view.net_graph = !editor.config.view.net_graph;
                     editor.save_config();
                 }
+                let sound_on = editor.config.sound.preview;
+                if self
+                    .icon_button(
+                        ui,
+                        if sound_on { icon::SPEAKER_HIGH } else { icon::SPEAKER_NONE },
+                        "Sound preview: hear the soundscape and the looping ambient sounds at the 3D camera",
+                        None,
+                        sound_on,
+                        TOOLBAR_ICON_SIZE,
+                    )
+                    .clicked()
+                {
+                    editor.config.sound.preview = !sound_on;
+                    editor.save_config();
+                }
                 ui.separator();
                 let running = editor.compile_running();
                 let compile = self

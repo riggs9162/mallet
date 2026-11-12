@@ -12,6 +12,7 @@ use mallet_vmf::displacement::Surface;
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds, Plane};
 use mallet_vmf::light::MapLighting;
 use mallet_vmf::overlay::{self, Piece};
+use mallet_vmf::sound::MapSounds;
 use mallet_vmf::{parse_vec3, Entity, Side, Solid, TexAxis, Vmf};
 
 use crate::view2d::Axis2D;
@@ -591,6 +592,8 @@ pub struct Scene {
     pub retextures: Vec<Retexture>,
     /// The map's lights, sky, fog and glows, for the lighting preview.
     pub lighting: MapLighting,
+    /// The map's soundscape entities and ambient sounds, for the sound preview.
+    pub sounds: MapSounds,
 }
 
 /// One step of [`Scene::retextures`]: these meshes changed from `from` to `to`.
@@ -621,6 +624,7 @@ impl Scene {
             geometry_generation: next_generation(),
             selection_generation: next_generation(),
             lighting: MapLighting::read(vmf),
+            sounds: MapSounds::read(vmf),
             ..Self::default()
         };
         for entity in vmf.all_entities() {
@@ -993,6 +997,50 @@ impl Scene {
                 }
                 ray_convex_face(from, direction, &mesh.planes).is_some_and(|(distance, plane)| {
                     distance < length && plane.and_then(|plane| mesh.faces.get(plane)).is_none_or(&drawn)
+                })
+            })
+    }
+
+    /// Whether a brush stands between `from` and `to`, as a brush-only trace in the game:
+    /// props and point entities never count. `counts` says whether a brush stops the
+    /// trace, given its mesh and the face the line enters through; a line that starts
+    /// inside a brush is stopped by it when any of its faces counts. A brush with a
+    /// displacement is only as solid as the displacement's surface.
+    pub fn brush_line_blocked(&self, from: DVec3, to: DVec3, counts: impl Fn(&WireMesh, &SceneFace) -> bool) -> bool {
+        let offset = to - from;
+        let length = offset.length();
+        if length <= f64::EPSILON {
+            return false;
+        }
+        let direction = offset / length;
+        let line = Bounds {
+            min: from.min(to),
+            max: from.max(to),
+        };
+        self.meshes
+            .iter()
+            .filter(|mesh| {
+                !mesh.decal
+                    && mesh.owner.is_some()
+                    && mesh.model.is_none()
+                    && mesh.sprite.is_none()
+                    && mesh.bounds.min.cmple(line.max).all()
+                    && mesh.bounds.max.cmpge(line.min).all()
+                    && mesh.faces.iter().any(|face| face.side.is_some())
+            })
+            .any(|mesh| {
+                if mesh.faces.iter().any(|face| face.displacement.is_some()) {
+                    return displacement_hit(mesh, from, direction)
+                        .is_some_and(|(distance, face)| distance < length && counts(mesh, &mesh.faces[face]));
+                }
+                if !mesh.planes.is_empty() && mesh.planes.iter().all(|plane| plane.distance(from) <= 0.0) {
+                    return mesh.faces.iter().any(|face| counts(mesh, face));
+                }
+                ray_convex_face(from, direction, &mesh.planes).is_some_and(|(distance, plane)| {
+                    distance < length
+                        && plane
+                            .and_then(|plane| mesh.faces.get(plane))
+                            .is_none_or(|face| counts(mesh, face))
                 })
             })
     }

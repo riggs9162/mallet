@@ -36,6 +36,7 @@ mod properties;
 mod render3d;
 mod scene;
 mod shell;
+mod sound;
 mod style;
 mod tools;
 mod transform;
