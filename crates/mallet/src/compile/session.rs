@@ -290,6 +290,7 @@ impl Editor {
             edges,
             faces: Vec::new(),
             bounds,
+            geometry_bounds: bounds,
             planes: Vec::new(),
             owner: None,
             solid: None,

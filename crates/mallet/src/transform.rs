@@ -358,7 +358,7 @@ impl Editor {
     pub fn owner_bounds(&self, owner: Owner) -> Bounds {
         let mut bounds = Bounds::EMPTY;
         for mesh in self.scene.meshes.iter().filter(|mesh| mesh.selects(owner)) {
-            bounds.add_bounds(&mesh.bounds);
+            bounds.add_bounds(&mesh.geometry_bounds);
         }
         bounds
     }

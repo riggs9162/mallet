@@ -464,7 +464,11 @@ In the scene, a brush with displacements shows only them, as VBSP turns its othe
 nodraw. Its `SceneFace`s are the displacement faces, each carrying its `Surface`; its edges
 are their triangles, which the 2D views draw as a wireframe; and it has no planes, so every
 ray test (selection, the texture tool, placing entities, overlays and decals, sprite glows)
-uses the triangles instead. The renderer draws the grid with each vertex's own normal and the
+uses the triangles instead. Its mesh keeps two boxes: `bounds` holds everything drawn, for
+culling and the first test of a 2D outline click, while `geometry_bounds` is the box of the
+brush's own faces, which the selection box, its handles, the pivot, the centre cross, moves
+and Snap to Grid use, as Hammer does. A raised or sculpted surface can reach outside it, and
+moving the brush still lands its corner on the grid. The renderer draws the grid with each vertex's own normal and the
 texture coordinates of its flat spot, as the game does. A blended material's `$basetexture2`
 loads under the key `<material>#blend`; where alpha is painted, the triangles are drawn again
 with it as a translucent layer, each vertex as opaque as its alpha, with texture coordinates

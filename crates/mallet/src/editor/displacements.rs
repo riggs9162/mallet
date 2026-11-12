@@ -463,3 +463,46 @@ impl Editor {
 pub(super) fn split(placed: Vec<Placed>) -> (Vec<u32>, Vec<Patch>) {
     placed.into_iter().unzip()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::SelectMode;
+    use crate::scene::Owner;
+
+    /// A block with a displacement on its top face raised 48 units above it.
+    fn raised_displacement() -> (Editor, u32) {
+        let mut editor = Editor::default();
+        editor.new_map();
+        let solid = editor
+            .create_block(DVec3::ZERO, DVec3::new(128.0, 128.0, 64.0))
+            .unwrap();
+        let top = editor
+            .scene
+            .meshes
+            .iter()
+            .flat_map(|mesh| &mesh.faces)
+            .find(|face| face.solid == Some(solid) && face.normal.z > 0.5)
+            .and_then(|face| face.side)
+            .unwrap();
+        let sides = BTreeSet::from([top]);
+        editor.create_displacements(&sides, 2).unwrap();
+        editor.set_displacement_elevation(&sides, 48.0).unwrap();
+        (editor, solid)
+    }
+
+    #[test]
+    fn a_displacement_is_selected_and_moved_by_its_brush_as_in_hammer() {
+        let (mut editor, solid) = raised_displacement();
+        editor.select([Owner::Solid(solid)], SelectMode::Replace);
+        let mesh = editor.scene.meshes.iter().find(|mesh| mesh.solid == Some(solid)).unwrap();
+        assert!(mesh.bounds.max.z > 111.9, "the raised surface is drawn above the brush");
+        let selected = editor.scene.selection_bounds();
+        assert_eq!((selected.min, selected.max), (DVec3::ZERO, DVec3::new(128.0, 128.0, 64.0)));
+        assert_eq!(editor.scene.selection_anchor(), DVec3::ZERO);
+
+        editor.move_selection(DVec3::new(64.0, 0.0, 0.0)).unwrap();
+        let moved = editor.scene.selection_bounds();
+        assert_eq!((moved.min, moved.max), (DVec3::new(64.0, 0.0, 0.0), DVec3::new(192.0, 128.0, 64.0)));
+    }
+}

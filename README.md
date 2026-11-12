@@ -326,7 +326,9 @@ their triangles in the 2D views. The rest of a displacement's brush is hidden, a
 leaves it out. Materials that blend two textures, such as `nature/blenddirtgrass001a`, fade
 into their second texture where the displacement's alpha is painted, and four-texture
 `Lightmapped_4WayBlend` and `MultiBlend` materials mix their textures by the weights the
-Sculpt tool's Blend paints.
+Sculpt tool's Blend paints. As in Hammer, a displacement's brush is selected, moved and
+snapped to the grid by the brush's own box, so a raised or sculpted surface can reach outside
+the selection box while the brush's corner still lands on the grid.
 
 Open the Face Edit Sheet (Shift+A), select faces in the 3D view and switch to its
 Displacement tab:

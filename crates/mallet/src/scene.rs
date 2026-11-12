@@ -401,6 +401,14 @@ impl WireMesh {
             None => self.bounds,
         }
     }
+
+    /// The geometry bounds after an optional remap.
+    pub fn mapped_geometry_bounds(&self, remap: Option<&Remap>) -> Bounds {
+        match remap {
+            Some(remap) => remap.map_bounds(&self.geometry_bounds),
+            None => self.geometry_bounds,
+        }
+    }
 }
 
 /// One polygon of a brush or point entity box, for the textured 3D view.
@@ -487,7 +495,13 @@ pub struct WireMesh {
     pub edges: Vec<[DVec3; 2]>,
     /// Polygons for the textured 3D view.
     pub faces: Vec<SceneFace>,
+    /// Everything the mesh draws, displaced surfaces included, which culling and the
+    /// first test of a 2D outline click use.
     pub bounds: Bounds,
+    /// The box the mesh is selected, moved and snapped by, as in Hammer: for a brush, the
+    /// box of its own faces, leaving out the displacements sculpted on them, which can
+    /// reach outside it; for everything else, the same as `bounds`.
+    pub geometry_bounds: Bounds,
     /// Planes enclosing the mesh, used for 3D picking.
     pub planes: Vec<Plane>,
     /// `None` when the brush or entity has no id and cannot be selected.
@@ -633,6 +647,7 @@ impl Scene {
                     faces: Vec::new(),
                     planes: box_planes(&bounds),
                     bounds,
+                    geometry_bounds: bounds,
                     owner: entity_owner,
                     solid: None,
                     selected: false,
@@ -663,6 +678,7 @@ impl Scene {
                     edges: box_edges(&bounds),
                     faces: box_faces(&bounds),
                     bounds,
+                    geometry_bounds: bounds,
                     planes: box_planes(&bounds),
                     owner: entity_owner,
                     solid: None,
@@ -817,7 +833,7 @@ impl Scene {
     pub fn selection_bounds(&self) -> Bounds {
         let mut bounds = Bounds::EMPTY;
         for mesh in self.meshes.iter().filter(|mesh| mesh.selected) {
-            bounds.add_bounds(&mesh.bounds);
+            bounds.add_bounds(&mesh.geometry_bounds);
         }
         bounds
     }
@@ -846,12 +862,12 @@ impl Scene {
     /// With `solids`, a brush of an entity picks its own solid rather than the entity.
     pub fn pick_2d(&self, axis: Axis2D, point: DVec2, tolerance: f64, solids: bool) -> Option<Owner> {
         let smallest = |hits: &mut dyn Iterator<Item = &WireMesh>| {
-            hits.filter_map(|mesh| Some((picked(mesh, solids)?, projected_area(axis, &mesh.bounds))))
+            hits.filter_map(|mesh| Some((picked(mesh, solids)?, projected_area(axis, &mesh.geometry_bounds))))
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(owner, _)| owner)
         };
         let on_centre =
-            |mesh: &&WireMesh| (axis.project(mesh.bounds.center()) - point).abs().max_element() <= tolerance;
+            |mesh: &&WireMesh| (axis.project(mesh.geometry_bounds.center()) - point).abs().max_element() <= tolerance;
         let on_outline = |mesh: &&WireMesh| {
             let min = axis.project(mesh.bounds.min) - DVec2::splat(tolerance);
             let max = axis.project(mesh.bounds.max) + DVec2::splat(tolerance);
@@ -1109,7 +1125,7 @@ impl Scene {
         self.meshes
             .iter()
             .filter(|mesh| {
-                let centre = axis.project(mesh.bounds.center());
+                let centre = axis.project(mesh.geometry_bounds.center());
                 centre.cmpge(min).all() && centre.cmple(max).all()
             })
             .filter_map(|mesh| picked(mesh, solids))
@@ -1330,7 +1346,8 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
             }
         }
     }
-    let mut bounds = faces_bounds(&faces);
+    let geometry_bounds = faces_bounds(&faces);
+    let mut bounds = geometry_bounds;
     for surface in surfaces.iter().flatten() {
         bounds.add_bounds(&surface.bounds);
     }
@@ -1363,6 +1380,7 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
         edges,
         faces: scene_faces,
         bounds,
+        geometry_bounds,
         planes: if displaced { Vec::new() } else { planes },
         owner,
         solid: solid.id(),
@@ -1493,6 +1511,7 @@ fn decal_mesh(
         edges,
         faces,
         bounds,
+        geometry_bounds: bounds,
         planes,
         owner: entity.id().map(Owner::Entity),
         solid: None,
@@ -1635,6 +1654,7 @@ mod tests {
             faces: Vec::new(),
             planes: box_planes(&bounds),
             bounds,
+            geometry_bounds: bounds,
             owner: Some(owner),
             solid: None,
             selected: false,

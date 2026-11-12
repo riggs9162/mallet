@@ -334,7 +334,7 @@ impl View2D {
         let mut crosses = Vec::new();
         for mesh in scene.meshes.iter().filter(|mesh| mesh.owner.is_some()) {
             let (color, remap) = mesh.appearance(overlay);
-            let bounds = mesh.mapped_bounds(remap.as_ref());
+            let bounds = mesh.mapped_geometry_bounds(remap.as_ref());
             let (min, max) = (self.axis.project(bounds.min), self.axis.project(bounds.max));
             if (max - min).max_element() * self.scale < CROSS_MIN_PIXELS {
                 continue;
