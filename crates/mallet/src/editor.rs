@@ -1056,6 +1056,9 @@ impl Editor {
             self.refresh_clip_preview();
         }
         self.scene.mark_selected(&self.selection);
+        if let Some(bounds) = self.selection_block() {
+            self.last_block = bounds;
+        }
     }
 
     /// Changes the selection with what a click or a box picked: in Groups mode each owner
@@ -1549,18 +1552,27 @@ impl Editor {
         self.create_primitive(self.block_shape, block.min, block.max)
     }
 
-    /// The box a block-tool drag between two snapped 2D corners describes, taking its
-    /// depth from the last block created. `None` when it has no area.
+    /// The box a block-tool drag between two snapped 2D corners describes. As in Hammer,
+    /// its depth along the view's axis comes from the selection, or when nothing is
+    /// selected, from the last brush selected or block created. `None` when it has no area.
     pub fn block_from_drag(&self, axis: Axis2D, a: DVec2, b: DVec2) -> Option<Bounds> {
         let [horizontal, vertical, _] = axis.axes();
-        let mut min = self.last_block.min;
-        let mut max = self.last_block.max;
+        let depth = self.selection_block().unwrap_or(self.last_block);
+        let mut min = depth.min;
+        let mut max = depth.max;
         min[horizontal] = a.x.min(b.x);
         max[horizontal] = a.x.max(b.x);
         min[vertical] = a.y.min(b.y);
         max[vertical] = a.y.max(b.y);
         let bounds = Bounds { min, max };
         (bounds.size().min_element() > 0.0).then_some(bounds)
+    }
+
+    /// The selection's bounds, when it has volume along every axis, for new blocks to
+    /// take their depth from.
+    fn selection_block(&self) -> Option<Bounds> {
+        let bounds = self.scene.selection_bounds();
+        (!self.selection.is_empty() && !bounds.is_empty() && bounds.size().min_element() > 0.0).then_some(bounds)
     }
 
     pub fn change_grid(&mut self, factor: f64) {
