@@ -13,21 +13,22 @@ use crate::{IdAllocator, Solid, SolidItem};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Keep {
     /// Both halves, as two brushes.
-    #[default]
     Both,
-    /// The half the clip plane's normal points into.
+    /// The half the clip plane's normal points into. Hammer's clipping tool starts here.
+    #[default]
     Front,
     /// The half behind the clip plane.
     Back,
 }
 
 impl Keep {
-    /// The next mode in the order Shift+X cycles through, as in Hammer.
+    /// The next mode in the order Hammer's clipping tool cycles through: one half, the
+    /// other half, then both.
     pub fn next(self) -> Self {
         match self {
-            Self::Both => Self::Front,
             Self::Front => Self::Back,
             Self::Back => Self::Both,
+            Self::Both => Self::Front,
         }
     }
 
