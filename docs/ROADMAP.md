@@ -17,7 +17,7 @@ The tools a mapper reaches for every few minutes.
 
 ### Clipboard
 
-- [x] Cut, Copy and Paste (Ctrl+X, Ctrl+C, Ctrl+V, plus Ctrl+Insert, Shift+Insert and Shift+Del), pasting at the cursor: centred on it in a 2D view, resting on the face under it in a 3D view. Hammer
+- [x] Cut, Copy and Paste (Ctrl+X, Ctrl+C, Ctrl+V, plus Ctrl+Insert, Shift+Insert and Shift+Del), pasting at the cursor: centred on it in a 2D view, resting on the face under it in a 3D view, where the paste follows the mouse until a click drops it. Hammer
 - [x] Copying between map tabs, with new ids and entity names kept or made unique. Hammer
 - [x] Paste Special (Ctrl+Shift+V): copies, offset, rotation, name prefix or suffix, group the copies. Hammer
 - [x] Paste Special that rotates around the pivot. H++

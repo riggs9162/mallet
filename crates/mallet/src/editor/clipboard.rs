@@ -4,7 +4,7 @@
 //! tab with fresh ids. Copying also puts them on the system clipboard as VMF text, so
 //! another Mallet window can paste them too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use glam::{DMat4, DVec2, DVec3};
 use mallet_vmf::edit::Edit;
@@ -15,7 +15,7 @@ use mallet_vmf::transform::{self, around, clean_vec3, TextureLock};
 use mallet_vmf::{format_vec3, parse_vec3, Entity, EntityItem, IdAllocator, Solid, SolidItem, Vmf};
 
 use super::{find_entity, Editor, SelectMode};
-use crate::scene::Owner;
+use crate::scene::{Owner, Remap};
 use crate::transform::rotation_xyz;
 use crate::view2d::Axis2D;
 
@@ -126,6 +126,22 @@ pub enum PasteCursor {
     Ray { origin: DVec3, direction: DVec3 },
 }
 
+/// A paste made over a 3D view that still follows the mouse, until a click drops it or
+/// Escape takes it back.
+#[derive(Clone, Debug)]
+pub struct PastePlacing {
+    /// Where the objects were pasted, which is where they still are in the map.
+    pasted_at: PasteAt,
+    /// Where the mouse has taken them since, which is where they are shown.
+    target: PasteAt,
+    /// The clipboard's bounds when it was pasted.
+    bounds: Bounds,
+    /// The pasted objects and the scene they were pasted into. Once either changes,
+    /// something else has edited the map and the paste stays where it is.
+    selection: BTreeSet<Owner>,
+    generation: u64,
+}
+
 /// Hammer's Paste Special settings, plus Hammer++'s rotation around the pivot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PasteOptions {
@@ -217,23 +233,122 @@ impl Editor {
     /// face under the cursor in a 3D view, or in the middle of the 2D view used last, as
     /// Hammer does. A 3D view cursor over empty space counts as no cursor.
     pub fn paste_point(&self) -> PasteAt {
-        match self.paste_cursor {
-            Some(PasteCursor::View { axis, point }) => return PasteAt::View { axis, point },
-            Some(PasteCursor::Ray { origin, direction }) => {
-                if let Some((hit, normal)) = self.scene.surface_face(origin, direction) {
-                    return PasteAt::Surface {
-                        point: hit.point,
-                        normal,
-                    };
-                }
-            }
-            None => {}
+        if let Some(at) = self.cursor_paste_point(false) {
+            return at;
         }
         let view = &self.views[self.active_view.min(self.views.len() - 1)];
         PasteAt::View {
             axis: view.axis,
             point: view.center,
         }
+    }
+
+    /// Where the cursor points for a paste: its point in a 2D view, or the brush face
+    /// under it in a 3D view. `behind_selection` looks through the selected brushes.
+    fn cursor_paste_point(&self, behind_selection: bool) -> Option<PasteAt> {
+        match self.paste_cursor? {
+            PasteCursor::View { axis, point } => Some(PasteAt::View { axis, point }),
+            PasteCursor::Ray { origin, direction } => {
+                let (hit, normal) = if behind_selection {
+                    self.scene.surface_face_behind_selection(origin, direction)?
+                } else {
+                    self.scene.surface_face(origin, direction)?
+                };
+                Some(PasteAt::Surface {
+                    point: hit.point,
+                    normal,
+                })
+            }
+        }
+    }
+
+    /// Pastes one copy of the clipboard under the cursor. Over a 3D view the pasted
+    /// objects then follow the mouse across the faces it points at, until
+    /// [`Editor::drop_paste`] leaves them there or [`Editor::cancel_paste`] takes them
+    /// back. Over a 2D view, or no view, they are placed at once.
+    pub fn paste_at_cursor(&mut self) -> Result<usize, String> {
+        let at = self.paste_point();
+        let count = self.paste(at, &PasteOptions::default())?;
+        if matches!(self.paste_cursor, Some(PasteCursor::Ray { .. })) {
+            self.paste_placing = Some(PastePlacing {
+                pasted_at: at,
+                target: at,
+                bounds: self.clipboard.bounds(),
+                selection: self.selection.clone(),
+                generation: self.scene.geometry_generation,
+            });
+            self.message = format!(
+                "Pasted {}: move the mouse to place, click to drop, Escape to cancel",
+                objects(count)
+            );
+        }
+        Ok(count)
+    }
+
+    /// Whether a paste is following the mouse. It stops following, and stays where it
+    /// is, once anything else has changed the map or the selection.
+    fn paste_is_following(&mut self) -> bool {
+        let following = self.paste_placing.as_ref().is_some_and(|placing| {
+            placing.selection == self.selection && placing.generation == self.scene.geometry_generation
+        });
+        if !following && self.paste_placing.take().is_some() {
+            self.overlay.transform = None;
+        }
+        following
+    }
+
+    /// Shows a paste that is following the mouse where the cursor points now. With the
+    /// cursor over no view or no brush face it stays where it was shown last. Returns
+    /// whether a paste is following the mouse.
+    pub fn follow_paste_cursor(&mut self) -> bool {
+        if !self.paste_is_following() {
+            return false;
+        }
+        let target = self.cursor_paste_point(true);
+        let grid = self.snap_step();
+        if let (Some(target), Some(placing)) = (target, self.paste_placing.as_mut()) {
+            placing.target = target;
+            let offset = placing.offset(grid);
+            self.overlay.transform = (offset != DVec3::ZERO).then(|| Remap::translate(offset));
+            self.overlay.cloning = false;
+        }
+        true
+    }
+
+    /// Leaves a paste that is following the mouse where it is shown. The paste stays one
+    /// undo step.
+    pub fn drop_paste(&mut self) {
+        if !self.paste_is_following() {
+            return;
+        }
+        let Some(placing) = self.paste_placing.take() else {
+            return;
+        };
+        self.overlay.transform = None;
+        if placing.offset(self.snap_step()) == DVec3::ZERO {
+            self.message = format!("Pasted {}", objects(placing.selection.len()));
+            return;
+        }
+        let moved = self
+            .step_history(false)
+            .and_then(|_| self.paste(placing.target, &PasteOptions::default()));
+        if let Err(error) = moved {
+            self.message = error;
+        }
+    }
+
+    /// Takes back a paste that is following the mouse. Returns whether there was one.
+    pub fn cancel_paste(&mut self) -> bool {
+        if !self.paste_is_following() {
+            return false;
+        }
+        self.paste_placing = None;
+        self.overlay.transform = None;
+        self.clear_selection();
+        if self.step_history(false).is_ok() {
+            self.message = "Paste cancelled".to_owned();
+        }
+        true
     }
 
     /// Opens Paste Special for the objects on the clipboard, pasting at the current paste
@@ -333,6 +448,13 @@ impl Editor {
             format!("Pasted {} copies, {}", options.copies, objects(count))
         };
         Ok(count)
+    }
+}
+
+impl PastePlacing {
+    /// How far the mouse has taken the objects from where they were pasted.
+    fn offset(&self, grid: f64) -> DVec3 {
+        paste_shift(self.target, &self.bounds, grid) - paste_shift(self.pasted_at, &self.bounds, grid)
     }
 }
 
@@ -682,6 +804,75 @@ mod tests {
             direction: DVec3::Z,
         });
         assert!(matches!(editor.paste_point(), PasteAt::View { .. }));
+    }
+
+    fn floor_and_copied_box() -> Editor {
+        let mut editor = editor_with_map();
+        editor
+            .create_block(DVec3::new(-256.0, -256.0, -16.0), DVec3::new(256.0, 256.0, 0.0))
+            .unwrap();
+        editor
+            .create_block(DVec3::new(512.0, 512.0, 0.0), DVec3::new(576.0, 576.0, 32.0))
+            .unwrap();
+        editor.copy_selection().unwrap();
+        editor
+    }
+
+    fn point_down_at(editor: &mut Editor, x: f64, y: f64) {
+        editor.paste_cursor = Some(PasteCursor::Ray {
+            origin: DVec3::new(x, y, 512.0),
+            direction: DVec3::NEG_Z,
+        });
+    }
+
+    #[test]
+    fn a_paste_in_a_3d_view_follows_the_mouse_until_dropped() {
+        let mut editor = floor_and_copied_box();
+        editor.grid = 16.0;
+        point_down_at(&mut editor, 0.0, 0.0);
+        editor.paste_at_cursor().unwrap();
+        assert!(editor.follow_paste_cursor());
+        assert_eq!(editor.overlay.transform, None);
+        point_down_at(&mut editor, 128.0, -64.0);
+        assert!(editor.follow_paste_cursor());
+        assert_eq!(
+            editor.overlay.transform,
+            Some(Remap::translate(DVec3::new(128.0, -64.0, 0.0)))
+        );
+        point_down_at(&mut editor, 4096.0, 0.0);
+        assert!(editor.follow_paste_cursor());
+        assert!(editor.overlay.transform.is_some());
+        editor.drop_paste();
+        assert_eq!(editor.overlay.transform, None);
+        assert!(!editor.follow_paste_cursor());
+        let bounds = editor.scene.selection_bounds();
+        assert_eq!(bounds.min, DVec3::new(96.0, -96.0, 0.0));
+        assert_eq!(vmf(&editor).world().unwrap().solids().count(), 3);
+        editor.step_history(false).unwrap();
+        assert_eq!(vmf(&editor).world().unwrap().solids().count(), 2);
+    }
+
+    #[test]
+    fn escape_takes_back_a_paste_that_follows_the_mouse() {
+        let mut editor = floor_and_copied_box();
+        point_down_at(&mut editor, 0.0, 0.0);
+        editor.paste_at_cursor().unwrap();
+        assert_eq!(vmf(&editor).world().unwrap().solids().count(), 3);
+        assert!(editor.cancel_paste());
+        assert_eq!(vmf(&editor).world().unwrap().solids().count(), 2);
+        assert!(editor.selection.is_empty());
+        assert!(!editor.cancel_paste());
+    }
+
+    #[test]
+    fn a_paste_stops_following_once_the_selection_changes() {
+        let mut editor = floor_and_copied_box();
+        point_down_at(&mut editor, 0.0, 0.0);
+        editor.paste_at_cursor().unwrap();
+        editor.clear_selection();
+        assert!(!editor.follow_paste_cursor());
+        assert!(!editor.cancel_paste());
+        assert_eq!(vmf(&editor).world().unwrap().solids().count(), 3);
     }
 
     #[test]

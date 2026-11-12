@@ -55,7 +55,7 @@ pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
 pub use sculpt::{SculptDirection, SculptSettings, SculptTool, DEFAULT_SCULPT_RADIUS};
 
-pub use clipboard::{Clipboard, PasteAt, PasteCursor, PasteOptions, MAX_COPIES};
+pub use clipboard::{Clipboard, PasteAt, PasteCursor, PasteOptions, PastePlacing, MAX_COPIES};
 
 /// Material given to new brushes until a texture browser exists.
 pub const DEFAULT_MATERIAL: &str = "DEV/DEV_MEASUREGENERIC01B";
@@ -426,6 +426,8 @@ pub struct Editor {
     /// start at the original.
     pub paste_special_open: bool,
     pub paste_special_at: PasteAt,
+    /// A paste made over a 3D view that is still following the mouse.
+    pub paste_placing: Option<PastePlacing>,
     /// The 2D view (0 top, 1 front, 2 side) the mouse was over last, which Flip and Align
     /// work in.
     pub active_view: usize,
@@ -546,6 +548,7 @@ impl Default for Editor {
             paste_cursor: None,
             paste_special_open: false,
             paste_special_at: PasteAt::Original,
+            paste_placing: None,
             active_view: 0,
             pointfile: None,
             face_selection: BTreeSet::new(),

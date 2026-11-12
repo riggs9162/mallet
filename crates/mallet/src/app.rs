@@ -1068,15 +1068,22 @@ impl MalletApp {
             }
         }
         let looking = editor.camera.mouse_look();
+        let aim = if looking { Some(rect.center()) } else { pointer.position };
+        if let (Some(aim), true) = (aim, response.hovered()) {
+            let (origin, direction) = editor.camera.ray(rect, aim);
+            editor.paste_cursor = Some(PasteCursor::Ray { origin, direction });
+        }
+        let placing = editor.follow_paste_cursor();
         let picking = editor.active_face_pick().is_some();
-        let painting = !picking && self.paint_displacements_3d(slot, rect, response, editor, pointer);
-        let gizmo_hot = !picking
+        let busy = picking || placing;
+        let painting = !busy && self.paint_displacements_3d(slot, rect, response, editor, pointer);
+        let gizmo_hot = !busy
             && !self.paint_selecting(slot)
             && (self.use_gizmo(slot, rect, response, editor, pointer)
                 || self.vertex_tool_3d(slot, rect, response, editor, pointer)
                 || self.overlay_tool_3d(slot, rect, response, editor, pointer)
                 || painting);
-        let selecting = !picking && self.paint_select_3d(slot, rect, response, editor, pointer, gizmo_hot);
+        let selecting = !busy && self.paint_select_3d(slot, rect, response, editor, pointer, gizmo_hot);
         if picking && response.hovered() && !looking {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -1085,12 +1092,11 @@ impl MalletApp {
         } else {
             response.clicked_by(PointerButton::Primary)
         };
-        let aim = if looking { Some(rect.center()) } else { pointer.position };
-        if let (Some(aim), true) = (aim, response.hovered()) {
-            let (origin, direction) = editor.camera.ray(rect, aim);
-            editor.paste_cursor = Some(PasteCursor::Ray { origin, direction });
-        }
-        if let (true, Some(aim), true) = (clicked, aim, picking) {
+        if placing {
+            if clicked {
+                editor.drop_paste();
+            }
+        } else if let (true, Some(aim), true) = (clicked, aim, picking) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             editor.face_pick_click(origin, direction, pointer.modifiers.ctrl);
         } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
@@ -1184,7 +1190,7 @@ impl MalletApp {
                 canvas.label(rect.left_top() + egui::vec2(6.0, 4.0), label, color);
                 Camera3D::draw_crosshair(&painter, rect);
                 face_pick_notice(&painter, rect, editor);
-                if !picking {
+                if !busy {
                     self.draw_gizmo(&painter, slot, rect, response, editor);
                 }
                 vertex_tool::draw_vertex_3d(&painter, &editor.camera, rect, editor);
@@ -1410,7 +1416,11 @@ impl MalletApp {
             editor.active_view = view_index;
             nudge(ui, &view, editor);
         }
-        if !space_held && !editor.camera.mouse_look() {
+        if editor.paste_placing.is_some() {
+            if response.clicked_by(PointerButton::Primary) {
+                editor.drop_paste();
+            }
+        } else if !space_held && !editor.camera.mouse_look() {
             self.use_tool_2d(slot, &view, rect, response, editor, pointer);
             if let Some(icon) = self.cursor_icon(slot, &view, rect, response, editor) {
                 ui.ctx().set_cursor_icon(icon);
@@ -1446,6 +1456,7 @@ impl MalletApp {
             let point = snap(view.to_world(rect, position), editor.snap_step());
             self.cursor = Some(point);
             editor.paste_cursor = Some(PasteCursor::View { axis: view.axis, point });
+            editor.follow_paste_cursor();
         }
     }
 
@@ -2679,10 +2690,7 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::Cut => report(editor.cut_selection().map(drop), editor),
         Action::Copy => report(editor.copy_selection().map(drop), editor),
-        Action::Paste => {
-            let at = editor.paste_point();
-            report(editor.paste(at, &editor::PasteOptions::default()).map(drop), editor)
-        }
+        Action::Paste => report(editor.paste_at_cursor().map(drop), editor),
         Action::PasteSpecial => report(editor.open_paste_special(), editor),
         Action::GridSmaller => editor.change_grid(0.5),
         Action::GridLarger => editor.change_grid(2.0),
@@ -2754,6 +2762,7 @@ fn run(action: Action, editor: &mut Editor) {
         Action::SplitFace => report(editor.split_vertex_face(), editor),
         Action::SelectAll => editor.select_all(),
         Action::IgnoreGroups => editor.cycle_pick_mode(),
+        Action::ClearSelection if editor.cancel_paste() => {}
         Action::ClearSelection if editor.stop_face_pick() => {}
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()
