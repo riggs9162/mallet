@@ -73,7 +73,7 @@ The tools a mapper reaches for every few minutes.
 - [x] Go to Coordinates and Go to Brush Number (Ctrl+Shift+G). Hammer
 - [x] Camera tool (Shift+C): several cameras, switched with Page Up and Page Down. Hammer
 - [x] Magnify tool (Shift+G). Hammer
-- [ ] Drag select: Ctrl+click and drag selects everything under the crosshair. H++
+- [x] Drag select: with the Selection tool, holding Shift and the left button selects everything the cursor or crosshair passes over, in 2D and 3D (Hammer++ holds Ctrl). H++
 - [ ] Selection size information and selected brush numbers in the status bar. Hammer
 - [ ] Local or global gizmo space (Ctrl+J), gizmo axis locks, and X cycling box, gizmo and none. H++
 

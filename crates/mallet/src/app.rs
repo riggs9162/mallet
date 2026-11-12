@@ -15,6 +15,7 @@ mod map_dialogs;
 mod model_browser;
 mod new_objects;
 mod options;
+mod paint_select;
 mod paste_special;
 mod problems_window;
 mod properties;
@@ -244,6 +245,8 @@ pub struct MalletApp {
     overlay_drag: Option<decal_tools::CornerPointer>,
     /// The displacement paint stroke in progress, if any.
     paint_stroke: Option<displacement_tool::PaintStroke>,
+    /// The Selection tool's Shift paint select stroke in progress, if any.
+    paint_select: Option<paint_select::PaintSelect>,
     /// Where the displacement paint brush sits under the mouse.
     brush_spot: Option<displacement_tool::BrushSpot>,
     /// The Paste Special dialog's settings, kept between pastes as Hammer does.
@@ -307,6 +310,7 @@ impl MalletApp {
             vertex_drag: None,
             overlay_drag: None,
             paint_stroke: None,
+            paint_select: None,
             brush_spot: None,
             paste_options: editor::PasteOptions::default(),
             hint_modifiers: None,
@@ -892,6 +896,7 @@ impl MalletApp {
         let (mut camera_ms, mut views_ms) = (0.0, 0.0);
         self.cursor = None;
         editor.paste_cursor = None;
+        self.end_paint_select_with_tool(editor);
         for (slot, rect) in rects.into_iter().enumerate() {
             if editor.maximized.is_some_and(|maximized| maximized != slot) {
                 continue;
@@ -989,10 +994,12 @@ impl MalletApp {
         let picking = editor.active_face_pick().is_some();
         let painting = !picking && self.paint_displacements_3d(slot, rect, response, editor, pointer);
         let gizmo_hot = !picking
+            && !self.paint_selecting(slot)
             && (self.use_gizmo(slot, rect, response, editor, pointer)
                 || self.vertex_tool_3d(slot, rect, response, editor, pointer)
                 || self.overlay_tool_3d(slot, rect, response, editor, pointer)
                 || painting);
+        let selecting = !picking && self.paint_select_3d(slot, rect, response, editor, pointer, gizmo_hot);
         if picking && response.hovered() && !looking {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -1008,6 +1015,7 @@ impl MalletApp {
         } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             match editor.tool {
+                Tool::Select if selecting => {}
                 Tool::Select => {
                     let hit = editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks());
                     pick(editor, hit, pointer.modifiers);
@@ -1465,6 +1473,9 @@ impl MalletApp {
         response: &Response,
         editor: &Editor,
     ) -> Option<egui::CursorIcon> {
+        if self.paint_selecting(index) {
+            return None;
+        }
         match self.drag.filter(|drag| drag.view() == index) {
             Some(Drag::Resize { handle, .. } | Drag::ResizeBlock { handle, .. }) => return Some(handle.cursor()),
             Some(Drag::Skew { handle, .. }) => return Some(handle.skew_cursor()),
@@ -1607,6 +1618,9 @@ impl MalletApp {
             }
             return;
         }
+        if editor.tool == Tool::Select && self.paint_select_2d(index, view, rect, response, editor, pointer) {
+            return;
+        }
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
                 self.drag = Some(Self::begin_drag(index, view, rect, origin, editor));
@@ -1621,6 +1635,8 @@ impl MalletApp {
                         .scene
                         .pick_2d(view.axis, view.to_world(rect, position), tolerance, editor.solid_picks());
                     match hit {
+                        Some(owner) if pointer.modifiers.shift => editor.select_picked([owner], SelectMode::Add),
+                        None if pointer.modifiers.shift => {}
                         Some(owner) if editor.selection.contains(&owner) && !pointer.modifiers.ctrl => {
                             editor.overlay.handle_mode = editor.overlay.handle_mode.next();
                             editor.message = format!("{} handles", editor.overlay.handle_mode.label());

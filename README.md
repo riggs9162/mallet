@@ -108,8 +108,9 @@ These follow Hammer++'s default keybindings.
 | Shift+G | Magnify tool: left-click a 2D view to zoom in and right-click to zoom out, around the cursor |
 | Alt+Enter or double-click | Object Properties for the selection: keyvalues, outputs, inputs and flags from the game's FGD. Angles get Hammer's compass with Up and Down, models a Browse... button, and colours a colour picker; fields apply when you leave them, and Apply applies what is still being typed. Turn SmartEdit off to see every key as plain text |
 | F9 / Shift+F9 | Run Map: Hammer's normal compile dialog, or the compile window after Expert... / compile again with the preset used last |
-| Click | In 2D, click a brush's centre × or its outline to select it; in 3D, click it (or aim the crosshair at it in mouselook). Props are hit where their model is, so clicks through gaps reach what is behind; only when nothing else is hit does a prop's box count. Entities are selected whole; Ctrl+click toggles |
+| Click | In 2D, click a brush's centre × or its outline to select it; in 3D, click it (or aim the crosshair at it in mouselook). Props are hit where their model is, so clicks through gaps reach what is behind; only when nothing else is hit does a prop's box count. Entities are selected whole; Ctrl+click toggles and Shift+click adds |
 | Drag on empty space | Select everything fully inside the rectangle (Ctrl adds) |
+| Shift+drag | Paint select with the Selection tool: while Shift and the left button are held, everything the cursor passes over joins the selection, in the 2D and 3D views (in mouselook, everything the crosshair passes over). A Shift drag that starts on the selection in a 2D view, or on the gizmo in 3D, still moves the selection and clones it on release |
 | Drag the selection | Move it so its corner snaps to the grid, with texture lock; hold Shift on release to clone |
 | Drag a white handle | Resize the selection or the pending block from that edge or corner |
 | Click a selected object (2D) | Switch its handles between scale, rotate (round corner handles) and skew (edge handles), as in Hammer |
