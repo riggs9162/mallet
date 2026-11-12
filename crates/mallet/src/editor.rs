@@ -1306,8 +1306,6 @@ impl Editor {
         if self.selection.is_empty() {
             return Err("nothing is selected".to_owned());
         }
-        let world = vmf.world().ok_or("the map has no world")?;
-        let world_id = world.id().ok_or("the world has no id")?;
         let mut ids = IdAllocator::for_map(vmf);
         let mut sides = CopiedSides::default();
         let mut edits = Vec::new();
@@ -1315,16 +1313,20 @@ impl Editor {
         for owner in &self.selection {
             match *owner {
                 Owner::Solid(id) => {
-                    let mut solid = world
-                        .solids()
-                        .find(|solid| solid.id() == Some(id))
-                        .ok_or_else(|| format!("no world brush has id {id}"))?
-                        .clone();
+                    let (entity, solid) = vmf
+                        .all_entities()
+                        .find_map(|entity| {
+                            let solid = entity.solids().find(|solid| solid.id() == Some(id))?;
+                            Some((entity.id(), solid))
+                        })
+                        .ok_or_else(|| format!("no brush has id {id}"))?;
+                    let entity = entity.ok_or("the brush's entity has no id")?;
+                    let mut solid = solid.clone();
                     sides.renumber_solid(&mut solid, &mut ids);
                     solid.translate(offset);
                     copies.extend(solid.id().map(Owner::Solid));
                     edits.push(Edit::AddSolid {
-                        entity: world_id,
+                        entity,
                         index: None,
                         solid,
                     });
