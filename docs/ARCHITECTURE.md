@@ -9,9 +9,9 @@ maps through a built-in MCP server.
 | Crate | Purpose |
 | --- | --- |
 | `mallet-kv` | Reads and writes Valve KeyValues text. Keeps every key, block and duplicate in order and writes Hammer's exact layout (tabs, CRLF). |
-| `mallet-vmf` | Typed VMF model on top of `mallet-kv`, brush geometry, the edit/undo layer, Source's lighting rules (`light`) and where VBSP puts a face's luxels (`lightmap`). No UI dependencies. |
+| `mallet-vmf` | Typed VMF model on top of `mallet-kv`, brush geometry, the edit/undo layer, Source's lighting rules (`light`), where VBSP puts a face's luxels (`lightmap`) and Source's ambient sound rules (`sound`). No UI dependencies. |
 | `mallet-format` | The `.mallet` map format: the `Vmf` model as compact binary, with a checksum per section and room for the editor's own state. |
-| `mallet-content` | Game content: `gameinfo.txt` search paths, VPK archives, VMT materials, VTF textures, MDL models and FGD entity classes. |
+| `mallet-content` | Game content: `gameinfo.txt` search paths, VPK archives, VMT materials, VTF textures, MDL models, WAV and MP3 sounds and FGD entity classes. |
 | `mallet` | The editor application: window, viewports, key bindings and the MCP server. |
 
 The icon lives in `branding/`: `make_icons.py` draws the mallet once and writes the SVG,
@@ -669,6 +669,58 @@ cached chunks and props as the textured view with its own shaders (`lit.wgsl`):
   marked so faces showing luxels skip them, while props and faces without luxels light
   them as before.
 
+## Sound preview
+
+`mallet_vmf::sound` is Source's ambient sound written down, with no audio device in it,
+following the public SDK's `soundscape.cpp`, `soundscape_system.cpp`, `c_soundscape.cpp`
+and `sound.cpp`:
+
+- `MapSounds::read` turns a map's entities into what the server makes of them when the map
+  starts: soundscape entities in map order with their radius, soundscape name, whether
+  they start disabled and where their `position0` to `position7` targets are (a proxy
+  takes its main soundscape's name and positions); `trigger_soundscape` volumes as brush
+  planes; and `ambient_generic`s with the volume, pitch, fade in, spin up and sound level
+  their keys give (`40 + 20 log10(radius / 36)` dB, or none with Play Everywhere). It
+  also lists the brush entities traces pass through and the `func_detail`s that count
+  as world. `Scene::build` keeps it in `Scene::sounds`.
+- `SoundscapeChooser` is the server's pick for one listener: the entity in charge is
+  tested first, then every other enabled one takes over when the listener is inside its
+  radius, nothing solid lies between, and it is nearer or the current one is out of
+  range. Entering a trigger puts its soundscape on top of a stack; leaving the last one
+  clears the entity but keeps the sounds, as the game does. As in the SDK, a triggerable
+  soundscape also takes over by its radius.
+- `SoundscapePlayer` is the client: `set_params` starts a soundscape when the entity or
+  the soundscape changed, and an unknown name leaves the old sounds playing. Commands are
+  read from the script's own keys in order, as the engine reads them, so quirks carry
+  over: a looping sound with a place starts at 0.05 volume and one without from silence,
+  a loop of the same file and pitch is taken over rather than started again, a
+  `playlooping` whose `position` is not a number means position 0, and sub-soundscapes
+  never set `dsp`. Sounds go to a `SoundSink`.
+- `distance_gain` is `SND_GetGain` (inverse distance from 36 units at 60 dB, compressed
+  above a gain of 0.5, faded out below 0.01), `pan` the two-speaker spread, and
+  `obscured_gain` the five-trace test that takes 2.7 dB off for the middle of a hidden
+  source and for each hidden point around it. These three come from the engine's
+  behaviour rather than the SDK, which does not include the sound mixer.
+
+`mallet_content::sound` decodes WAV (8 to 32 bit, float and Microsoft ADPCM) and MP3
+(through `symphonia`) into 16 bit samples, with the loop point from the `cue ` or `smpl`
+chunk. A file without one never repeats.
+
+`crates/mallet/src/sound.rs` is the preview. Each frame `Editor::update_sound` hands it
+the window's camera, the scene and the options; it runs at most 25 times a second, and
+the window asks for a repaint every 40 ms while it is on. It reads the soundscape scripts
+(and, once a map needs them, the game sound scripts) on a thread, per game and map name,
+and sound files on another, one at a time and only the ones a voice asks for. Traces go
+through `Scene::brush_line_blocked`, with tool materials the compilers remove taken from
+the VMTs. Voices are the engine's channels: each tick they get a volume, a pan and a
+speed from where the camera is, and plain stereo files keep their channels.
+
+`sound/mixer.rs` mixes the voices into stereo with linear resampling, glides gains over
+30 ms and falls silent when the preview has not updated for 0.7 s, as when the window is
+minimized. `sound/output.rs` owns the device on a thread of its own: `cpal` on Windows
+and macOS, and on Linux a pipe to `pw-cat`, `paplay` or `aplay`, so the Linux build links
+no sound library. Turning the preview off closes the device.
+
 ## MCP server
 
 The editor starts an MCP server at `http://127.0.0.1:7414/mcp` (Streamable HTTP transport,
@@ -735,6 +787,7 @@ Tools:
 | `set_grid`, `center_views` | Grid size, Snap to Grid and Show Grid, and framing |
 | `set_viewport_type` | Switch a viewport slot between 3D (textured, wireframe, lighting preview) and 2D types |
 | `list_lights` | The map's lights as the lighting preview reads them, the sky light, fog, sky, texture lights in use, the latest frame's lighting numbers and, optionally, the lighting entity catalogue |
+| `sound_preview` | What the sound preview plays: the soundscape entity in charge, every voice with its volume, distance and the gain of each speaker, the scripts read and the mix's peak level; optionally the map's sound entities and the game's soundscape names; turns the preview on or off and reloads the scripts |
 | `set_camera`, `set_view_2d` | Aim the 3D camera, pan and zoom the 2D views |
 | `screenshot` | PNG of one or all viewports, rendered offscreen, or of the whole window (`window`) |
 | `set_entity_outputs` | Replace an entity's outputs |

@@ -132,6 +132,8 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 - [x] Model browser: thumbnails, folder tree, search with wildcards and `!` negation, model preview with skins and bodygroups. Hammer, improved in H++
 - [ ] Model browser: several panels, and attachments in the preview. H++
 - [ ] Draw props in the 3D views with their `skin` and `body` keys.
+- [ ] Soundscape browser: the game's soundscapes by script file, what each plays, a listen button and a way to give one to the selected `env_soundscape`.
+- [ ] Room effects (`dsp`) in the sound preview.
 - [ ] Sound browser (Ctrl+Shift+S) with playback of WAV, MP3 and OGG, a volume slider and Reload Sounds. Hammer, improved in H++
 - [ ] Particle browser with a preview of each system. Hammer (from Alien Swarm), H++
 - [ ] Alpha channel display in the texture browser. H++
@@ -218,5 +220,6 @@ left. See the [README](../README.md) for how each one works.
 - Texture browser over every mounted game and addon, with Hammer's filters, keywords, Mark and Replace.
 - Prop models in 3D and 2D, placed by `origin`, `angles` and `modelscale`.
 - Hammer++'s 3D Lighting Preview, with per-luxel lighting, shadows, the 2D and 3D skybox, fog, glows and light helpers.
+- A sound preview at the 3D camera: soundscapes chosen and played by the game's rules, and the ambient generics that play from the start.
 - CompilePal-style compile window with presets, a separate thread, a Problems tab, SourceCubemap and leak lines (Load and Unload Pointfile).
 - Editable key bindings, Mallet Options for every setting, and the MCP server for AI agents.

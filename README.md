@@ -15,7 +15,8 @@ a CompilePal-style compile window with presets, SourceCubemap and leak lines,
 Hammer's texture tool with a texture browser that loads every mounted game's materials,
 Hammer's displacements with painting, sewing and blended textures, a
 model browser with thumbnails and a preview you can turn, and
-a Hammer++-style 3D Lighting Preview that lights the map with every Source light entity. A
+a Hammer++-style 3D Lighting Preview that lights the map with every Source light entity, and a
+sound preview that plays the map's soundscapes and ambient sounds as the game would. A
 built-in MCP server lets AI agents inspect and edit maps, compile them and take
 screenshots. It is a work in progress: see the [roadmap](docs/ROADMAP.md) for what comes next.
 
@@ -291,6 +292,36 @@ for the Entity tool, grouped into baked lights, dynamic lights, glows, beams and
 tone mapping and shadow controls, and lighting helpers, each with what it does. New
 lighting entities get Source's default settings even without the game's FGD.
 
+## Sound
+
+The speaker button on the toolbar, or View > Sound Preview, plays what a player standing
+at the 3D camera would hear. Fly the camera through the map to walk through its sound.
+
+Soundscapes follow the game's rules. The nearest `env_soundscape` whose radius the camera
+is in, and whose origin it can see past solid brushes, takes over; a radius of -1 reaches
+anywhere it can be seen from. Once the camera leaves it, its soundscape keeps playing
+until another takes over. `env_soundscape_proxy` plays its main soundscape from its own
+place, `trigger_soundscape` turns its `env_soundscape_triggerable` on while the camera is
+inside, and entities that start disabled stay out. The scripts are read as the game reads
+them: every file `scripts/soundscapes_manifest.txt` lists, then the map's own
+`scripts/soundscapes_<map>.txt`. Looping sounds cross-fade over three seconds, random
+sounds play on their timers at their positions (`position0` to `position7`, or around
+the listener), and sub-soundscapes bring their volume and position overrides.
+
+Every `ambient_generic` that is looped and does not start silent plays too, from its
+`SourceEntityName` when it has one, at its volume and pitch, with its fade in and spin
+up. A sound file fades with distance by its `radius`; a name from the game's sound scripts
+uses the script's own sound level, as in the game.
+
+Sounds fade with distance on the engine's curve for their sound level, spread between
+the speakers by direction, and lose 2.7 dB for each part of them a world brush hides. A
+file without a loop point plays once however it is started, so a "looping" sound that
+falls silent here falls silent in the game as well. The 3D view names the soundscape
+playing and warns about soundscapes no script defines and sound files that are missing.
+
+Room effects (`dsp`), sound mixers, sentences and `ambient_generic` presets and LFOs are
+left out. View > Reload Sound Scripts reads the scripts again after you edit them.
+
 ## Texturing
 
 Shift+A opens the Face Edit Sheet, laid out like Hammer++'s. In the 3D view, click a face
@@ -464,6 +495,9 @@ as you change it:
   faces are lit per luxel or every pixel; exposure, tone mapping, fill light, fake bounce,
   the sky, fog, glows, tool textures, entity boxes and light helpers; and how far lights
   reach and how many may light one spot.
+- **Sound preview**: the preview's volume, whether soundscapes and ambient generics play,
+  whether walls make sounds quieter, whether it falls silent while another window is
+  active, and whether the 3D view names the soundscape.
 - **Colours**: the background, grid, axis, selection, tool, handle and texture-face
   colours of the views, Hammer's by default, and the colour of the 3D camera in the 2D
   views.
