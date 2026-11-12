@@ -101,7 +101,8 @@ struct Target {
 
 impl Clipper {
     /// The three plane points, wound so their normal points to the front, once enough
-    /// points are placed.
+    /// points are placed. The front of a two-point line is on the right of the way it was
+    /// drawn, in every 2D view: below a line drawn from left to right.
     pub fn plane_points(&self) -> Option<[DVec3; 3]> {
         if self.three_point {
             let [a, b, c] = self.points.as_slice().try_into().ok()?;
@@ -109,10 +110,12 @@ impl Clipper {
             return Some([a, b, c]);
         }
         let [a, b] = self.points.as_slice().try_into().ok()?;
-        let [_, _, depth] = self.axis?.axes();
-        let mut along = DVec3::ZERO;
-        along[depth] = 64.0;
-        let points = [a, a + along, b];
+        let [horizontal, vertical, _] = self.axis?.axes();
+        let (mut right, mut up) = (DVec3::ZERO, DVec3::ZERO);
+        right[horizontal] = 1.0;
+        up[vertical] = 1.0;
+        let toward_viewer = right.cross(up);
+        let points = [a, a + toward_viewer * 64.0, b];
         Plane::from_points(points)?;
         Some(points)
     }
