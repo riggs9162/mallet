@@ -106,12 +106,31 @@ struct FaceVertex {
 /// The face number of a face the lighting preview keeps nothing for.
 const NO_FACE: u32 = u32::MAX;
 /// What a material's key ends with to name its second texture (`$basetexture2`), which
-/// displacements fade into by their alpha.
+/// displacements fade into by their alpha; `#blend3` and `#blend4` name a four-texture
+/// blend's third and fourth.
 const BLEND_SUFFIX: &str = "#blend";
+/// The textures of a blended material drawn as layers over its first.
+const BLEND_LAYERS: [usize; 3] = [2, 3, 4];
 
-/// The key of the second texture of the material with key `key`.
-fn blend_key(key: &str) -> String {
-    format!("{key}{BLEND_SUFFIX}")
+/// The key of texture `layer`, from 2 to 4, of the material with key `key`.
+fn layer_key(key: &str, layer: usize) -> String {
+    if layer == 2 {
+        format!("{key}{BLEND_SUFFIX}")
+    } else {
+        format!("{key}{BLEND_SUFFIX}{layer}")
+    }
+}
+
+/// The material and layer a key from [`layer_key`] names.
+fn split_layer_key(key: &str) -> Option<(&str, usize)> {
+    let (material, layer) = key.rsplit_once(BLEND_SUFFIX)?;
+    let layer = match layer {
+        "" => 2,
+        "3" => 3,
+        "4" => 4,
+        _ => return None,
+    };
+    Some((material, layer))
 }
 /// How far the pieces of overlays and decals are lifted off the faces they lie on, in
 /// world units. The blended pipelines' depth bias does the rest at a distance.
@@ -209,6 +228,8 @@ struct MaterialFacts {
     /// How many animation frames its texture has.
     frames: u32,
     water: Option<Water>,
+    /// Blends four textures on displacements by their painted weights.
+    four_way: bool,
 }
 
 impl MaterialFacts {
@@ -221,6 +242,7 @@ impl MaterialFacts {
             sprite: SpriteLook::default(),
             frames: 1,
             water: None,
+            four_way: false,
         }
     }
 
@@ -1652,7 +1674,7 @@ impl Renderer3D {
             .flat_map(|mesh| &mesh.faces)
             .filter(|face| face.displacement.is_some())
             .filter_map(|face| face.material.as_deref())
-            .map(|material| blend_key(&material_key(material)))
+            .flat_map(|material| BLEND_LAYERS.map(move |layer| layer_key(&material_key(material), layer)))
             .collect();
         let wanted: HashSet<String> = scene
             .meshes
@@ -1705,9 +1727,9 @@ impl Renderer3D {
                 .name("mallet textures".to_owned())
                 .spawn(move || {
                     while let Some(key) = keys.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        if let Some(material) = key.strip_suffix(BLEND_SUFFIX) {
+                        if let Some((material, layer)) = split_layer_key(key) {
                             let loaded = loader
-                                .load_second_mips(material, blocks)
+                                .load_layer_mips(material, layer, blocks)
                                 .map(|mips| (mips, MaterialFacts::opaque()));
                             if sender.send((key.clone(), loaded)).is_err() {
                                 return;
@@ -1727,6 +1749,7 @@ impl Renderer3D {
                                     sprite: material.sprite,
                                     frames: mips.as_ref().map_or(1, |mips| mips.frames.max(1)),
                                     water: material.water,
+                                    four_way: material.four_way,
                                 };
                                 mips.map(|mips| (mips, facts))
                             }
@@ -1895,13 +1918,14 @@ impl Renderer3D {
             return;
         };
         let uses_stale = |cell: &CellFaces| {
-            cell.by_texture
-                .keys()
-                .any(|key| stale.contains(key) || stale.contains(&blend_key(key)))
-                || cell
-                    .translucent
-                    .iter()
-                    .any(|face| stale.contains(&face.key) || stale.contains(&blend_key(&face.key)))
+            cell.by_texture.keys().any(|key| {
+                stale.contains(key) || BLEND_LAYERS.iter().any(|layer| stale.contains(&layer_key(key, *layer)))
+            }) || cell.translucent.iter().any(|face| {
+                stale.contains(&face.key)
+                    || BLEND_LAYERS
+                        .iter()
+                        .any(|layer| stale.contains(&layer_key(&face.key, *layer)))
+            })
         };
         let mut dirty: HashSet<[i32; 3]> = faces
             .cells
@@ -2043,9 +2067,9 @@ impl Renderer3D {
                     .as_deref()
                     .map_or_else(|| WHITE_KEY.to_owned(), material_key);
                 let texture = self.texture_for(&key);
-                if let Some(layer) = self.blend_layer(face, &key, texture, tint, highlight, remap, mesh.owner) {
-                    chunk.translucent.push(layer);
-                }
+                chunk
+                    .translucent
+                    .extend(self.blend_layers(face, &key, texture, tint, highlight, remap, mesh.owner));
                 if face.decal || texture.alpha.see_through() {
                     let mut vertices = Vec::new();
                     triangulate(face, (id, texture), tint, highlight, remap, &mut vertices);
@@ -2069,12 +2093,15 @@ impl Renderer3D {
         chunks
     }
 
-    /// The second layer of a displacement whose material blends two textures: its
-    /// triangles again with the second texture, each vertex as opaque as its alpha, drawn
-    /// over the first like a decal. `None` for other faces, for displacements without
-    /// alpha, and while the second texture is loading or when the material has none.
+    /// The layers of a displacement whose material blends textures, drawn over its
+    /// first texture like decals: its triangles again with each further texture, each
+    /// vertex as opaque as that texture is there. A two-texture blend fades into its
+    /// second texture by the vertex alpha; a four-texture blend shows its textures by
+    /// their painted weights, so that layer `n` covers its weight's share of the first
+    /// `n` weights and together they give the weighted mix. Layers are left out where
+    /// nothing shows them, and while their texture loads or when the material has none.
     #[allow(clippy::too_many_arguments)]
-    fn blend_layer(
+    fn blend_layers(
         &self,
         face: &SceneFace,
         key: &str,
@@ -2083,29 +2110,60 @@ impl Renderer3D {
         highlight: f32,
         remap: Option<&Remap>,
         owner: Option<Owner>,
-    ) -> Option<TranslucentFace> {
-        let surface = face.displacement.as_ref()?;
-        if surface.alphas.iter().all(|alpha| *alpha <= 0.0) {
-            return None;
-        }
-        let layer = blend_key(key);
-        if self.loading.contains(&layer) {
-            return None;
-        }
-        let second = self.textures.get(&layer)?.as_ref()?;
-        let mut vertices = Vec::new();
-        let look = Layer {
-            texture: second,
-            size: [base.width, base.height],
-            blend: true,
+    ) -> Vec<TranslucentFace> {
+        let Some(surface) = face.displacement.as_ref() else {
+            return Vec::new();
         };
-        displacement_triangles(face, surface, (NO_FACE, look), tint, highlight, remap, &mut vertices);
-        if vertices.is_empty() {
-            return None;
-        }
+        let opacities: Vec<(usize, Vec<f32>)> = if base.facts.four_way {
+            let Some(weights) = surface.weights.as_ref() else {
+                return Vec::new();
+            };
+            BLEND_LAYERS
+                .into_iter()
+                .map(|layer| {
+                    let shares = weights
+                        .iter()
+                        .map(|weights| {
+                            let total: f64 = weights[..layer].iter().sum();
+                            if total <= 1e-9 {
+                                0.0
+                            } else {
+                                (weights[layer - 1] / total) as f32
+                            }
+                        })
+                        .collect();
+                    (layer, shares)
+                })
+                .collect()
+        } else {
+            vec![(2, surface.alphas.iter().map(|alpha| (alpha / 255.0) as f32).collect())]
+        };
         let center = surface.bounds.center();
         let center = remap.map_or(center, |remap| remap.apply(center));
-        Some(TranslucentFace::new(center.as_vec3(), layer, vertices, owner))
+        let mut layers = Vec::new();
+        for (layer, opacity) in opacities {
+            if opacity.iter().all(|share| *share <= 0.0) {
+                continue;
+            }
+            let layer_key = layer_key(key, layer);
+            if self.loading.contains(&layer_key) {
+                continue;
+            }
+            let Some(texture) = self.textures.get(&layer_key).and_then(Option::as_ref) else {
+                continue;
+            };
+            let mut vertices = Vec::new();
+            let look = Layer {
+                texture,
+                size: [base.width, base.height],
+                opacity: Some(opacity.as_slice()),
+            };
+            displacement_triangles(face, surface, (NO_FACE, look), tint, highlight, remap, &mut vertices);
+            if !vertices.is_empty() {
+                layers.push(TranslucentFace::new(center.as_vec3(), layer_key, vertices, owner));
+            }
+        }
+        layers
     }
 
     /// Puts every chunk's triangles into one vertex buffer, batched by texture. They are
@@ -2572,7 +2630,7 @@ fn triangulate(
         let look = Layer {
             texture,
             size: [texture.width, texture.height],
-            blend: false,
+            opacity: None,
         };
         return displacement_triangles(face, surface, (id, look), tint, highlight, remap, out);
     }
@@ -2594,19 +2652,18 @@ fn triangulate(
 }
 
 /// How a layer of a displacement is drawn: its texture, the size its texture coordinates
-/// are divided by, which is the first texture's for both layers as in the game, and
-/// whether it is the second layer of a blended material.
+/// are divided by, which is the first texture's for every layer as in the game, and for
+/// the layers over the first, how opaque each vertex is.
 struct Layer<'a> {
     texture: &'a GpuTexture,
     size: [f32; 2],
-    blend: bool,
+    opacity: Option<&'a [f32]>,
 }
 
 /// The triangles of a displacement, as [`triangulate`] makes those of a flat face: each
 /// vertex is shaded by its own normal and takes its texture coordinates from where it
-/// sits on the flat face. The second layer of a blended material gives every vertex
-/// its alpha as opacity, ignores the texture's own alpha, and leaves out triangles with
-/// no alpha at all.
+/// sits on the flat face. A layer over the first texture gives every vertex its opacity,
+/// ignores the texture's own alpha, and leaves out triangles that do not show at all.
 fn displacement_triangles(
     face: &SceneFace,
     surface: &DisplacementSurface,
@@ -2631,10 +2688,9 @@ fn displacement_triangles(
             remap.matrix.transform_vector3(normal).normalize_or(normal)
         });
         let point = surface.positions[index];
-        let alpha = if layer.blend {
-            [-1.0, ((surface.alphas[index] / 255.0) as f32).clamp(f32::EPSILON, 1.0)]
-        } else {
-            opaque
+        let alpha = match layer.opacity {
+            Some(opacity) => [-1.0, opacity[index].clamp(f32::EPSILON, 1.0)],
+            None => opaque,
         };
         FaceVertex {
             position: remap.map_or(point, |remap| remap.apply(point)).as_vec3().to_array(),
@@ -2651,7 +2707,10 @@ fn displacement_triangles(
         }
     };
     for [a, b, c] in surface.triangles() {
-        if layer.blend && [a, b, c].iter().all(|index| surface.alphas[*index] <= 0.0) {
+        if layer
+            .opacity
+            .is_some_and(|opacity| [a, b, c].iter().all(|index| opacity[*index] <= 0.0))
+        {
             continue;
         }
         out.push(vertex(a));

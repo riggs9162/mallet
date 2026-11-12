@@ -196,6 +196,10 @@ pub struct Material {
     pub sprite: SpriteLook,
     /// Set for water materials, which are shaded as water rather than as plain surfaces.
     pub water: Option<Water>,
+    /// Blends four textures on displacements by the weights Hammer's Sculpt Blend
+    /// paints, as the `Lightmapped_4WayBlend` and `MultiBlend` shaders do; other blended
+    /// materials fade into their second texture by the displacement's alpha.
+    pub four_way: bool,
 }
 
 impl Material {
@@ -210,6 +214,7 @@ impl Material {
             decal_scale: 1.0,
             sprite: SpriteLook::default(),
             water: None,
+            four_way: false,
         }
     }
 }
@@ -239,6 +244,10 @@ struct Properties {
     /// The second texture of a blended material (`$basetexture2`), which displacements
     /// fade into by their vertex alpha.
     second_texture: Option<String>,
+    /// The third and fourth textures of a four-texture blend (`$basetexture3` and
+    /// `$basetexture4`).
+    third_texture: Option<String>,
+    fourth_texture: Option<String>,
     translucent: Option<bool>,
     additive: Option<bool>,
     alpha_test: Option<bool>,
@@ -407,10 +416,9 @@ impl Properties {
                 .get("%tooltexture")
                 .or_else(|| block.get("$basetexture"))
                 .map(|name| normalize(name).trim_end_matches(".vtf").to_owned()),
-            second_texture: block
-                .get("$basetexture2")
-                .map(|name| normalize(name).trim_end_matches(".vtf").to_owned())
-                .filter(|name| !name.is_empty()),
+            second_texture: texture_key(block, "$basetexture2"),
+            third_texture: texture_key(block, "$basetexture3"),
+            fourth_texture: texture_key(block, "$basetexture4"),
             translucent: flag("$translucent"),
             additive: flag("$additive"),
             alpha_test: flag("$alphatest"),
@@ -463,6 +471,8 @@ impl Properties {
         Self {
             texture: other.texture.or(self.texture),
             second_texture: other.second_texture.or(self.second_texture),
+            third_texture: other.third_texture.or(self.third_texture),
+            fourth_texture: other.fourth_texture.or(self.fourth_texture),
             translucent: other.translucent.or(self.translucent),
             additive: other.additive.or(self.additive),
             alpha_test: other.alpha_test.or(self.alpha_test),
@@ -531,6 +541,10 @@ impl Properties {
                     .unwrap_or(DEFAULT_WATER_REFLECTIVITY)
                     .clamp(MIN_WATER_REFLECTIVITY, 1.0),
             }),
+            four_way: self
+                .shader
+                .as_deref()
+                .is_some_and(|shader| matches!(shader, "lightmapped_4wayblend" | "multiblend")),
         }
     }
 
@@ -800,12 +814,19 @@ impl MaterialLoader {
         (material, mips)
     }
 
-    /// The second texture of a blended material (`$basetexture2`), as
-    /// [`MaterialLoader::load_mips`] loads the first; `None` when the material has none.
-    /// Displacements show it where their vertex alpha is high.
-    pub fn load_second_mips(&self, material: &str, blocks: bool) -> Option<Mips> {
+    /// Texture `layer`, from 2 to 4, of a blended material (`$basetexture2` to
+    /// `$basetexture4`), as [`MaterialLoader::load_mips`] loads the first; `None` when
+    /// the material has none. Displacements show the second where their vertex alpha
+    /// is high, and a four-texture blend's by the weights painted for them.
+    pub fn load_layer_mips(&self, material: &str, layer: usize, blocks: bool) -> Option<Mips> {
         let properties = self.properties(&material_key(material), 0)?;
-        let file = self.texture_file(properties.second_texture.as_ref()?)?;
+        let name = match layer {
+            2 => properties.second_texture,
+            3 => properties.third_texture,
+            4 => properties.fourth_texture,
+            _ => None,
+        }?;
+        let file = self.texture_file(&name)?;
         vtf::load_mips(|start, length| file.read(start, length), MAX_TEXTURE_SIDE, blocks).ok()
     }
 
@@ -972,6 +993,15 @@ impl MaterialLoader {
     }
 }
 
+/// A texture named by a material key, without `materials/` or `.vtf`, or `None` when the
+/// key is missing or empty.
+fn texture_key(block: &Block, key: &str) -> Option<String> {
+    block
+        .get(key)
+        .map(|name| normalize(name).trim_end_matches(".vtf").to_owned())
+        .filter(|name| !name.is_empty())
+}
+
 /// Applies `work` to every item using one thread per CPU core, keeping the input order.
 pub fn parallel_map<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
@@ -1075,6 +1105,13 @@ mod tests {
         assert!(properties_of("LightmappedGeneric { \"$basetexture\" \"brick/brick\" }")
             .second_texture
             .is_none());
+        let four = properties_of(
+            "Lightmapped_4WayBlend { \"$basetexture\" \"a\" \"$basetexture2\" \"b\" \"$basetexture3\" \"c\" \"$basetexture4\" \"d\" }",
+        );
+        assert_eq!(four.third_texture.as_deref(), Some("c"));
+        assert_eq!(four.fourth_texture.as_deref(), Some("d"));
+        assert!(four.material().four_way);
+        assert!(!patched.material().four_way);
     }
 
     #[test]
