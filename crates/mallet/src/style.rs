@@ -23,6 +23,8 @@ pub struct ViewStyle {
     pub tool: Color32,
     pub handles: Color32,
     pub selected_faces: Color32,
+    /// The 3D view's camera drawn in the 2D views.
+    pub camera: Color32,
     /// Grid lines closer than this many pixels are thinned out by doubling their spacing.
     pub grid_min_pixels: u32,
     /// Units between highlighted grid lines; 0 for none.
@@ -43,6 +45,7 @@ impl ViewStyle {
         tool: Color32::WHITE,
         handles: Color32::WHITE,
         selected_faces: Color32::from_rgb(255, 210, 60),
+        camera: Color32::from_rgb(255, 40, 40),
         grid_min_pixels: 4,
         grid_highlight_every: 64,
         grid_major_every: 1024,
@@ -73,6 +76,7 @@ impl ViewStyle {
             tool: color(colors.tool),
             handles: color(colors.handles),
             selected_faces: color(colors.selected_faces),
+            camera: color(colors.camera),
             grid_min_pixels: min_pixels,
             grid_highlight_every: spacing(view.grid_highlight),
             grid_major_every: spacing(view.grid_major),

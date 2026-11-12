@@ -6,7 +6,9 @@ use mallet_vmf::geometry::Bounds;
 
 use crate::canvas::Canvas;
 use crate::clipper::{ClipOverlay, CLIP_PLANE_COLOR};
-use crate::scene::{box_edges, entity_marker_edges, Overlay, Remap, Scene, AGENT_CAMERA_COLOR, HANDLE_HALF_SIZE};
+use crate::scene::{
+    box_edges, entity_marker_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR, HANDLE_HALF_SIZE,
+};
 use crate::style;
 use crate::transform::HandleMode;
 
@@ -353,6 +355,9 @@ impl View2D {
     /// marquee and the corner label. The GPU-drawn views use this on top of their image.
     pub fn draw_overlay(&self, canvas: &mut dyn Canvas, rect: Rect, overlay: &Overlay, active: bool) {
         let style = style::current();
+        if let Some(camera) = &overlay.view_camera {
+            self.draw_view_camera(canvas, rect, camera);
+        }
         if let Some(handles) = &overlay.handles {
             let mode = overlay.handle_mode;
             for (handle, at) in self.handle_positions(rect, handles) {
@@ -433,6 +438,17 @@ impl View2D {
                 style.handles,
             );
         }
+    }
+
+    /// Draws the 3D view's camera: a circle where it stands and its view pyramid, so
+    /// the field of view and the way it looks show in every 2D view.
+    fn draw_view_camera(&self, canvas: &mut dyn Canvas, rect: Rect, camera: &CameraPreview) {
+        /// Radius of the circle drawn where the camera stands, in pixels.
+        const EYE_PIXELS: f32 = 4.0;
+        let color = style::current().camera;
+        self.draw_edges(canvas, rect, &camera.edges(), None, color);
+        let eye = self.to_screen(rect, self.axis.project(camera.position));
+        canvas.circle(eye, EYE_PIXELS, color);
     }
 
     /// Labels a box's width above it and its height to its left, as Hammer labels sizes.

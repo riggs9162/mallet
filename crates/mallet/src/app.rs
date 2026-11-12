@@ -971,6 +971,9 @@ impl MalletApp {
         camera_updated: &mut bool,
     ) {
         let ctx = ui.ctx().clone();
+        if rect.height() >= 1.0 {
+            editor.camera.aspect = f64::from(rect.width() / rect.height());
+        }
         let was_looking = editor.camera.mouse_look();
         let mut moving = false;
         let typing = ctx.wants_keyboard_input() && !was_looking;
@@ -2272,14 +2275,71 @@ fn viewport_menu(ui: &mut egui::Ui, slot: usize, rect: Rect, editor: &mut Editor
             }
         }
     });
+    let mut beside = label;
     if mode == ViewMode::Lighting {
-        lighting_button(ui, slot, rect, label, editor);
+        beside = lighting_button(ui, slot, rect, label, editor);
     }
+    if mode.view_index().is_none() {
+        camera_button(ui, slot, rect, beside, editor);
+    }
+}
+
+/// The camera button beside a 3D viewport's label, which opens the field of view, draw
+/// distance and the camera's preview in the 2D views; Mallet Options > Viewports has
+/// every viewport setting.
+fn camera_button(ui: &mut egui::Ui, slot: usize, rect: Rect, beside: Rect, editor: &mut Editor) {
+    let button = Rect::from_min_size(beside.right_top() + egui::vec2(2.0, 0.0), egui::vec2(20.0, 19.0));
+    let response = ui
+        .interact(button, Id::new(("camera_button", slot)), Sense::click())
+        .on_hover_text("Camera settings");
+    let painter = ui.painter_at(rect);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        painter.rect_stroke(
+            button,
+            2.0,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_gray(120)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    painter.text(
+        button.center(),
+        egui::Align2::CENTER_CENTER,
+        egui_phosphor::regular::VIDEO_CAMERA,
+        egui::FontId::proportional(14.0),
+        crate::style::current().camera,
+    );
+    let popup = Id::new(("camera_settings", slot));
+    if response.clicked() {
+        ui.memory_mut(|memory| memory.toggle_popup(popup));
+    }
+    egui::popup::popup_below_widget(
+        ui,
+        popup,
+        &response,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(250.0);
+            let mut more = false;
+            let changed = options::camera_quick_settings(ui, editor, &mut more);
+            if more {
+                editor.options_open = true;
+                editor.options_section = Some("viewports".to_owned());
+                ui.memory_mut(|memory| memory.close_popup());
+            }
+            let unsaved = ui.memory(|memory| memory.data.get_temp::<bool>(popup).unwrap_or(false)) || changed;
+            let busy = ui.input(|input| input.pointer.any_down());
+            if unsaved && !busy {
+                editor.save_config();
+            }
+            ui.memory_mut(|memory| memory.data.insert_temp(popup, unsaved && busy));
+        },
+    );
 }
 
 /// The sun button beside a lighting preview's label, which opens the lighting settings
 /// used most; Mallet Options > Lighting preview has every one.
-fn lighting_button(ui: &mut egui::Ui, slot: usize, rect: Rect, label: Rect, editor: &mut Editor) {
+fn lighting_button(ui: &mut egui::Ui, slot: usize, rect: Rect, label: Rect, editor: &mut Editor) -> Rect {
     let button = Rect::from_min_size(label.right_top() + egui::vec2(2.0, 0.0), egui::vec2(20.0, 19.0));
     let response = ui
         .interact(button, Id::new(("lighting_button", slot)), Sense::click())
@@ -2348,6 +2408,7 @@ fn lighting_button(ui: &mut egui::Ui, slot: usize, rect: Rect, label: Rect, edit
             }
         },
     );
+    button
 }
 
 /// A hint at the bottom of a lighting preview whose map gives off no light at all.

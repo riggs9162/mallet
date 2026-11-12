@@ -637,6 +637,8 @@ pub struct ColorOptions {
     pub handles: Rgb,
     /// The outline of faces the texture tool has selected.
     pub selected_faces: Rgb,
+    /// The 3D view's camera drawn in the 2D views.
+    pub camera: Rgb,
 }
 
 impl Default for ColorOptions {
@@ -651,6 +653,7 @@ impl Default for ColorOptions {
             tool: [255, 255, 255],
             handles: [255, 255, 255],
             selected_faces: [255, 210, 60],
+            camera: [255, 40, 40],
         }
     }
 }
@@ -760,6 +763,9 @@ impl CompileOptions {
     }
 }
 
+/// Default reach of the 3D camera's view pyramid in the 2D views, in units.
+pub const DEFAULT_CAMERA_PREVIEW_LENGTH: f64 = 256.0;
+
 /// How the viewports look and move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -772,6 +778,10 @@ pub struct ViewOptions {
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
     pub fov: f64,
+    /// Draw the 3D view's camera and what it sees in the 2D views.
+    pub camera_preview: bool,
+    /// How far ahead of the camera its view pyramid reaches in the 2D views, in units.
+    pub camera_preview_length: f64,
     /// 3D camera speed in units per second.
     pub camera_speed: f64,
     /// Degrees turned per point of mouse movement in mouselook.
@@ -811,6 +821,8 @@ impl Default for ViewOptions {
             collapsed_vertices: false,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
+            camera_preview: true,
+            camera_preview_length: DEFAULT_CAMERA_PREVIEW_LENGTH,
             camera_speed: crate::view3d::DEFAULT_MOVE_SPEED,
             look_sensitivity: crate::view3d::DEFAULT_LOOK_SENSITIVITY,
             default_grid: 64.0,

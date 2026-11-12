@@ -91,6 +91,12 @@ grid size with Snap to Grid and Show Grid, the texture and rotation locks, the g
 Check for Problems, Entity Report, Map Properties and Run Map. It wraps onto a second row
 when the window is too narrow for one.
 
+The 2D views show the 3D view's camera: a circle where it stands and its view pyramid,
+as wide as the field of view and as tall as the 3D view's picture, so you can see what the
+camera sees from above and the sides. The camera button beside a 3D viewport's label
+holds the field of view, the draw distance, whether the 2D views show the camera, how far
+its pyramid reaches and its colour.
+
 ## Controls
 
 These follow Hammer++'s default keybindings.
@@ -446,7 +452,8 @@ as you change it:
   builds.
 - **Compiling**: how compiles run, the folder `.mallet` maps compile in and how much
   compiler output the compile window keeps.
-- **Viewports**: draw distance, field of view, camera speed, crouch speed and acceleration,
+- **Viewports**: draw distance, field of view, the 3D camera's preview in the 2D views
+  and how far it reaches, camera speed, crouch speed and acceleration,
   how far the mouse wheel moves the camera, mouselook sensitivity and smoothing,
   how far the wheel zooms the 2D views, how close a click must be to select a brush, the
   grid of new maps, how dense the grid may get and how often grid lines are highlighted.
@@ -458,7 +465,8 @@ as you change it:
   the sky, fog, glows, tool textures, entity boxes and light helpers; and how far lights
   reach and how many may light one spot.
 - **Colours**: the background, grid, axis, selection, tool, handle and texture-face
-  colours of the views, Hammer's by default.
+  colours of the views, Hammer's by default, and the colour of the 3D camera in the 2D
+  views.
 - **Editing**: the texture new brushes get, the Entity tool's class, how many recent
   textures are listed, texture lock and texture scale lock, the rotation snap step,
   arrow-key nudging and the 3D gizmo.

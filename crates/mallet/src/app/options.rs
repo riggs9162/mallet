@@ -581,6 +581,7 @@ fn viewports_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
                 .add(egui::Slider::new(&mut view.fov, 50.0..=120.0).integer().suffix("°"))
                 .changed();
             ui.end_row();
+            camera_preview_rows(ui, view, dirty);
             ui.label("Camera speed");
             *dirty |= ui
                 .add(
@@ -1057,6 +1058,67 @@ pub(super) fn lighting_quick_settings(ui: &mut egui::Ui, editor: &mut Editor, mo
     }
 }
 
+/// Rows for showing the 3D camera in the 2D views and how far its view pyramid reaches,
+/// for a two-column grid.
+fn camera_preview_rows(ui: &mut egui::Ui, view: &mut config::ViewOptions, dirty: &mut bool) {
+    ui.label("Camera in 2D views")
+        .on_hover_text("Draw where the 3D view's camera stands and what it sees in the 2D views.");
+    *dirty |= ui
+        .checkbox(&mut view.camera_preview, "Show the 3D camera's view")
+        .changed();
+    ui.end_row();
+    ui.label("Camera preview length")
+        .on_hover_text("How far ahead of the camera its view pyramid reaches in the 2D views.");
+    *dirty |= ui
+        .add_enabled(
+            view.camera_preview,
+            egui::Slider::new(&mut view.camera_preview_length, 32.0..=8192.0)
+                .logarithmic(true)
+                .integer()
+                .suffix(" units"),
+        )
+        .changed();
+    ui.end_row();
+}
+
+/// The camera settings used most, for the camera button of a 3D viewport: field of view,
+/// draw distance and the camera's preview in the 2D views. `more` is set when
+/// "All viewport settings" is clicked. Returns whether a setting changed.
+pub(super) fn camera_quick_settings(ui: &mut egui::Ui, editor: &mut Editor, more: &mut bool) -> bool {
+    ui.spacing_mut().slider_width = 130.0;
+    let view = &mut editor.config.view;
+    let mut dirty = false;
+    egui::Grid::new("camera_quick")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Field of view");
+            dirty |= ui
+                .add(egui::Slider::new(&mut view.fov, 50.0..=120.0).integer().suffix("°"))
+                .changed();
+            ui.end_row();
+            ui.label("Draw distance");
+            dirty |= ui
+                .add(
+                    egui::Slider::new(&mut view.draw_distance, 1024.0..=65536.0)
+                        .logarithmic(true)
+                        .integer()
+                        .suffix(" units"),
+                )
+                .changed();
+            ui.end_row();
+            camera_preview_rows(ui, view, &mut dirty);
+            ui.label("Camera colour");
+            dirty |= ui.color_edit_button_srgb(&mut editor.config.colors.camera).changed();
+            ui.end_row();
+        });
+    ui.add_space(4.0);
+    if ui.button(format!("{} All viewport settings...", icon::GEAR)).clicked() {
+        *more = true;
+    }
+    dirty
+}
+
 /// A menu of shadow map sizes in pixels. Returns whether it changed.
 fn size_choice(ui: &mut egui::Ui, id: &str, value: &mut u32, choices: &[u32]) -> bool {
     let mut changed = false;
@@ -1097,7 +1159,7 @@ fn colors_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         "The colours the viewports are drawn with. The defaults are Hammer's.",
     );
     let colors = &mut editor.config.colors;
-    let rows: [(&str, &mut config::Rgb); 9] = [
+    let rows: [(&str, &mut config::Rgb); 10] = [
         ("Background", &mut colors.background),
         ("Grid", &mut colors.grid),
         ("Highlighted grid lines", &mut colors.grid_highlight),
@@ -1107,6 +1169,7 @@ fn colors_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         ("Block tool and marquee", &mut colors.tool),
         ("Selection handles", &mut colors.handles),
         ("Faces picked for texturing", &mut colors.selected_faces),
+        ("3D camera in the 2D views", &mut colors.camera),
     ];
     egui::Grid::new("color_options")
         .num_columns(2)

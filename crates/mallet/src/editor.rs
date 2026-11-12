@@ -29,7 +29,7 @@ use crate::document::Document;
 use crate::input::InputFrame;
 use crate::lighting::{load_texture_lights, TextureLights};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
-use crate::scene::{decal_key, entity_model, model_key, DecalSizes, ModelCache, Overlay, Owner, Scene};
+use crate::scene::{decal_key, entity_model, model_key, CameraPreview, DecalSizes, ModelCache, Overlay, Owner, Scene};
 use crate::view2d::{Axis2D, View2D};
 use crate::view3d::Camera3D;
 
@@ -1269,6 +1269,18 @@ impl Editor {
         }
     }
 
+    /// The 3D view's camera for the 2D views, when Mallet Options > Viewports shows it.
+    pub fn view_camera_preview(&self) -> Option<CameraPreview> {
+        let view = &self.config.view;
+        view.camera_preview.then(|| CameraPreview {
+            position: self.camera.position,
+            forward: self.camera.forward(),
+            fov: self.camera.fov,
+            aspect: self.camera.aspect,
+            length: view.camera_preview_length.max(1.0),
+        })
+    }
+
     /// The overlay to draw, including the resize handles.
     pub fn display_overlay(&self) -> Overlay {
         let handle_mode = if self.tool == Tool::Select {
@@ -1280,6 +1292,7 @@ impl Editor {
             handles: self.handle_box(),
             handle_mode,
             agent_camera: self.agent_camera_marker(),
+            view_camera: self.view_camera_preview(),
             ..self.overlay.clone()
         }
     }

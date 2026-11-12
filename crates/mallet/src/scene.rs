@@ -316,6 +316,30 @@ pub struct Overlay {
     /// Edges of the camera an MCP agent looks through, drawn in the window's views while
     /// the agent works in the same tab in its own view. Empty when there is none.
     pub agent_camera: Vec<[DVec3; 2]>,
+    /// The 3D view's camera, drawn in the 2D views when Mallet Options > Viewports shows
+    /// it there. `None` when it is hidden.
+    pub view_camera: Option<CameraPreview>,
+}
+
+/// Where the 3D view's camera stands and what it sees, for drawing it in the 2D views.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraPreview {
+    pub position: DVec3,
+    /// The way the camera looks, of unit length.
+    pub forward: DVec3,
+    /// Horizontal field of view in degrees.
+    pub fov: f64,
+    /// Width over height of the 3D view's picture.
+    pub aspect: f64,
+    /// How far ahead of the camera its view pyramid reaches, in world units.
+    pub length: f64,
+}
+
+impl CameraPreview {
+    /// The edges of the camera's view pyramid.
+    pub fn edges(&self) -> Vec<[DVec3; 2]> {
+        camera_frustum_edges(self.position, self.forward, self.fov, self.aspect, self.length)
+    }
 }
 
 impl Overlay {
@@ -346,12 +370,33 @@ pub fn camera_marker_edges(position: DVec3, forward: DVec3, fov_degrees: f64) ->
         min: position - half,
         max: position + half,
     });
+    edges.extend(camera_frustum_edges(
+        position,
+        forward,
+        fov_degrees,
+        1.0 / CAMERA_MARKER_ASPECT,
+        CAMERA_MARKER_DEPTH,
+    ));
+    edges
+}
+
+/// The edges of a camera's view pyramid: lines from `position` to the corners of a
+/// picture `depth` units ahead, as wide as the horizontal field of view and `aspect`
+/// times narrower than tall, with a tick on its top edge that shows which way is up.
+pub fn camera_frustum_edges(
+    position: DVec3,
+    forward: DVec3,
+    fov_degrees: f64,
+    aspect: f64,
+    depth: f64,
+) -> Vec<[DVec3; 2]> {
+    let mut edges = Vec::with_capacity(10);
     let forward = forward.normalize_or(DVec3::X);
     let right = forward.cross(DVec3::Z).normalize_or(DVec3::Y);
     let up = right.cross(forward);
-    let half_width = CAMERA_MARKER_DEPTH * (fov_degrees.clamp(1.0, 170.0).to_radians() * 0.5).tan();
-    let half_height = half_width * CAMERA_MARKER_ASPECT;
-    let centre = position + forward * CAMERA_MARKER_DEPTH;
+    let half_width = depth * (fov_degrees.clamp(1.0, 170.0).to_radians() * 0.5).tan();
+    let half_height = half_width / aspect.clamp(0.1, 10.0);
+    let centre = position + forward * depth;
     let corners = [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
         .map(|(x, y)| centre + right * (half_width * x) + up * (half_height * y));
     for (index, corner) in corners.iter().enumerate() {

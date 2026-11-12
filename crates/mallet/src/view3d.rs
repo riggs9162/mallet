@@ -15,6 +15,8 @@ use crate::style;
 pub const DEFAULT_MOVE_SPEED: f64 = 1000.0;
 /// Hammer's default horizontal field of view in degrees.
 pub const DEFAULT_FOV: f64 = 90.0;
+/// Width over height assumed for a 3D view until one is shown.
+pub const DEFAULT_ASPECT: f64 = 16.0 / 9.0;
 /// Default degrees per second for arrow-key turning.
 pub const DEFAULT_TURN_SPEED: f64 = 90.0;
 /// Degrees per pixel of mouse movement in mouselook.
@@ -55,6 +57,9 @@ pub struct Camera3D {
     pub pitch: f64,
     /// Horizontal field of view in degrees.
     pub fov: f64,
+    /// Width over height of the 3D view the camera was last shown in, so the 2D views
+    /// can draw its view pyramid as tall as the picture.
+    pub aspect: f64,
     /// Draw distance: nothing farther away is drawn, like Hammer's back clipping plane.
     pub far: f64,
     /// Units per second the movement keys fly at.
@@ -89,6 +94,7 @@ impl Camera3D {
             yaw: 45.0,
             pitch: -30.0,
             fov: DEFAULT_FOV,
+            aspect: DEFAULT_ASPECT,
             far: DEFAULT_DRAW_DISTANCE,
             move_speed: DEFAULT_MOVE_SPEED,
             look_sensitivity: DEFAULT_LOOK_SENSITIVITY,
@@ -113,6 +119,7 @@ impl Camera3D {
             yaw: other.yaw,
             pitch: other.pitch,
             fov: other.fov,
+            aspect: other.aspect,
             far: other.far,
             move_speed: other.move_speed,
             look_sensitivity: other.look_sensitivity,
