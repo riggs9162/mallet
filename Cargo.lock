@@ -1709,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "mallet"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "mallet-content"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "mallet-kv",
  "texpresso",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "mallet-format"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "crc32fast",
  "glam",
@@ -1751,11 +1751,11 @@ dependencies = [
 
 [[package]]
 name = "mallet-kv"
-version = "0.20.0"
+version = "0.21.0"
 
 [[package]]
 name = "mallet-vmf"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "glam",
  "mallet-kv",
