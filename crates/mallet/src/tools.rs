@@ -9,7 +9,7 @@ use mallet_vmf::displacement::{self, Patch};
 use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::light::{Falloff, CATALOGUE};
-use mallet_vmf::sound::SoundscapeKind;
+use mallet_vmf::sound::{OutlineKind, SoundscapeKind};
 use mallet_vmf::{Connection, Entity, EntityItem};
 use serde_json::{json, Value};
 
@@ -791,6 +791,13 @@ pub fn definitions() -> Value {
             &[],
         ),
         tool(
+            "show_soundscape_browser",
+            "Open or close the soundscape browser, optionally searching for something. A soundscape picked \
+             there goes on the selected env_soundscape entities, or on new ones when none is selected.",
+            json!({ "open": { "type": "boolean" }, "filter": { "type": "string" } }),
+            &[],
+        ),
+        tool(
             "list_models",
             "List the game's models, such as models/props_c17/oildrum001.mdl, to use as an entity's model key.",
             json!({
@@ -942,14 +949,20 @@ pub fn definitions() -> Value {
              sound level, position, distance and the gain of each speaker, and the peak level of the mix since \
              the last update. With entities, also the map's soundscape entities, trigger_soundscapes and \
              ambient_generics as the game sets them up. With soundscapes, also the names of the game's \
-             soundscapes that contain that text, which needs the preview to be on. enabled turns the preview on \
-             or off; reload reads the game's soundscape and sound scripts again. Settings are under \"sound\" in get_settings and \
+             soundscapes that contain that text, and with describe what one soundscape plays, line by line with \
+             the sound positions it needs; both need the preview on, the soundscape browser open or a soundscape \
+             being listened to, so the scripts are read. listen plays a soundscape by name around the camera in \
+             place of the map's, as the game's playsoundscape command does, and an empty name goes back to the \
+             map's. enabled turns the preview on or off; reload reads the game's soundscape and sound scripts \
+             again. Settings are under \"sound\" in get_settings and \
              set_settings. The preview follows the window, so it only updates while the window is drawing.",
             json!({
                 "enabled": { "type": "boolean", "description": "Turn the preview on or off first." },
                 "reload": { "type": "boolean", "description": "Read the sound scripts again first." },
                 "entities": { "type": "boolean", "description": "Also list the map's sound entities." },
-                "soundscapes": { "type": "string", "description": "Also list the game's soundscapes whose name contains this text; empty for all of them." }
+                "soundscapes": { "type": "string", "description": "Also list the game's soundscapes whose name contains this text; empty for all of them." },
+                "describe": { "type": "string", "description": "Also say what the soundscape of this name plays." },
+                "listen": { "type": "string", "description": "Play this soundscape around the camera in place of the map's; empty to stop." }
             }),
             &[],
         ),
@@ -999,7 +1012,7 @@ pub fn run(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
 }
 
 /// Tools that drive the window, which an agent in its own view may not use.
-const WINDOW_TOOLS: [&str; 7] = [
+const WINDOW_TOOLS: [&str; 8] = [
     "send_input",
     "show_compile",
     "show_options",
@@ -1007,6 +1020,7 @@ const WINDOW_TOOLS: [&str; 7] = [
     "show_properties",
     "show_texture_browser",
     "show_model_browser",
+    "show_soundscape_browser",
 ];
 
 /// Runs a tool call in the agent's own view. Tab tools move only the agent between
@@ -1521,6 +1535,15 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 "The model browser is closed."
             }))
         }
+        "show_soundscape_browser" => {
+            editor.soundscape_browser_open = args.get("open").and_then(Value::as_bool).unwrap_or(true);
+            editor.soundscape_browser_filter = optional_string(args, "filter")?.map(str::to_owned);
+            Ok(ToolResult::text(if editor.soundscape_browser_open {
+                "The soundscape browser is open."
+            } else {
+                "The soundscape browser is closed."
+            }))
+        }
         "list_models" => {
             let limit = optional_number(args, "limit")?.unwrap_or(200.0).max(1.0) as usize;
             let words: Vec<String> = optional_string(args, "filter")?
@@ -1981,8 +2004,40 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             if optional_flag(args, "reload")? == Some(true) {
                 editor.sound.reload_scripts();
             }
+            if let Some(name) = optional_string(args, "listen")? {
+                editor.sound.listen(Some(name));
+            }
             let entities = optional_flag(args, "entities")? == Some(true);
             let mut value = sound_json(editor, entities);
+            value["listening"] = json!(editor.sound.listening());
+            if let Some(name) = optional_string(args, "describe")? {
+                value["description"] = match editor.sound.library().outline(name) {
+                    Some(outline) => json!({
+                        "soundscape": name,
+                        "positions": outline.positions,
+                        "plays": outline
+                            .rows
+                            .iter()
+                            .map(|row| {
+                                json!({
+                                    "depth": row.depth,
+                                    "kind": match row.kind {
+                                        OutlineKind::Dsp => "dsp",
+                                        OutlineKind::Loop => "loop",
+                                        OutlineKind::Random => "random",
+                                        OutlineKind::Wave => "wave",
+                                        OutlineKind::Soundscape => "soundscape",
+                                        OutlineKind::Problem => "problem",
+                                    },
+                                    "text": row.text,
+                                    "detail": row.detail,
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    }),
+                    None => json!({ "soundscape": name, "problem": "No script read so far defines this soundscape." }),
+                };
+            }
             if let Some(filter) = optional_string(args, "soundscapes")? {
                 value["soundscapes"] = json!(editor.sound.soundscape_names(filter));
             }
