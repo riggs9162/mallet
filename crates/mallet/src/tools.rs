@@ -9,6 +9,7 @@ use mallet_vmf::displacement::{self, Patch};
 use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::light::{Falloff, CATALOGUE};
+use mallet_vmf::sound::SoundscapeKind;
 use mallet_vmf::{Connection, Entity, EntityItem};
 use serde_json::{json, Value};
 
@@ -930,6 +931,25 @@ pub fn definitions() -> Value {
             json!({
                 "classname": { "type": "string", "description": "Only lights of this class; light_* matches a prefix." },
                 "catalogue": { "type": "boolean", "description": "Also list the lighting entity classes." }
+            }),
+            &[],
+        ),
+        tool(
+            "sound_preview",
+            "The sound preview: what a player standing at the window's 3D camera would hear, by the game's own \
+             rules. Returns whether it runs, the sound device, the sound scripts read, the soundscape entity in \
+             charge and whether it is still in range and in sight, every sound playing with its volume, pitch, \
+             sound level, position, distance and the gain of each speaker, and the peak level of the mix since \
+             the last update. With entities, also the map's soundscape entities, trigger_soundscapes and \
+             ambient_generics as the game sets them up. With soundscapes, also the names of the game's \
+             soundscapes that contain that text, which needs the preview to be on. enabled turns the preview on \
+             or off; reload reads the game's soundscape and sound scripts again. Settings are under \"sound\" in get_settings and \
+             set_settings. The preview follows the window, so it only updates while the window is drawing.",
+            json!({
+                "enabled": { "type": "boolean", "description": "Turn the preview on or off first." },
+                "reload": { "type": "boolean", "description": "Read the sound scripts again first." },
+                "entities": { "type": "boolean", "description": "Also list the map's sound entities." },
+                "soundscapes": { "type": "string", "description": "Also list the game's soundscapes whose name contains this text; empty for all of them." }
             }),
             &[],
         ),
@@ -1953,6 +1973,21 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         }
         "set_view_2d" => set_view_2d(editor, args),
         "list_lights" => Ok(ToolResult::json(&lights_json(editor, args)?)),
+        "sound_preview" => {
+            if let Some(enabled) = optional_flag(args, "enabled")? {
+                editor.config.sound.preview = enabled;
+                editor.config.save()?;
+            }
+            if optional_flag(args, "reload")? == Some(true) {
+                editor.sound.reload_scripts();
+            }
+            let entities = optional_flag(args, "entities")? == Some(true);
+            let mut value = sound_json(editor, entities);
+            if let Some(filter) = optional_string(args, "soundscapes")? {
+                value["soundscapes"] = json!(editor.sound.soundscape_names(filter));
+            }
+            Ok(ToolResult::json(&value))
+        }
         "screenshot" => {
             let target = match optional_string(args, "viewport")?.unwrap_or("all") {
                 "all" => ShotTarget::All,
@@ -2346,6 +2381,77 @@ fn lighting_stats_json(stats: &crate::render3d::LightingStats) -> Value {
         "shadow_maps_drawn_last_frame": stats.shadow_maps_drawn,
         "glows": stats.glows,
     })
+}
+
+/// The `sound_preview` tool: what the preview plays and, with `entities`, the map's
+/// sound entities as the game sets them up.
+fn sound_json(editor: &Editor, entities: bool) -> Value {
+    let mut value = json!({
+        "enabled": editor.config.sound.preview,
+        "status": serde_json::to_value(editor.sound.status()).unwrap_or(Value::Null),
+    });
+    if entities {
+        let sounds = &editor.scene.sounds;
+        let point = |point: glam::DVec3| json!([point.x, point.y, point.z]);
+        let soundscapes: Vec<Value> = sounds
+            .soundscapes
+            .iter()
+            .map(|soundscape| {
+                json!({
+                    "entity": soundscape.entity,
+                    "kind": match soundscape.kind {
+                        SoundscapeKind::Normal => "env_soundscape",
+                        SoundscapeKind::Proxy => "env_soundscape_proxy",
+                        SoundscapeKind::Triggerable => "env_soundscape_triggerable",
+                    },
+                    "targetname": soundscape.targetname,
+                    "origin": point(soundscape.origin),
+                    "radius": soundscape.radius,
+                    "soundscape": soundscape.soundscape,
+                    "enabled": soundscape.enabled,
+                    "positions": soundscape.positions.iter().map(|position| position.map(point)).collect::<Vec<_>>(),
+                    "problem": soundscape.problem,
+                })
+            })
+            .collect();
+        let triggers: Vec<Value> = sounds
+            .triggers
+            .iter()
+            .map(|trigger| {
+                json!({
+                    "entity": trigger.entity,
+                    "soundscape_entity": trigger.soundscape,
+                    "min": point(trigger.bounds.min),
+                    "max": point(trigger.bounds.max),
+                    "enabled": trigger.enabled,
+                })
+            })
+            .collect();
+        let ambients: Vec<Value> = sounds
+            .ambients
+            .iter()
+            .map(|ambient| {
+                json!({
+                    "entity": ambient.entity,
+                    "targetname": ambient.targetname,
+                    "origin": point(ambient.origin),
+                    "sound": ambient.sound,
+                    "volume": ambient.volume,
+                    "pitch": ambient.pitch,
+                    "radius": ambient.radius,
+                    "soundlevel": ambient.soundlevel,
+                    "everywhere": ambient.everywhere,
+                    "start_silent": ambient.start_silent,
+                    "looped": ambient.looped,
+                    "plays_at_start": ambient.plays_at_start(),
+                })
+            })
+            .collect();
+        value["soundscape_entities"] = json!(soundscapes);
+        value["trigger_soundscapes"] = json!(triggers);
+        value["ambient_generics"] = json!(ambients);
+    }
+    value
 }
 
 /// The `list_lights` tool: the map's lighting as the preview reads it.
@@ -3006,6 +3112,14 @@ fn optional_string<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, St
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text)),
         Some(_) => Err(format!("\"{key}\" must be a string")),
+    }
+}
+
+fn optional_flag(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(flag)) => Ok(Some(*flag)),
+        Some(_) => Err(format!("\"{key}\" must be true or false")),
     }
 }
 
