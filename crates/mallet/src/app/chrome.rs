@@ -278,6 +278,12 @@ impl MalletApp {
                         Action::ToggleGizmo,
                         edit.gizmo,
                     ),
+                    (
+                        icon::DOTS_NINE,
+                        "Displacement Edge Collapse: mark in pink the displacement vertices the compiler leaves out next to neighbours of a lower power",
+                        Action::ToggleDisplacementEdgeCollapse,
+                        editor.config.view.collapsed_vertices,
+                    ),
                 ];
                 for (glyph, name, action, on) in toggles {
                     if self
