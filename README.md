@@ -119,7 +119,7 @@ These follow Hammer++'s default keybindings.
 | Shift+drag | Paint select with the Selection tool: while Shift and the left button are held, everything the cursor passes over joins the selection, in the 2D and 3D views (in mouselook, everything the crosshair passes over). A Shift drag that starts on the selection or its handles in a 2D view, or on the gizmo in 3D, still clones the selection instead |
 | Drag the selection | Move it so its corner snaps to the grid, with texture lock. Hold Shift as the drag starts or on release to clone it, as in Hammer: the original stays and the copy moves. The same goes for resizing, rotating and skewing with the handles, and for the 3D gizmo; the clone and its change undo together |
 | Drag a white handle | Resize the selection or the pending block from that edge or corner |
-| Click a selected object (2D) | Switch its handles between scale, rotate (round corner handles) and skew (edge handles), as in Hammer |
+| Click inside the selection's box (2D) | Switch its handles between scale, rotate (round corner handles) and skew (edge handles). Anywhere inside the box works; the outline or centre cross of an object that is not selected still selects that object |
 | Rotate handles | Drag a corner to turn the selection around the yellow pivot, which you can drag elsewhere; hold Shift to snap to 15° |
 | Skew handles | Drag an edge along itself to shear the selection; the opposite edge stays put |
 | Arrow keys over a 2D view | Nudge the selection one grid step along the view's axes (Ctrl: one unit) |
