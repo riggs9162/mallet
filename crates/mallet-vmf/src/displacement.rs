@@ -18,8 +18,10 @@ use crate::kv::{Block, Item, Pair};
 use crate::transform::clean;
 use crate::{parse_numbers, parse_vec3, Side};
 
+mod collapse;
 mod sculpt;
 
+pub use collapse::collapsed_vertices;
 pub use sculpt::{sculpt, SculptBrush, SculptMode, StrokeMemory, CARVE_PROFILE};
 
 /// The name of the block a displacement face keeps its data in.
