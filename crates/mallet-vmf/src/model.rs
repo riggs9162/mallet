@@ -471,28 +471,65 @@ impl IdAllocator {
             next_object: 1,
             next_side: 1,
         };
-        allocator.scan(&vmf.to_items(), "");
+        for item in &vmf.items {
+            match item {
+                TopLevel::Pair(pair) => allocator.scan_pair(pair, ""),
+                TopLevel::World(entity) | TopLevel::Entity(entity) => allocator.scan_entity(entity),
+                TopLevel::Other(block) => allocator.scan(&block.items, &block.name),
+            }
+        }
         allocator
+    }
+
+    /// Takes in the ids of an entity, its brushes and their faces, as [`Self::scan`]
+    /// would find them in the entity's block.
+    fn scan_entity(&mut self, entity: &Entity) {
+        for item in &entity.items {
+            match item {
+                EntityItem::Key(pair) => self.scan_pair(pair, ""),
+                EntityItem::Solid(solid) => self.scan_solid(solid),
+                EntityItem::Other(block) => self.scan(&block.items, &block.name),
+            }
+        }
+    }
+
+    fn scan_solid(&mut self, solid: &Solid) {
+        for item in &solid.items {
+            match item {
+                SolidItem::Key(pair) => self.scan_pair(pair, "solid"),
+                SolidItem::Side(side) => {
+                    self.next_side = self.next_side.max(side.id.saturating_add(1));
+                    self.scan(&side.extra, "side");
+                }
+                SolidItem::Other(block) => self.scan(&block.items, &block.name),
+            }
+        }
     }
 
     fn scan(&mut self, items: &[Item], parent: &str) {
         for item in items {
             match item {
-                Item::Pair(pair) if pair.key.eq_ignore_ascii_case("id") => {
-                    let Ok(id) = pair.value.trim().parse::<u32>() else {
-                        continue;
-                    };
-                    let next = if parent.eq_ignore_ascii_case("side") {
-                        &mut self.next_side
-                    } else {
-                        &mut self.next_object
-                    };
-                    *next = (*next).max(id.saturating_add(1));
-                }
-                Item::Pair(_) => {}
+                Item::Pair(pair) => self.scan_pair(pair, parent),
                 Item::Block(block) => self.scan(&block.items, &block.name),
             }
         }
+    }
+
+    /// Takes in a pair found in a block named `parent`: an `id` is a face's in a `side`
+    /// block and an entity's or brush's anywhere else.
+    fn scan_pair(&mut self, pair: &Pair, parent: &str) {
+        if !pair.key.eq_ignore_ascii_case("id") {
+            return;
+        }
+        let Ok(id) = pair.value.trim().parse::<u32>() else {
+            return;
+        };
+        let next = if parent.eq_ignore_ascii_case("side") {
+            &mut self.next_side
+        } else {
+            &mut self.next_object
+        };
+        *next = (*next).max(id.saturating_add(1));
     }
 
     /// Returns an unused entity or solid id.
