@@ -1793,7 +1793,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "mallet"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "base64 0.22.1",
  "bytemuck",
@@ -1816,7 +1816,7 @@ dependencies = [
 
 [[package]]
 name = "mallet-content"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "mallet-kv",
  "symphonia",
@@ -1826,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "mallet-format"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "crc32fast",
  "glam",
@@ -1837,11 +1837,11 @@ dependencies = [
 
 [[package]]
 name = "mallet-kv"
-version = "0.27.0"
+version = "0.28.0"
 
 [[package]]
 name = "mallet-vmf"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "glam",
  "mallet-kv",
