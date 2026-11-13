@@ -456,7 +456,7 @@ fn clip_targets(vmf: &Vmf, selection: &std::collections::BTreeSet<Owner>) -> Res
     for owner in selection {
         match *owner {
             Owner::Solid(id) => {
-                if let Some(solid) = world.solids().find(|solid| solid.id() == Some(id)) {
+                if let Some(solid) = vmf.world_solid(id) {
                     targets.push(Target {
                         owner: world_id,
                         solid: solid.clone(),

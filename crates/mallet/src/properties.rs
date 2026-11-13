@@ -63,11 +63,7 @@ impl Editor {
 
     /// The world or entity with this id.
     pub fn entity(&self, id: u32) -> Option<&Entity> {
-        self.document
-            .as_ref()?
-            .vmf
-            .all_entities()
-            .find(|entity| entity.id() == Some(id))
+        self.document.as_ref()?.vmf.entity_by_id(id)
     }
 
     /// The FGD class with this name, when game data is loaded.

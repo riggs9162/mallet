@@ -25,7 +25,7 @@ impl Editor {
         for owner in &self.selection {
             match *owner {
                 Owner::Solid(id) => {
-                    if let Some(solid) = world.solids().find(|solid| solid.id() == Some(id)) {
+                    if let Some(solid) = vmf.world_solid(id) {
                         targets.push((world_id, solid.clone()));
                     }
                 }

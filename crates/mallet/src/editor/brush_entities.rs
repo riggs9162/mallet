@@ -121,13 +121,13 @@ impl Editor {
     /// the selected brush entities other than `keep`, with the ids of those entities.
     fn solids_to_tie(&self, keep: Option<u32>) -> Result<(Vec<Solid>, Vec<u32>), String> {
         let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
-        let world = vmf.world().ok_or("the map has no world")?;
+        vmf.world().ok_or("the map has no world")?;
         let mut solids = Vec::new();
         let mut emptied = Vec::new();
         for owner in &self.selection {
             match *owner {
                 Owner::Solid(id) => {
-                    if let Some(solid) = world.solids().find(|solid| solid.id() == Some(id)) {
+                    if let Some(solid) = vmf.world_solid(id) {
                         solids.push(solid.clone());
                     }
                 }

@@ -248,11 +248,13 @@ impl Edit {
             }
             Self::AddSolid { entity, index, solid } => {
                 let id = solid.id().ok_or(EditError::MissingId)?;
-                let target = entity_mut(vmf, *entity)?;
+                let owner = vmf.entity_position(*entity).ok_or(EditError::NoSuchEntity(*entity))?;
+                let target = top_level_entity_mut(vmf, owner);
                 let at = index
                     .unwrap_or_else(|| default_solid_index(target))
                     .min(target.items.len());
                 target.items.insert(at, EntityItem::Solid(solid.clone()));
+                vmf.index.note_solid(id, owner, at);
                 Ok(Self::RemoveSolid { solid: id })
             }
             Self::RemoveSolid { solid } => {
@@ -272,13 +274,13 @@ impl Edit {
                 let id = entity.id().ok_or(EditError::MissingId)?;
                 let at = index.unwrap_or_else(|| default_entity_index(vmf)).min(vmf.items.len());
                 vmf.items.insert(at, TopLevel::Entity(entity.clone()));
+                vmf.index.note_entity(at, entity);
                 Ok(Self::RemoveEntity { entity: id })
             }
             Self::RemoveEntity { entity } => {
                 let index = vmf
-                    .items
-                    .iter()
-                    .position(|item| matches!(item, TopLevel::Entity(e) if e.id() == Some(*entity)));
+                    .entity_position(*entity)
+                    .filter(|at| matches!(vmf.items[*at], TopLevel::Entity(_)));
                 let Some(index) = index else {
                     let is_world = vmf.world().is_some_and(|world| world.id() == Some(*entity));
                     return Err(if is_world {
@@ -290,6 +292,7 @@ impl Edit {
                 let TopLevel::Entity(removed) = vmf.items.remove(index) else {
                     unreachable!("position matched an entity");
                 };
+                vmf.index.note_removed();
                 Ok(Self::AddEntity {
                     index: Some(index),
                     entity: removed,
@@ -396,7 +399,11 @@ impl Edit {
                 solids,
                 entities,
                 hidden,
-            } => set_hidden(vmf, solids, entities, *hidden),
+            } => {
+                let inverse = set_hidden(vmf, solids, entities, *hidden);
+                vmf.forget_positions();
+                inverse
+            }
             Self::SetEditors { solids, entities } => set_editors(vmf, solids, entities),
             Self::SetVisGroups(block) => {
                 let position = vmf.items.iter().position(
@@ -449,13 +456,7 @@ impl Edit {
 }
 
 fn entity_mut(vmf: &mut Vmf, id: u32) -> Result<&mut Entity, EditError> {
-    vmf.items
-        .iter_mut()
-        .find_map(|item| match item {
-            TopLevel::World(entity) | TopLevel::Entity(entity) if entity.id() == Some(id) => Some(entity),
-            _ => None,
-        })
-        .ok_or(EditError::NoSuchEntity(id))
+    vmf.entity_by_id_mut(id).ok_or(EditError::NoSuchEntity(id))
 }
 
 fn top_level_entity_mut(vmf: &mut Vmf, index: usize) -> &mut Entity {
@@ -468,16 +469,7 @@ fn top_level_entity_mut(vmf: &mut Vmf, index: usize) -> &mut Entity {
 /// Finds a brush by id: the index of its owner in the map's items and its index inside
 /// the owner.
 fn find_solid(vmf: &Vmf, id: u32) -> Option<(usize, usize)> {
-    vmf.items.iter().enumerate().find_map(|(entity_index, item)| {
-        let (TopLevel::World(entity) | TopLevel::Entity(entity)) = item else {
-            return None;
-        };
-        entity
-            .items
-            .iter()
-            .position(|item| matches!(item, EntityItem::Solid(solid) if solid.id() == Some(id)))
-            .map(|item_index| (entity_index, item_index))
-    })
+    vmf.solid_position(id)
 }
 
 fn solid_mut(vmf: &mut Vmf, id: u32) -> Option<&mut Solid> {

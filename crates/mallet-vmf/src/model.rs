@@ -56,6 +56,8 @@ fn invalid(context: &str, message: impl Into<String>) -> VmfError {
 pub struct Vmf {
     /// Top-level items in file order.
     pub items: Vec<TopLevel>,
+    /// Where entities and brushes were last found, for looking them up by id.
+    pub(crate) index: crate::index::IdIndex,
 }
 
 /// One top-level item of a VMF.
@@ -137,7 +139,15 @@ impl Vmf {
                 Item::Block(block) => Ok(TopLevel::Other(block)),
             })
             .collect::<Result<_, _>>()?;
-        Ok(Self { items })
+        Ok(Self::with_items(items))
+    }
+
+    /// A document made of these top-level items, in file order.
+    pub fn with_items(items: Vec<TopLevel>) -> Self {
+        Self {
+            items,
+            index: crate::index::IdIndex::default(),
+        }
     }
 
     /// Converts the document back into KeyValues items.

@@ -160,9 +160,7 @@ fn vertex_at(mesh: &BrushMesh, point: DVec3) -> Option<usize> {
 }
 
 fn find_solid(vmf: &Vmf, id: u32) -> Option<&Solid> {
-    vmf.all_entities()
-        .flat_map(|entity| entity.solids())
-        .find(|solid| solid.id() == Some(id))
+    vmf.solid_by_id(id)
 }
 
 impl Editor {
@@ -177,7 +175,7 @@ impl Editor {
             match *owner {
                 Owner::Solid(id) => ids.push(id),
                 Owner::Entity(id) => {
-                    if let Some(entity) = document.vmf.all_entities().find(|entity| entity.id() == Some(id)) {
+                    if let Some(entity) = document.vmf.entity_by_id(id) {
                         ids.extend(entity.solids().filter_map(Solid::id));
                     }
                 }

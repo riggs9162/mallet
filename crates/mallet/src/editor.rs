@@ -1401,13 +1401,9 @@ impl Editor {
             match *owner {
                 Owner::Solid(id) => {
                     let (entity, solid) = vmf
-                        .all_entities()
-                        .find_map(|entity| {
-                            let solid = entity.solids().find(|solid| solid.id() == Some(id))?;
-                            Some((entity.id(), solid))
-                        })
+                        .solid_with_owner(id)
                         .ok_or_else(|| format!("no brush has id {id}"))?;
-                    let entity = entity.ok_or("the brush's entity has no id")?;
+                    let entity = entity.id().ok_or("the brush's entity has no id")?;
                     let mut solid = solid.clone();
                     sides.renumber_solid(&mut solid, &mut ids);
                     solid.translate(offset);
@@ -2088,9 +2084,7 @@ pub(crate) fn overlay_edits(entity: &Entity, matrix: &glam::DMat4) -> Vec<Edit> 
 }
 
 pub(crate) fn find_entity(vmf: &Vmf, id: u32) -> Result<&Entity, String> {
-    vmf.all_entities()
-        .find(|entity| entity.id() == Some(id))
-        .ok_or_else(|| format!("no entity has id {id}"))
+    vmf.entity_by_id(id).ok_or_else(|| format!("no entity has id {id}"))
 }
 
 fn canvas_for(size: Vec2) -> Result<PixmapCanvas, String> {

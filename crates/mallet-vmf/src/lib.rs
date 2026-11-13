@@ -11,6 +11,7 @@ pub mod edit;
 pub mod geometry;
 pub mod hollow;
 pub mod hull;
+mod index;
 pub mod light;
 pub mod lightmap;
 mod model;

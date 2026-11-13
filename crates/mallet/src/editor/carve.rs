@@ -97,11 +97,11 @@ impl Editor {
 
 /// The selected world brushes and the brushes of selected entities.
 fn selected_solids(vmf: &Vmf, selection: &BTreeSet<Owner>) -> Result<Vec<Solid>, String> {
-    let world = vmf.world().ok_or("the map has no world")?;
+    vmf.world().ok_or("the map has no world")?;
     let mut solids = Vec::new();
     for owner in selection {
         match *owner {
-            Owner::Solid(id) => solids.extend(world.solids().find(|solid| solid.id() == Some(id)).cloned()),
+            Owner::Solid(id) => solids.extend(vmf.world_solid(id).cloned()),
             Owner::Entity(id) => solids.extend(find_entity(vmf, id)?.solids().cloned()),
         }
     }

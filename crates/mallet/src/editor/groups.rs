@@ -73,13 +73,13 @@ impl Editor {
     /// objects were in before.
     fn member_edits(&self, group: Option<u32>, edits: &mut Vec<Edit>) -> Result<BTreeSet<String>, String> {
         let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
-        let world = vmf.world().ok_or("the map has no world")?;
+        vmf.world().ok_or("the map has no world")?;
         let mut before = BTreeSet::new();
         let mut solids = Vec::new();
         for owner in &self.selection {
             match *owner {
                 Owner::Solid(id) => {
-                    if let Some(solid) = world.solids().find(|solid| solid.id() == Some(id)) {
+                    if let Some(solid) = vmf.world_solid(id) {
                         before.insert(group_of(solid.editor()));
                         let mut solid = solid.clone();
                         set_group(solid_editor(&mut solid), group);
@@ -102,13 +102,11 @@ impl Editor {
 
     /// The groups the selected objects are in.
     fn selected_groups(&self, vmf: &mallet_vmf::Vmf) -> Result<BTreeSet<String>, String> {
-        let world = vmf.world().ok_or("the map has no world")?;
+        vmf.world().ok_or("the map has no world")?;
         let mut groups = BTreeSet::new();
         for owner in &self.selection {
             let group = match *owner {
-                Owner::Solid(id) => world
-                    .solids()
-                    .find(|solid| solid.id() == Some(id))
+                Owner::Solid(id) => vmf.world_solid(id)
                     .map(|solid| group_of(solid.editor())),
                 Owner::Entity(id) => Some(group_of(find_entity(vmf, id)?.editor())),
             };

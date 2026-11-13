@@ -460,7 +460,7 @@ fn decode_map(data: &[u8]) -> Result<Vmf, FormatError> {
     if reader.at != data.len() {
         return Err(damaged("bytes after the map"));
     }
-    Ok(Vmf { items })
+    Ok(Vmf::with_items(items))
 }
 
 struct Reader<'a> {

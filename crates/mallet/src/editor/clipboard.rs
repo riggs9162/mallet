@@ -189,7 +189,7 @@ impl Editor {
         if self.selection.is_empty() {
             return Err("nothing is selected".to_owned());
         }
-        let world = vmf.world().ok_or("the map has no world")?;
+        vmf.world().ok_or("the map has no world")?;
         let mut clipboard = Clipboard {
             pivot: self.overlay.pivot,
             ..Clipboard::default()
@@ -197,9 +197,7 @@ impl Editor {
         for owner in &self.selection {
             match *owner {
                 Owner::Solid(id) => clipboard.solids.push(
-                    world
-                        .solids()
-                        .find(|solid| solid.id() == Some(id))
+                    vmf.world_solid(id)
                         .ok_or_else(|| format!("no world brush has id {id}"))?
                         .clone(),
                 ),
