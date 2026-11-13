@@ -1544,14 +1544,29 @@ impl Editor {
     }
 
     /// Deletes the selected brushes and entities. Returns how many were removed.
+    ///
+    /// What stands last in the map is removed first, so nothing that is still to be
+    /// removed has to move up, which keeps deleting a large selection quick.
     pub fn delete_selection(&mut self) -> Result<usize, String> {
         if self.selection.is_empty() {
             return Err("nothing is selected".to_owned());
         }
-        let edits: Vec<Edit> = self
+        let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
+        let mut placed: Vec<(Option<(usize, usize)>, Owner)> = self
             .selection
             .iter()
-            .map(|owner| match *owner {
+            .map(|owner| {
+                let place = match *owner {
+                    Owner::Solid(id) => vmf.solid_position(id),
+                    Owner::Entity(id) => vmf.entity_position(id).map(|at| (at, usize::MAX)),
+                };
+                (place, *owner)
+            })
+            .collect();
+        placed.sort_by_key(|(place, _)| std::cmp::Reverse(*place));
+        let edits: Vec<Edit> = placed
+            .into_iter()
+            .map(|(_, owner)| match owner {
                 Owner::Solid(solid) => Edit::RemoveSolid { solid },
                 Owner::Entity(entity) => Edit::RemoveEntity { entity },
             })
