@@ -97,6 +97,14 @@ pub enum Action {
     HideUnselected,
     /// Show every hidden object again.
     ShowAllHidden,
+    /// Put the objects QuickHide hides in a new VisGroup.
+    QuickHideToVisGroup,
+    /// Ask which VisGroup the selection moves to.
+    MoveToVisGroup,
+    /// Show every VisGroup again.
+    ShowAllVisGroups,
+    /// Open the Edit VisGroups window.
+    EditVisGroups,
     CreateBlock,
     CenterViews2D,
     CenterView3D,

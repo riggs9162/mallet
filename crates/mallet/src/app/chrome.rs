@@ -645,9 +645,7 @@ impl MalletApp {
 
                 egui::CollapsingHeader::new(RichText::new("VisGroups").strong())
                     .default_open(true)
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("Coming soon").color(Color32::GRAY));
-                    });
+                    .show(ui, |ui| self.visgroups_section(ui, editor));
             });
     }
 
@@ -723,6 +721,8 @@ impl MalletApp {
             Action::MakeHollow => self.open_hollow_dialog(editor),
             Action::GoToBrush => self.open_go_to_brush(),
             Action::GoToCoordinates => self.open_go_to_point(editor),
+            Action::MoveToVisGroup => self.open_move_to_visgroup(editor, None),
+            Action::EditVisGroups => self.open_edit_visgroups(),
             Action::MapInformation => self.open_map_information(),
             Action::CheckForProblems => self.check_for_problems(editor),
             Action::EntityReport => self.open_entity_report(),

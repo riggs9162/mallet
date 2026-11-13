@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use eframe::egui::{Color32, Pos2, Rect, Vec2};
 use glam::{DVec2, DVec3};
 use mallet_vmf::build::box_solid;
-use mallet_vmf::edit::{hidden_ids, Edit};
+use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::overlay::DECAL_CLASS;
 use mallet_vmf::sides::{CopiedSides, OtherFaces};
@@ -44,6 +44,7 @@ mod hollow;
 mod primitives;
 mod sculpt;
 mod views;
+mod visgroups;
 
 pub use agent::AgentView;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
@@ -53,6 +54,7 @@ pub use displacements::{
 };
 pub use hollow::DEFAULT_HOLLOW_WIDTH;
 pub use primitives::DEFAULT_FACES;
+pub use visgroups::{GroupState, MoveOptions, UserGroupRow, VisGroupList};
 pub use sculpt::{SculptDirection, SculptSettings, SculptTool, DEFAULT_SCULPT_RADIUS};
 
 pub use clipboard::{Clipboard, PasteAt, PasteCursor, PasteOptions, PastePlacing, MAX_COPIES};
@@ -367,6 +369,8 @@ pub struct Editor {
     pub block_faces: u32,
     /// Selected world brushes and entities.
     pub selection: BTreeSet<Owner>,
+    /// The lists of the VisGroups panel, kept up to date with the map.
+    pub visgroups: VisGroupList,
     /// What a click picks: whole groups, single objects or single solids.
     pub pick_mode: PickMode,
     /// Tool previews drawn over the map.
@@ -523,6 +527,7 @@ impl Default for Editor {
             block_shape: mallet_vmf::primitive::Shape::Block,
             block_faces: DEFAULT_FACES,
             selection: BTreeSet::new(),
+            visgroups: VisGroupList::default(),
             pick_mode: PickMode::default(),
             overlay: Overlay::default(),
             material: DEFAULT_MATERIAL.to_owned(),
@@ -984,6 +989,7 @@ impl Editor {
         } else {
             self.scene = Scene::default();
         }
+        self.refresh_visgroups();
         self.sync_selection();
     }
 
@@ -1501,14 +1507,17 @@ impl Editor {
         Ok(count)
     }
 
-    /// Shows every hidden brush and entity again, as Hammer's Show All does. Undoable.
-    /// Returns how many were shown.
+    /// Shows every brush and entity QuickHide hid again, as Hammer's Unhide QuickHide
+    /// Objects does. Objects a VisGroup hides stay hidden. Undoable. Returns how many
+    /// were shown.
     pub fn show_all_hidden(&mut self) -> Result<usize, String> {
-        let vmf = &self.document.as_ref().ok_or("no map is open")?.vmf;
-        let (solids, entities) = hidden_ids(vmf);
+        if self.document.is_none() {
+            return Err("no map is open".to_owned());
+        }
+        let (solids, entities) = self.quick_hidden_ids();
         let count = solids.len() + entities.len();
         if count == 0 {
-            self.message = "No objects are hidden".to_owned();
+            self.message = "QuickHide hides no objects".to_owned();
             return Ok(0);
         }
         self.apply_edit(&Edit::SetHidden {

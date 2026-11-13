@@ -87,6 +87,7 @@ impl MalletApp {
                 menu_item(ui, keymap, "Snap Selected to Grid", Action::SnapToGrid, &mut chosen);
                 menu_item(ui, keymap, "Group", Action::Group, &mut chosen);
                 menu_item(ui, keymap, "Ungroup", Action::Ungroup, &mut chosen);
+                menu_item(ui, keymap, "Move to VisGroup...", Action::MoveToVisGroup, &mut chosen);
                 menu_item(ui, keymap, "Carve", Action::Carve, &mut chosen);
                 menu_item(ui, keymap, "Make Hollow...", Action::MakeHollow, &mut chosen);
                 menu_item(ui, keymap, "Tie to Entity", Action::TieToEntity, &mut chosen);

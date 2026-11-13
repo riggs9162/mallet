@@ -25,6 +25,7 @@ mod texture_browser;
 mod texture_tool;
 mod transform_window;
 mod vertex_tool;
+mod visgroups;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -285,6 +286,7 @@ pub struct MalletApp {
     arch: brush_tools::ArchDialog,
     /// Go to Brush Number, Go to Coordinates and Show Information.
     map_dialogs: map_dialogs::MapDialogs,
+    visgroups: visgroups::VisGroupsUi,
     /// The Camera tool's drag in a 2D view, if any.
     camera_drag: Option<camera_tool::CameraDrag>,
     /// Whether the normal Run Map dialog is open.
@@ -346,6 +348,7 @@ impl MalletApp {
             hollow: brush_tools::HollowDialog::default(),
             arch: brush_tools::ArchDialog::default(),
             map_dialogs: map_dialogs::MapDialogs::default(),
+            visgroups: visgroups::VisGroupsUi::default(),
             camera_drag: None,
             run_map_open: false,
             problems: problems_window::ProblemsDialog::default(),
@@ -597,6 +600,17 @@ impl MalletApp {
                     menu_item(ui, keymap, "QuickHide Objects", Action::HideSelection, &mut chosen);
                     menu_item(ui, keymap, "QuickHide Unselected Objects", Action::HideUnselected, &mut chosen);
                     menu_item(ui, keymap, "Unhide QuickHide Objects", Action::ShowAllHidden, &mut chosen);
+                    menu_item(
+                        ui,
+                        keymap,
+                        "Convert QuickHide Objects to VisGroup",
+                        Action::QuickHideToVisGroup,
+                        &mut chosen,
+                    );
+                    ui.separator();
+                    menu_item(ui, keymap, "Move Selection to VisGroup...", Action::MoveToVisGroup, &mut chosen);
+                    menu_item(ui, keymap, "Show All VisGroups", Action::ShowAllVisGroups, &mut chosen);
+                    menu_item(ui, keymap, "Edit VisGroups...", Action::EditVisGroups, &mut chosen);
                     ui.separator();
                     menu_toggle(
                         ui,
@@ -1988,6 +2002,7 @@ impl eframe::App for MalletApp {
         self.hollow_window(ctx, &mut editor);
         self.arch_window(ctx, &mut editor);
         self.map_dialogs(ctx, &mut editor);
+        self.visgroup_windows(ctx, &mut editor);
         self.problems_window(ctx, &mut editor);
         self.entity_report_window(ctx, &mut editor);
         self.properties_window(ctx, &mut editor);
@@ -2809,6 +2824,14 @@ fn run(action: Action, editor: &mut Editor) {
         }
         Action::ShowAllHidden => {
             let _ = editor.show_all_hidden();
+        }
+        Action::QuickHideToVisGroup => {
+            if let Err(error) = editor.quick_hidden_to_visgroup() {
+                editor.message = error;
+            }
+        }
+        Action::ShowAllVisGroups => {
+            let _ = editor.show_all_visgroups();
         }
         Action::CreateBlock => {
             let result = match editor.tool {
