@@ -146,6 +146,25 @@ brush or entity in a `hidden` block where it stands, so the map keeps and saves 
 the views and the selection skip it, and unwraps it again to show it. Each hide or show is one undo
 step, and `edit::hidden_ids` finds the hidden objects again.
 
+VisGroups (`mallet_vmf::visgroup`) are stored as Hammer stores them. The map's top-level
+`visgroups` block lists the groups, which may nest, and `Edit::SetVisGroups` replaces it. A world
+brush or an entity names its groups with `visgroupid` keys in its `editor` block, where
+`visgroupshown` and `visgroupautoshown` say whether a user group or an automatic group hides it;
+`Edit::SetEditors` rewrites those blocks, for hidden objects too, without showing them. An object a
+group hides is wrapped in a `hidden` block exactly like a QuickHidden one, so nothing else in the
+editor needs to know about groups. The two flags tell them apart: hidden with both flags on means
+QuickHide, which is why U leaves group members alone. `visgroup::change_objects` turns a list of
+per-object changes (groups, flags, colour) into one batch of `SetEditors` and `SetHidden`.
+
+Automatic groups (`AutoGroup`) are not stored. `visgroup::objects` sorts every world brush and
+entity, read from `hidden` blocks too, by class name and materials: world geometry, displacements,
+skybox, tool brushes and their kinds, point and brush entities, lights, nodes, triggers, details and
+props. `Editor::refresh_visgroups` runs after every edit, with the scene rebuild, and keeps the
+panel's rows (`Editor::visgroups`): member counts and whether a group shows, is hidden or is partly
+hidden, read from the members' flags. `editor/visgroups.rs` holds the operations, each one undo
+step, and `app/visgroups.rs` the side panel section, the Move Selection to VisGroup dialog and the
+Edit VisGroups window. A group's members take its colour in the 2D views, as in Hammer.
+
 ## Map tabs
 
 Several maps can be open at once, one per tab. The active tab's map state (document and
@@ -792,7 +811,8 @@ Tools:
 | `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, or an arch as the Arch Properties dialog makes it |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
 | `group_selection`, `ungroup_selection` | Hammer's Group and Ungroup |
-| `hide_selection`, `hide_unselected`, `show_all_hidden` | Hammer's QuickHide: hide the selection or everything else, and show all again |
+| `hide_selection`, `hide_unselected`, `show_all_hidden` | Hammer's QuickHide: hide the selection or everything else, and show what QuickHide hid again |
+| `list_visgroups`, `create_visgroup`, `move_selection_to_visgroup`, `set_visgroup_visible`, `edit_visgroup`, `delete_visgroup`, `select_visgroup` | Hammer's VisGroups: list the user's and the automatic groups, make a group from the selection, move objects in and out, show and hide groups, rename, recolour and remove them, and select their members |
 | `check_for_problems` | Hammer's Check for Problems, optionally fixing what it can |
 | `make_hollow`, `carve` | Hammer's Make Hollow and Carve: walls of a set width in place of the selected brushes, and their shape cut out of the brushes they overlap |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |

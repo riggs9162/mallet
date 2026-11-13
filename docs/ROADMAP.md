@@ -99,10 +99,12 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 ## Milestone 3: map organisation
 
 - [x] QuickHide: H, Ctrl+H and U. Hammer
-- [ ] Convert QuickHide Objects to VisGroup. Hammer
-- [ ] VisGroups panel in the side panel (it shows "Coming soon" today), with show, hide and auto VisGroups (world, entities, displacements, tool brushes). Hammer
-- [ ] Edit VisGroups and New VisGroup dialogs, and Move Selection to VisGroup. Hammer
-- [ ] VisGroup tab of Object Properties, for brushes and entities. Hammer
+- [x] Convert QuickHide Objects to VisGroup. Hammer
+- [x] VisGroups panel in the side panel, with show, hide and auto VisGroups (world, entities, displacements, tool brushes). Hammer
+- [x] Edit VisGroups and New VisGroup dialogs, and Move Selection to VisGroup. Hammer
+- [x] VisGroup tab of Object Properties, for brushes and entities. Hammer
+- [ ] Nesting VisGroups by dragging one onto another, and reordering them. Nested groups from Hammer already load, show and hide. Hammer
+- [ ] Auto VisGroups from the FGD's `@AutoVisGroup` lists, and hiding new objects that fall into a hidden auto VisGroup. Hammer
 - [ ] "Hidden objects too" in Replace Textures, which is greyed out until hiding exists. Hammer
 - [ ] Cordon tool: toggle cordon, edit cordon bounds, compile only inside the cordon. Hammer
 - [ ] Several named cordons at once that stock VBSP can compile. H++
