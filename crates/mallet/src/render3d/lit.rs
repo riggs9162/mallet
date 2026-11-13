@@ -723,9 +723,14 @@ impl LuxelFace {
     /// Every face of the scene the game lightmaps: faces with a lit material that is not
     /// sky, nodraw or a tool texture. Displacements are left out: their luxels would lie
     /// on the flat face, so they are lit per pixel where their surface is. Returns them
-    /// and how many faces the scene has.
+    /// and one more than the highest face number the scene uses.
     fn gather(scene: &Scene, renderer: &Renderer3D) -> (Vec<Self>, usize) {
-        let total = scene.meshes.iter().map(|mesh| mesh.faces.len()).sum::<usize>();
+        let total = scene
+            .meshes
+            .iter()
+            .filter_map(|mesh| Some(mesh.first_face? as usize + mesh.faces.len()))
+            .max()
+            .unwrap_or(0);
         let mut faces = Vec::new();
         for mesh in &scene.meshes {
             let Some(first) = mesh.first_face else {
@@ -2713,11 +2718,11 @@ impl LitState {
             pass.set_pipeline(&self.face);
             stats.chunks = faces.opaque.chunks.len();
             for (mesh, skipped) in renderer.opaque_faces() {
-                pass.set_vertex_buffer(0, mesh.buffer.slice(..));
                 for chunk in mesh.chunks.iter().filter(|chunk| {
                     skipped.is_none_or(|cells| !cells.contains(&chunk.cell))
                         && box_visible(planes, chunk.min, chunk.max)
                 }) {
+                    pass.set_vertex_buffer(0, mesh.buffer_of(chunk).slice(..));
                     stats.chunks_drawn += 1;
                     stats.triangles_drawn += chunk.triangles;
                     for (key, range) in &chunk.batches {

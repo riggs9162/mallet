@@ -4,7 +4,7 @@
 //! such as an MCP server, is expressed as an [`Edit`]. Applying an edit returns its inverse,
 //! which is what makes undo and redo work the same way for every caller.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
@@ -202,7 +202,96 @@ impl fmt::Display for EditError {
 
 impl Error for EditError {}
 
+/// The brushes and entities an edit changes where they stand, by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Touched {
+    /// Brush ids.
+    pub solids: BTreeSet<u32>,
+    /// Entity ids.
+    pub entities: BTreeSet<u32>,
+    /// Whether the edit may change the VisGroups or what belongs to them: it adds,
+    /// removes, hides or shows something, replaces brushes, whose materials sort them
+    /// into automatic groups, sets a `classname`, or sets `editor` or other blocks.
+    pub grouping: bool,
+}
+
 impl Edit {
+    /// The brushes and entities the edit changes, adds, removes, hides or shows, so an
+    /// editor can redraw only those. A brush counts by itself when the edit names it,
+    /// and with its entity when the edit names the entity. `None` when the edit adds
+    /// something without an id, which cannot be told apart afterwards.
+    ///
+    /// The edit that undoes an edit touches the same brushes and entities.
+    pub fn touched(&self) -> Option<Touched> {
+        let mut touched = Touched::default();
+        self.collect_touched(&mut touched).then_some(touched)
+    }
+
+    fn collect_touched(&self, touched: &mut Touched) -> bool {
+        match self {
+            Self::SetKey { entity, key, .. } | Self::RemoveKey { entity, key } => {
+                touched.entities.insert(*entity);
+                touched.grouping |= key.eq_ignore_ascii_case("classname");
+                true
+            }
+            Self::SetConnections { entity, .. } => {
+                touched.entities.insert(*entity);
+                true
+            }
+            Self::Translate { solids, .. } | Self::Rescale { solids, .. } | Self::Transform { solids, .. } => {
+                touched.solids.extend(solids);
+                true
+            }
+            Self::ReplaceSolids(solids) => {
+                touched.grouping = true;
+                solids.iter().all(|solid| match solid.id() {
+                    Some(id) => {
+                        touched.solids.insert(id);
+                        true
+                    }
+                    None => false,
+                })
+            }
+            Self::SetEditors { solids, entities } => {
+                touched.grouping = true;
+                touched.solids.extend(solids.iter().map(|(id, _)| *id));
+                touched.entities.extend(entities.iter().map(|(id, _)| *id));
+                true
+            }
+            Self::Batch(edits) => edits.iter().all(|edit| edit.collect_touched(touched)),
+            Self::AddSolid { solid, .. } => {
+                touched.grouping = true;
+                touched.solids.extend(solid.id());
+                solid.id().is_some()
+            }
+            Self::RemoveSolid { solid } => {
+                touched.grouping = true;
+                touched.solids.insert(*solid);
+                true
+            }
+            Self::AddEntity { entity, .. } => {
+                touched.grouping = true;
+                touched.entities.extend(entity.id());
+                entity.id().is_some()
+            }
+            Self::RemoveEntity { entity } | Self::AddBlock { entity, .. } | Self::RemoveBlock { entity, .. } => {
+                touched.grouping = true;
+                touched.entities.insert(*entity);
+                true
+            }
+            Self::SetHidden { solids, entities, .. } => {
+                touched.grouping = true;
+                touched.solids.extend(solids);
+                touched.entities.extend(entities);
+                true
+            }
+            Self::SetVisGroups(_) => {
+                touched.grouping = true;
+                true
+            }
+        }
+    }
+
     /// Applies the edit and returns the edit that undoes it.
     ///
     /// An edit that fails changes nothing: a batch that fails part-way is rolled back
@@ -904,6 +993,16 @@ impl History {
         let inverse = edit.apply(vmf)?;
         self.undo.push(inverse);
         Ok(true)
+    }
+
+    /// The edit the next undo applies, if there is one.
+    pub fn next_undo(&self) -> Option<&Edit> {
+        self.undo.last()
+    }
+
+    /// The edit the next redo applies, if there is one.
+    pub fn next_redo(&self) -> Option<&Edit> {
+        self.redo.last()
     }
 
     /// Whether an undo step is available.

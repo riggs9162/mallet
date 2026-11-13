@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use eframe::egui::Color32;
 use glam::{DMat3, DMat4, DVec2, DVec3};
-use mallet_content::{EntityClass, GameData, Model};
+use mallet_content::{parallel_map, EntityClass, GameData, Model};
 use mallet_vmf::displacement::Surface;
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds, Plane};
+use mallet_vmf::edit::Touched;
 use mallet_vmf::light::MapLighting;
 use mallet_vmf::overlay::{self, Piece};
 use mallet_vmf::sound::MapSounds;
@@ -426,6 +427,32 @@ pub fn entity_marker_edges(point: DVec3) -> Vec<[DVec3; 2]> {
 }
 
 impl WireMesh {
+    /// What [`Scene::patch`] leaves where a mesh was taken out: nothing to draw, pick
+    /// or select, in a place that keeps the meshes after it where they are.
+    fn hole() -> Self {
+        Self {
+            color: DEFAULT_COLOR,
+            edges: Vec::new(),
+            faces: Vec::new(),
+            bounds: Bounds::EMPTY,
+            geometry_bounds: Bounds::EMPTY,
+            planes: Vec::new(),
+            owner: None,
+            solid: None,
+            selected: false,
+            model: None,
+            sprite: None,
+            origin: None,
+            first_face: None,
+            decal: false,
+        }
+    }
+
+    /// Whether this is a [`WireMesh::hole`].
+    fn is_hole(&self) -> bool {
+        self.owner.is_none() && self.bounds.is_empty()
+    }
+
     /// Whether selecting `owner` covers this mesh: it is the owner, or a solid it draws.
     pub fn selects(&self, owner: Owner) -> bool {
         self.owner == Some(owner) || matches!(owner, Owner::Solid(id) if self.solid == Some(id))
@@ -586,12 +613,15 @@ pub struct Scene {
     pub bounds: Bounds,
     pub solid_count: usize,
     pub entity_count: usize,
-    /// Recent changes that only touched materials and alignment, oldest first, so a
-    /// renderer that has drawn generation `from` of one can follow the chain to the
-    /// current generation and update just those meshes.
+    /// Recent changes that only touched some meshes, oldest first, so a renderer that
+    /// has drawn generation `from` of one can follow the chain to the current
+    /// generation and update just those meshes.
     pub retextures: Vec<Retexture>,
     /// The map's lights, sky, fog and glows, for the lighting preview.
     pub lighting: MapLighting,
+    /// The number the next new face gets: one more than the highest
+    /// [`WireMesh::first_face`] numbering in use.
+    next_face: u32,
     /// The map's soundscape entities and ambient sounds, for the sound preview.
     pub sounds: MapSounds,
 }
@@ -603,7 +633,7 @@ pub struct Retexture {
     pub to: u64,
     pub meshes: Vec<usize>,
     /// Each mesh's bounds before the change, in the order of `meshes`, so a renderer
-    /// also rebuilds where a reshaped mesh was.
+    /// also rebuilds where a reshaped mesh was; empty for a mesh that is new.
     pub previous: Vec<Bounds>,
 }
 
@@ -623,244 +653,299 @@ impl Scene {
         let mut scene = Self {
             geometry_generation: next_generation(),
             selection_generation: next_generation(),
-            lighting: MapLighting::read(vmf),
-            sounds: MapSounds::read(vmf),
             ..Self::default()
         };
+        std::thread::scope(|scope| {
+            let lighting = scope.spawn(|| MapLighting::read(vmf));
+            let sounds = scope.spawn(|| MapSounds::read(vmf));
+            scene.add_meshes(vmf, models, game_data, decals);
+            scene.lighting = lighting.join().expect("reading the map's lights panicked");
+            scene.sounds = sounds.join().expect("reading the map's sounds panicked");
+        });
+        scene
+    }
+
+    /// Fills an empty scene with the map's meshes, as [`Scene::build`] describes them.
+    fn add_meshes(&mut self, vmf: &Vmf, models: &ModelCache, game_data: Option<&GameData>, decals: &DecalSizes) {
+        let scene = self;
+        let mut parts = Vec::new();
         for entity in vmf.all_entities() {
-            let is_world = entity.classname().eq_ignore_ascii_case("worldspawn");
+            let is_world = is_worldspawn(entity);
             if !is_world {
                 scene.entity_count += 1;
             }
             let class = game_data.and_then(|data| data.class(entity.classname()));
-            let entity_color = entity.editor_color().or_else(|| class.and_then(|class| class.color));
-            let entity_owner = entity.id().map(Owner::Entity);
-            let mut has_solids = false;
-            for solid in entity.solids() {
-                has_solids = true;
-                scene.solid_count += 1;
-                let (color, owner) = if is_world {
-                    (solid.editor_color(), solid.id().map(Owner::Solid))
-                } else {
-                    (entity_color.or_else(|| solid.editor_color()), entity_owner)
-                };
-                if let Some(mesh) = brush_mesh(solid, to_color(color), owner) {
-                    scene.bounds.add_bounds(&mesh.bounds);
-                    scene.meshes.push(mesh);
-                }
-            }
-            if has_solids || is_world {
-                continue;
-            }
-            let loaded = entity_model(entity, class)
-                .map(model_key)
-                .and_then(|key| Some((models.get(&key)?.clone()?, key)));
-            if let (Some(origin), Some((model, key))) = (entity.origin(), loaded) {
-                let transform = if class.is_some_and(|class| class.light_prop) {
-                    light_prop_transform(origin, entity)
-                } else {
-                    entity_transform(origin, entity)
-                };
-                let local = Bounds {
-                    min: DVec3::from_array(model.min.map(f64::from)),
-                    max: DVec3::from_array(model.max.map(f64::from)),
-                };
-                let edges: Vec<[DVec3; 2]> = box_edges(&local)
-                    .into_iter()
-                    .map(|[a, b]| [transform.transform_point3(a), transform.transform_point3(b)])
-                    .collect();
-                let own_model = entity
-                    .get("model")
-                    .is_some_and(|path| path.trim().to_ascii_lowercase().ends_with(".mdl"));
-                let hull = class.and_then(|class| class.size).filter(|_| !own_model);
-                let (edges, bounds) = match hull {
-                    Some((min, max)) => {
-                        let bounds = Bounds {
-                            min: origin + DVec3::from_array(min),
-                            max: origin + DVec3::from_array(max),
-                        };
-                        (box_edges(&bounds), bounds)
-                    }
-                    None => {
-                        let mut bounds = Bounds::EMPTY;
-                        for point in edges.iter().flatten() {
-                            bounds.add_point(*point);
-                        }
-                        (edges, bounds)
-                    }
-                };
-                let shadows_off = entity.get("disableshadows").is_some_and(|value| value.trim() == "1");
-                let mesh = WireMesh {
-                    color: to_color(entity_color),
-                    edges,
-                    faces: Vec::new(),
-                    planes: box_planes(&bounds),
-                    bounds,
-                    geometry_bounds: bounds,
-                    owner: entity_owner,
-                    solid: None,
-                    selected: false,
-                    model: Some(ModelInstance {
-                        key,
-                        transform,
-                        casts_shadows: own_model && !shadows_off,
-                        helper: !own_model,
-                    }),
-                    sprite: None,
-                    origin: Some(origin),
-                    first_face: None,
-                    decal: false,
-                };
-                scene.bounds.add_bounds(&mesh.bounds);
-                scene.meshes.push(mesh);
-            } else if let Some(origin) = entity.origin() {
-                let (min, max) = match class.and_then(|class| class.size) {
-                    Some((min, max)) => (DVec3::from_array(min), DVec3::from_array(max)),
-                    None => point_entity_box(entity.classname()),
-                };
-                let bounds = Bounds {
-                    min: origin + min,
-                    max: origin + max,
-                };
-                let mesh = WireMesh {
-                    color: to_color(entity_color),
-                    edges: box_edges(&bounds),
-                    faces: box_faces(&bounds),
-                    bounds,
-                    geometry_bounds: bounds,
-                    planes: box_planes(&bounds),
-                    owner: entity_owner,
-                    solid: None,
-                    selected: false,
-                    model: None,
-                    sprite: entity_sprite(entity, class),
-                    origin: Some(origin),
-                    first_face: None,
-                    decal: false,
-                };
-                scene.bounds.add_bounds(&mesh.bounds);
-                scene.meshes.push(mesh);
+            let before = parts.len();
+            parts.extend(entity.solids().map(|solid| Part::Brush(entity, solid, class)));
+            scene.solid_count += parts.len() - before;
+            if parts.len() == before && !is_world {
+                parts.push(Part::Point(entity, class));
             }
         }
+        let meshes = map_many(&parts, |part| match *part {
+            Part::Brush(entity, solid, class) => owned_brush_mesh(entity, solid, class),
+            Part::Point(entity, class) => point_mesh(entity, class, models),
+        });
+        scene.meshes = meshes.into_iter().flatten().collect();
         scene.add_decals(vmf, game_data, decals);
         let mut faces = 0u32;
         for mesh in &mut scene.meshes {
+            scene.bounds.add_bounds(&mesh.bounds);
             mesh.first_face = Some(faces);
             faces = faces.saturating_add(mesh.faces.len() as u32);
         }
-        scene
+        scene.next_face = faces;
     }
 
     /// Adds the pictures of the map's overlays and decals, each cut to the brush faces
     /// it lies on. An overlay lies on the faces its `sides` key lists; a decal on the
     /// face nearest to it and the faces that continue that face.
     fn add_decals(&mut self, vmf: &Vmf, game_data: Option<&GameData>, sizes: &DecalSizes) {
-        let class_is = |entity: &Entity, class: &str| entity.classname().eq_ignore_ascii_case(class);
         let entities: Vec<&Entity> = vmf
             .entities()
-            .filter(|entity| class_is(entity, overlay::OVERLAY_CLASS) || class_is(entity, overlay::DECAL_CLASS))
+            .filter(|entity| is_overlay(entity) || is_decal(entity))
             .collect();
         if entities.is_empty() {
             return;
         }
-        let brushes = self.meshes.len();
-        let mut by_side: Option<HashMap<u32, (usize, usize)>> = None;
-        let mut added = Vec::new();
-        for entity in entities {
-            let (material, placed, pieces) = if class_is(entity, overlay::OVERLAY_CLASS) {
-                let index = by_side.get_or_insert_with(|| self.faces_by_side());
-                (
-                    entity.get("material"),
-                    overlay::Overlay::of(entity),
-                    self.overlay_pieces(entity, index),
-                )
-            } else {
-                let (placed, pieces) = self.decal_pieces(entity, &self.meshes[..brushes], sizes);
-                (entity.get("texture"), placed, pieces)
-            };
-            let (Some(material), Some(placed)) = (material.filter(|name| !name.trim().is_empty()), placed) else {
+        let by_side = entities
+            .iter()
+            .any(|entity| is_overlay(entity))
+            .then(|| faces_by_side(&self.meshes));
+        let brushes = self.meshes.as_slice();
+        let added = map_many(&entities, |entity| {
+            picture_mesh(entity, brushes, by_side.as_ref(), game_data, sizes)
+        });
+        self.meshes.extend(added.into_iter().flatten());
+    }
+
+    /// Whether an edit touched few enough brushes and entities for [`Scene::patch`] to
+    /// be quicker than building the whole scene.
+    pub fn patches(&self, touched: &Touched) -> bool {
+        (touched.solids.len() + touched.entities.len()) * PATCH_SHARE <= self.meshes.len()
+    }
+
+    /// Brings the meshes of the brushes and entities an edit touched up to the map,
+    /// with the pictures of the overlays and decals lying on or near them, keeping
+    /// everything else, and notes them in [`Scene::retextures`]. A brush or entity that
+    /// is new to the scene gets its meshes after all others, and one that left the map
+    /// leaves a hole where its meshes were, so every other mesh keeps its place.
+    ///
+    /// Returns `false` when the caller should build the whole scene instead: so much
+    /// changed that building anew is as quick, or enough holes have gathered to be
+    /// worth closing.
+    pub fn patch(
+        &mut self,
+        vmf: &Vmf,
+        models: &ModelCache,
+        game_data: Option<&GameData>,
+        sizes: &DecalSizes,
+        touched: &Touched,
+    ) -> bool {
+        if !self.patches(touched) {
+            return false;
+        }
+        let mut by_solid: HashMap<u32, usize> = HashMap::new();
+        let mut bodies: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut pictures: HashMap<u32, usize> = HashMap::new();
+        let (mut holes, mut faces) = (0, 0);
+        for (at, mesh) in self.meshes.iter().enumerate() {
+            if mesh.is_hole() {
+                holes += 1;
+                continue;
+            }
+            faces += mesh.faces.len();
+            match (mesh.owner, mesh.decal) {
+                (Some(Owner::Entity(id)), true) => {
+                    pictures.insert(id, at);
+                    continue;
+                }
+                (Some(Owner::Entity(id)), false) if touched.entities.contains(&id) => {
+                    bodies.entry(id).or_default().push(at);
+                }
+                _ => {}
+            }
+            if let Some(id) = mesh.solid.filter(|_| !mesh.decal) {
+                by_solid.insert(id, at);
+            }
+        }
+        if holes * HOLE_SHARE > self.meshes.len() || self.next_face as usize > faces * 2 + SPARE_FACES {
+            return false;
+        }
+        let class_of = |entity: &Entity| game_data.and_then(|data| data.class(entity.classname()));
+        let mut parts: Vec<(Option<usize>, Part)> = Vec::new();
+        let mut gone: Vec<usize> = Vec::new();
+        let mut planned: HashSet<u32> = HashSet::new();
+        let mut claimed: HashSet<usize> = HashSet::new();
+        let mut reread = false;
+        for id in &touched.solids {
+            let at = by_solid.get(id).copied();
+            match vmf.solid_with_owner(*id) {
+                Some((entity, solid)) => {
+                    reread |= !is_worldspawn(entity);
+                    planned.insert(*id);
+                    claimed.extend(at);
+                    parts.push((at, Part::Brush(entity, solid, class_of(entity))));
+                }
+                None => {
+                    reread |= at.is_some_and(|at| matches!(self.meshes[at].owner, Some(Owner::Entity(_))));
+                    gone.extend(at);
+                }
+            }
+        }
+        let mut leftovers: Vec<usize> = Vec::new();
+        for id in &touched.entities {
+            reread = true;
+            let body = bodies.get(id).map_or(&[][..], Vec::as_slice);
+            let Some(entity) = vmf.entity_by_id(*id) else {
+                leftovers.extend(body);
                 continue;
             };
-            let class = game_data.and_then(|data| data.class(entity.classname()));
-            let color = entity.editor_color().or_else(|| class.and_then(|class| class.color));
-            added.push(decal_mesh(entity, material, &placed, pieces, to_color(color)));
+            if is_worldspawn(entity) {
+                continue;
+            }
+            let class = class_of(entity);
+            let mut kept: HashSet<usize> = HashSet::new();
+            let mut brushes = false;
+            for solid in entity.solids() {
+                let Some(solid_id) = solid.id() else {
+                    return false;
+                };
+                brushes = true;
+                let at = by_solid.get(&solid_id).copied();
+                kept.extend(at);
+                if planned.insert(solid_id) {
+                    claimed.extend(at);
+                    parts.push((at, Part::Brush(entity, solid, class)));
+                }
+            }
+            if !brushes {
+                let at = body.iter().copied().find(|at| self.meshes[*at].solid.is_none());
+                kept.extend(at);
+                claimed.extend(at);
+                parts.push((at, Part::Point(entity, class)));
+            }
+            leftovers.extend(body.iter().filter(|at| !kept.contains(at)));
         }
-        for mesh in added {
+        gone.extend(leftovers.into_iter().filter(|at| !claimed.contains(at)));
+        let made = map_many(&parts, |(_, part)| match *part {
+            Part::Brush(entity, solid, class) => owned_brush_mesh(entity, solid, class),
+            Part::Point(entity, class) => point_mesh(entity, class, models),
+        });
+        let mut step = PatchStep::default();
+        for ((at, _), mesh) in parts.iter().zip(made) {
+            self.put(*at, mesh, &mut step);
+        }
+        for at in gone {
+            self.put(Some(at), None, &mut step);
+        }
+        let mut stale: Vec<(Option<usize>, Option<&Entity>)> = Vec::new();
+        for (id, at) in &pictures {
+            let entity = vmf.entity_by_id(*id);
+            let lies_on_changed = entity.is_some_and(|entity| {
+                if is_overlay(entity) {
+                    overlay_sides(entity).any(|side| step.sides.contains(&side))
+                } else {
+                    decal_reach(entity, sizes).is_some_and(|(origin, reach)| {
+                        step.moved.iter().any(|bounds| within(bounds, origin, reach))
+                    })
+                }
+            });
+            if lies_on_changed || entity.is_none() || touched.entities.contains(id) {
+                stale.push((Some(*at), entity));
+            }
+        }
+        for id in touched.entities.iter().filter(|id| !pictures.contains_key(id)) {
+            if let Some(entity) = vmf.entity_by_id(*id) {
+                stale.push((None, Some(entity)));
+            }
+        }
+        let pictured = |entity: &&Entity| is_overlay(entity) || is_decal(entity);
+        let by_side = stale
+            .iter()
+            .any(|(_, entity)| entity.is_some_and(is_overlay))
+            .then(|| faces_by_side(&self.meshes));
+        for (at, entity) in stale {
+            let picture = entity
+                .filter(pictured)
+                .and_then(|entity| picture_mesh(entity, &self.meshes, by_side.as_ref(), game_data, sizes));
+            self.put(at, picture, &mut step);
+        }
+        self.entity_count = vmf.entities().count();
+        self.solid_count = vmf.all_entities().map(|entity| entity.solids().count()).sum();
+        if reread {
+            let (lighting, sounds) = std::thread::scope(|scope| {
+                let lighting = scope.spawn(|| MapLighting::read(vmf));
+                let sounds = MapSounds::read(vmf);
+                (lighting.join().expect("reading the map's lights panicked"), sounds)
+            });
+            self.lighting = lighting;
+            self.sounds = sounds;
+        }
+        self.note_changed(step.changed, step.previous);
+        true
+    }
+
+    /// Makes the mesh at `at` what `mesh` is and notes the change in `step`: a mesh is
+    /// replaced, keeping what the old one had selected, or left as a hole when there is
+    /// no new one, and a mesh without a place is added after all others. Faces keep
+    /// their numbers where the new mesh has no more of them than the old one.
+    fn put(&mut self, at: Option<usize>, mesh: Option<WireMesh>, step: &mut PatchStep) {
+        let Some(at) = at else {
+            let Some(mut mesh) = mesh else {
+                return;
+            };
+            mesh.first_face = Some(self.number_faces(mesh.faces.len()));
+            step.note(&mesh);
+            step.changed.push(self.meshes.len());
+            step.previous.push(Bounds::EMPTY);
             self.bounds.add_bounds(&mesh.bounds);
             self.meshes.push(mesh);
-        }
-    }
-
-    /// Where each brush face is among the meshes, by side id: the mesh's index and the
-    /// face's index in it.
-    fn faces_by_side(&self) -> HashMap<u32, (usize, usize)> {
-        self.meshes
-            .iter()
-            .enumerate()
-            .flat_map(|(mesh_index, mesh)| {
-                mesh.faces
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(face_index, face)| Some((face.side?, (mesh_index, face_index))))
-            })
-            .collect()
-    }
-
-    /// The pieces of an overlay on the faces its `sides` key lists.
-    fn overlay_pieces(&self, entity: &Entity, by_side: &HashMap<u32, (usize, usize)>) -> Vec<Piece> {
-        let Some(placed) = overlay::Overlay::of(entity) else {
-            return Vec::new();
+            return;
         };
-        let texture = overlay::texture_corners(entity);
-        let mut pieces = Vec::new();
-        let sides = entity.get("sides").unwrap_or_default();
-        for side in sides.split_whitespace().filter_map(|word| word.parse::<u32>().ok()) {
-            if let Some(&(mesh, face)) = by_side.get(&side) {
-                let face = &self.meshes[mesh].faces[face];
-                placed.pieces_on(&texture, &face.vertices, face.normal, &mut pieces);
+        step.note(&self.meshes[at]);
+        step.changed.push(at);
+        step.previous.push(self.meshes[at].bounds);
+        let Some(mut mesh) = mesh else {
+            self.meshes[at] = WireMesh::hole();
+            return;
+        };
+        let old = &self.meshes[at];
+        mesh.selected = old.selected;
+        if mesh.faces.len() == old.faces.len() {
+            for (face, old_face) in mesh.faces.iter_mut().zip(&old.faces) {
+                face.selected = old_face.selected;
             }
         }
-        pieces
+        let numbered = old.first_face.filter(|_| mesh.faces.len() <= old.faces.len());
+        mesh.first_face = Some(numbered.unwrap_or_else(|| self.number_faces(mesh.faces.len())));
+        step.note(&mesh);
+        self.bounds.add_bounds(&mesh.bounds);
+        self.meshes[at] = mesh;
     }
 
-    /// Where a decal lands and its pieces: on the brush face nearest to it within
-    /// [`overlay::DECAL_REACH`], and on the faces that lie in the same plane. Tool faces
-    /// are passed over, as the game's trace passes through most of them.
-    fn decal_pieces(
-        &self,
-        entity: &Entity,
-        brushes: &[WireMesh],
-        sizes: &DecalSizes,
-    ) -> (Option<overlay::Overlay>, Vec<Piece>) {
-        let (Some(origin), Some(material)) = (entity.origin(), entity.get("texture")) else {
-            return (None, Vec::new());
-        };
-        let size = sizes
-            .get(&decal_key(material))
-            .copied()
-            .flatten()
-            .unwrap_or(DVec2::splat(DEFAULT_DECAL_SIZE));
-        let Some((_, point, normal)) = nearest_face(brushes, origin, overlay::DECAL_REACH) else {
-            return (Some(overlay::Overlay::on_surface(origin, DVec3::Z, size)), Vec::new());
-        };
-        let placed = overlay::Overlay::on_surface(point, normal, size);
-        let texture = overlay::UPRIGHT_TEXTURE;
-        let mut pieces = Vec::new();
-        for face in brushes
-            .iter()
-            .filter(|mesh| reaches(mesh, origin, size.length()))
-            .flat_map(decal_targets)
-        {
-            let same_plane = face.normal.dot(normal) > DECAL_SAME_FACING
-                && face
-                    .vertices
-                    .first()
-                    .is_some_and(|vertex| (*vertex - point).dot(normal).abs() < DECAL_PICK_DEPTH);
-            if same_plane {
-                placed.pieces_on(&texture, &face.vertices, face.normal, &mut pieces);
-            }
+    /// Takes the next `count` face numbers and returns the first.
+    fn number_faces(&mut self, count: usize) -> u32 {
+        let first = self.next_face;
+        self.next_face = first.saturating_add(count as u32);
+        first
+    }
+
+    /// Moves the scene on to a new geometry generation in which only the meshes at
+    /// `changed` differ, and remembers the step for renderers; `previous` holds their
+    /// bounds before the change.
+    fn note_changed(&mut self, changed: Vec<usize>, previous: Vec<Bounds>) {
+        let from = self.geometry_generation;
+        self.geometry_generation = next_generation();
+        self.retextures.push(Retexture {
+            from,
+            to: self.geometry_generation,
+            meshes: changed,
+            previous,
+        });
+        if self.retextures.len() > MAX_RETEXTURES {
+            self.retextures.remove(0);
         }
-        (Some(placed), pieces)
     }
 
     /// Whether any mesh belongs to `owner`.
@@ -1115,17 +1200,7 @@ impl Scene {
             self.meshes[at] = mesh;
             changed.push(at);
         }
-        let from = self.geometry_generation;
-        self.geometry_generation = next_generation();
-        self.retextures.push(Retexture {
-            from,
-            to: self.geometry_generation,
-            meshes: changed,
-            previous,
-        });
-        if self.retextures.len() > MAX_RETEXTURES {
-            self.retextures.remove(0);
-        }
+        self.note_changed(changed, previous);
         true
     }
 
@@ -1247,6 +1322,47 @@ impl Scene {
             })
             .filter_map(|mesh| picked(mesh, solids))
             .collect()
+    }
+}
+
+#[cfg(test)]
+impl Scene {
+    /// Everything the scene shows, mesh by mesh in an order that does not depend on
+    /// theirs, so two scenes can be compared whatever way they were put together.
+    pub fn outline(&self) -> Vec<String> {
+        let mut meshes: Vec<String> = self
+            .meshes
+            .iter()
+            .filter(|mesh| !mesh.is_hole())
+            .map(|mesh| {
+                let faces: Vec<String> = mesh
+                    .faces
+                    .iter()
+                    .map(|face| {
+                        format!(
+                            "{:?} {:?} {:?} {:?} {:?}",
+                            face.side, face.solid, face.material, face.vertices, face.normal
+                        )
+                    })
+                    .collect();
+                let mut edges: Vec<String> = mesh.edges.iter().map(|edge| format!("{edge:?}")).collect();
+                edges.sort();
+                format!(
+                    "{:?} {:?} decal={} {:?} {:?} {:?} {:?} {:?} {:?} {edges:?} {faces:?}",
+                    mesh.owner,
+                    mesh.solid,
+                    mesh.decal,
+                    mesh.color,
+                    mesh.bounds,
+                    mesh.geometry_bounds,
+                    mesh.origin,
+                    mesh.model.as_ref().map(|model| (&model.key, model.transform)),
+                    mesh.sprite,
+                )
+            })
+            .collect();
+        meshes.sort();
+        meshes
     }
 }
 
@@ -1423,6 +1539,297 @@ type EdgeKey = ([i64; 3], [i64; 3]);
 
 fn quantize(point: DVec3) -> [i64; 3] {
     (point * EDGE_QUANTIZE).round().as_i64vec3().to_array()
+}
+
+/// One mesh to build: a brush of the world or of an entity, or a point entity.
+#[derive(Clone, Copy)]
+enum Part<'a> {
+    Brush(&'a Entity, &'a Solid, Option<&'a EntityClass>),
+    Point(&'a Entity, Option<&'a EntityClass>),
+}
+
+/// What [`Scene::patch`] has changed so far.
+#[derive(Default)]
+struct PatchStep {
+    /// The meshes replaced, taken out or added.
+    changed: Vec<usize>,
+    /// Their bounds before, in the same order; empty for an added mesh.
+    previous: Vec<Bounds>,
+    /// The side ids of changed brushes' faces, old and new, which overlays may list.
+    sides: HashSet<u32>,
+    /// The bounds of changed brushes and entities, old and new, which decals may lie on.
+    moved: Vec<Bounds>,
+}
+
+impl PatchStep {
+    /// Notes a mesh as it was before a change or as it is after it, for the overlays
+    /// and decals that lie on it.
+    fn note(&mut self, mesh: &WireMesh) {
+        if !mesh.decal && !mesh.is_hole() {
+            self.sides.extend(mesh.faces.iter().filter_map(|face| face.side));
+            self.moved.push(mesh.bounds);
+        }
+    }
+}
+
+/// A patch that would rebuild more than one mesh in this many gives way to building
+/// the whole scene, which is spread over every processor core.
+const PATCH_SHARE: usize = 3;
+
+/// Once more than one mesh in this many is a hole, the whole scene is built again.
+const HOLE_SHARE: usize = 8;
+
+/// Face numbers may run this far past twice the number of faces before the whole scene
+/// is built again and its faces are numbered from 0.
+const SPARE_FACES: usize = 4096;
+
+/// Below this many items [`map_many`] works on the calling thread, as starting threads
+/// would take longer than the work.
+const MANY: usize = 64;
+
+/// Maps `items` in order, on every processor core when there are many of them.
+fn map_many<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    if items.len() < MANY {
+        items.iter().map(work).collect()
+    } else {
+        parallel_map(items, work)
+    }
+}
+
+fn is_worldspawn(entity: &Entity) -> bool {
+    entity.classname().eq_ignore_ascii_case("worldspawn")
+}
+
+fn is_overlay(entity: &Entity) -> bool {
+    entity.classname().eq_ignore_ascii_case(overlay::OVERLAY_CLASS)
+}
+
+fn is_decal(entity: &Entity) -> bool {
+    entity.classname().eq_ignore_ascii_case(overlay::DECAL_CLASS)
+}
+
+/// The mesh of one brush of `entity`. A world brush has its own editor colour and is
+/// selected by itself; a brush of an entity has the entity's colour and selects it.
+fn owned_brush_mesh(entity: &Entity, solid: &Solid, class: Option<&EntityClass>) -> Option<WireMesh> {
+    let (color, owner) = if is_worldspawn(entity) {
+        (solid.editor_color(), solid.id().map(Owner::Solid))
+    } else {
+        let color = entity.editor_color().or_else(|| class.and_then(|class| class.color));
+        (color.or_else(|| solid.editor_color()), entity.id().map(Owner::Entity))
+    };
+    brush_mesh(solid, to_color(color), owner)
+}
+
+/// The mesh of an entity without brushes: its loaded model, outlined by the model's
+/// rotated bounding box, or else the box its FGD class gives, or a small box. `None`
+/// for an entity without an origin.
+fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache) -> Option<WireMesh> {
+    let origin = entity.origin()?;
+    let color = to_color(entity.editor_color().or_else(|| class.and_then(|class| class.color)));
+    let owner = entity.id().map(Owner::Entity);
+    let loaded = entity_model(entity, class)
+        .map(model_key)
+        .and_then(|key| Some((models.get(&key)?.clone()?, key)));
+    let Some((model, key)) = loaded else {
+        let (min, max) = match class.and_then(|class| class.size) {
+            Some((min, max)) => (DVec3::from_array(min), DVec3::from_array(max)),
+            None => point_entity_box(entity.classname()),
+        };
+        let bounds = Bounds {
+            min: origin + min,
+            max: origin + max,
+        };
+        return Some(WireMesh {
+            color,
+            edges: box_edges(&bounds),
+            faces: box_faces(&bounds),
+            bounds,
+            geometry_bounds: bounds,
+            planes: box_planes(&bounds),
+            owner,
+            solid: None,
+            selected: false,
+            model: None,
+            sprite: entity_sprite(entity, class),
+            origin: Some(origin),
+            first_face: None,
+            decal: false,
+        });
+    };
+    let transform = if class.is_some_and(|class| class.light_prop) {
+        light_prop_transform(origin, entity)
+    } else {
+        entity_transform(origin, entity)
+    };
+    let local = Bounds {
+        min: DVec3::from_array(model.min.map(f64::from)),
+        max: DVec3::from_array(model.max.map(f64::from)),
+    };
+    let edges: Vec<[DVec3; 2]> = box_edges(&local)
+        .into_iter()
+        .map(|[a, b]| [transform.transform_point3(a), transform.transform_point3(b)])
+        .collect();
+    let own_model = entity
+        .get("model")
+        .is_some_and(|path| path.trim().to_ascii_lowercase().ends_with(".mdl"));
+    let hull = class.and_then(|class| class.size).filter(|_| !own_model);
+    let (edges, bounds) = match hull {
+        Some((min, max)) => {
+            let bounds = Bounds {
+                min: origin + DVec3::from_array(min),
+                max: origin + DVec3::from_array(max),
+            };
+            (box_edges(&bounds), bounds)
+        }
+        None => {
+            let mut bounds = Bounds::EMPTY;
+            for point in edges.iter().flatten() {
+                bounds.add_point(*point);
+            }
+            (edges, bounds)
+        }
+    };
+    let shadows_off = entity.get("disableshadows").is_some_and(|value| value.trim() == "1");
+    Some(WireMesh {
+        color,
+        edges,
+        faces: Vec::new(),
+        planes: box_planes(&bounds),
+        bounds,
+        geometry_bounds: bounds,
+        owner,
+        solid: None,
+        selected: false,
+        model: Some(ModelInstance {
+            key,
+            transform,
+            casts_shadows: own_model && !shadows_off,
+            helper: !own_model,
+        }),
+        sprite: None,
+        origin: Some(origin),
+        first_face: None,
+        decal: false,
+    })
+}
+
+/// Where each brush face is among `meshes`, by side id: the mesh's index and the face's
+/// index in it.
+fn faces_by_side(meshes: &[WireMesh]) -> HashMap<u32, (usize, usize)> {
+    meshes
+        .iter()
+        .enumerate()
+        .flat_map(|(mesh_index, mesh)| {
+            mesh.faces
+                .iter()
+                .enumerate()
+                .filter_map(move |(face_index, face)| Some((face.side?, (mesh_index, face_index))))
+        })
+        .collect()
+}
+
+/// The side ids an overlay's `sides` key lists.
+fn overlay_sides(entity: &Entity) -> impl Iterator<Item = u32> + '_ {
+    entity
+        .get("sides")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|word| word.parse::<u32>().ok())
+}
+
+/// The size in world units of the picture a decal entity projects.
+fn decal_size(material: &str, sizes: &DecalSizes) -> DVec2 {
+    sizes
+        .get(&decal_key(material))
+        .copied()
+        .flatten()
+        .unwrap_or(DVec2::splat(DEFAULT_DECAL_SIZE))
+}
+
+/// A decal entity's origin and how far from it a brush can be and still carry part of
+/// its picture.
+fn decal_reach(entity: &Entity, sizes: &DecalSizes) -> Option<(DVec3, f64)> {
+    let size = decal_size(entity.get("texture")?, sizes);
+    Some((entity.origin()?, size.length().max(overlay::DECAL_REACH)))
+}
+
+/// Whether `point` is inside `bounds` or no further than `reach` from it along each axis.
+fn within(bounds: &Bounds, point: DVec3, reach: f64) -> bool {
+    let reach = DVec3::splat(reach);
+    point.cmpge(bounds.min - reach).all() && point.cmple(bounds.max + reach).all()
+}
+
+/// The picture of one overlay or decal entity, cut to the faces of `brushes` it lies
+/// on. `by_side` is [`faces_by_side`] of the same brushes, which overlays need. `None`
+/// for an entity without a material or a place.
+fn picture_mesh(
+    entity: &Entity,
+    brushes: &[WireMesh],
+    by_side: Option<&HashMap<u32, (usize, usize)>>,
+    game_data: Option<&GameData>,
+    sizes: &DecalSizes,
+) -> Option<WireMesh> {
+    let (material, placed, pieces) = if is_overlay(entity) {
+        let pieces = by_side.map_or_else(Vec::new, |by_side| overlay_pieces(entity, brushes, by_side));
+        (entity.get("material"), overlay::Overlay::of(entity), pieces)
+    } else {
+        let (placed, pieces) = decal_pieces(entity, brushes, sizes);
+        (entity.get("texture"), placed, pieces)
+    };
+    let material = material.filter(|name| !name.trim().is_empty())?;
+    let placed = placed?;
+    let class = game_data.and_then(|data| data.class(entity.classname()));
+    let color = entity.editor_color().or_else(|| class.and_then(|class| class.color));
+    Some(decal_mesh(entity, material, &placed, pieces, to_color(color)))
+}
+
+/// The pieces of an overlay on the faces its `sides` key lists.
+fn overlay_pieces(entity: &Entity, brushes: &[WireMesh], by_side: &HashMap<u32, (usize, usize)>) -> Vec<Piece> {
+    let Some(placed) = overlay::Overlay::of(entity) else {
+        return Vec::new();
+    };
+    let texture = overlay::texture_corners(entity);
+    let mut pieces = Vec::new();
+    for side in overlay_sides(entity) {
+        if let Some(face) = by_side
+            .get(&side)
+            .and_then(|(mesh, face)| brushes.get(*mesh)?.faces.get(*face))
+        {
+            placed.pieces_on(&texture, &face.vertices, face.normal, &mut pieces);
+        }
+    }
+    pieces
+}
+
+/// Where a decal lands and its pieces: on the brush face nearest to it within
+/// [`overlay::DECAL_REACH`], and on the faces that lie in the same plane. Tool faces
+/// are passed over, as the game's trace passes through most of them.
+fn decal_pieces(entity: &Entity, brushes: &[WireMesh], sizes: &DecalSizes) -> (Option<overlay::Overlay>, Vec<Piece>) {
+    let (Some(origin), Some(material)) = (entity.origin(), entity.get("texture")) else {
+        return (None, Vec::new());
+    };
+    let size = decal_size(material, sizes);
+    let Some((_, point, normal)) = nearest_face(brushes, origin, overlay::DECAL_REACH) else {
+        return (Some(overlay::Overlay::on_surface(origin, DVec3::Z, size)), Vec::new());
+    };
+    let placed = overlay::Overlay::on_surface(point, normal, size);
+    let texture = overlay::UPRIGHT_TEXTURE;
+    let mut pieces = Vec::new();
+    for face in brushes
+        .iter()
+        .filter(|mesh| reaches(mesh, origin, size.length()))
+        .flat_map(decal_targets)
+    {
+        let same_plane = face.normal.dot(normal) > DECAL_SAME_FACING
+            && face
+                .vertices
+                .first()
+                .is_some_and(|vertex| (*vertex - point).dot(normal).abs() < DECAL_PICK_DEPTH);
+        if same_plane {
+            placed.pieces_on(&texture, &face.vertices, face.normal, &mut pieces);
+        }
+    }
+    (Some(placed), pieces)
 }
 
 /// The mesh of a brush. A brush with displacements shows only them, as VBSP leaves its

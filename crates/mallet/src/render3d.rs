@@ -404,6 +404,29 @@ struct Chunk {
     max: Vec3,
     batches: Vec<(String, Range<u32>)>,
     triangles: usize,
+    /// The chunk's own vertex buffer, which `batches` then count in: set for a chunk
+    /// rebuilt after its mesh's buffer was filled, so a small change uploads little.
+    own: Option<wgpu::Buffer>,
+}
+
+impl FaceMesh {
+    /// The vertex buffer a chunk of this mesh is drawn from.
+    fn buffer_of<'a>(&'a self, chunk: &'a Chunk) -> &'a wgpu::Buffer {
+        chunk.own.as_ref().unwrap_or(&self.buffer)
+    }
+}
+
+/// Every edge of the map in one buffer, with room to spare after the last one.
+struct EdgeCache {
+    /// The geometry generation the edges were built from.
+    generation: u64,
+    /// The buffer and how many of its vertices are in use.
+    mesh: LineMesh,
+    /// How many vertices the buffer holds.
+    capacity: u32,
+    /// Where each mesh's vertices are in the buffer: the first and how many. A changed
+    /// mesh's edges are written over its old ones, or after the last when it has more.
+    slots: Vec<(u32, u32)>,
 }
 
 /// A vertex or instance buffer and the runs of it that share a texture or model.
@@ -526,7 +549,7 @@ pub struct Renderer3D {
     /// Every face, cached until the geometry changes.
     faces: Option<StaticFaces>,
     /// Every edge, cached until the geometry changes; shared by the 2D views.
-    edges: Option<(u64, LineMesh)>,
+    edges: Option<EdgeCache>,
     /// Every edge but the selection's, for while a drag shows the selection elsewhere;
     /// keyed by the geometry and selection generations it was built from.
     drag_edges: Option<((u64, u64), Option<LineMesh>)>,
@@ -983,8 +1006,9 @@ impl Renderer3D {
         let loader = materials.as_deref().map(Materials::loader);
         if textured {
             if self.textures_checked != scene.geometry_generation {
+                let changed = changed_meshes(scene, self.textures_checked).map(|(meshes, _)| meshes);
                 self.upload_models(scene, models);
-                self.load_textures(scene, materials, models);
+                self.load_textures(scene, materials, models, changed.as_deref());
                 self.textures_checked = scene.geometry_generation;
             }
             self.load_sprite_frames(scene, loader.as_ref());
@@ -1128,11 +1152,11 @@ impl Renderer3D {
                     pass.set_pipeline(&self.face_pipeline);
                     stats.chunks = faces.opaque.chunks.len();
                     for (mesh, skipped) in self.opaque_faces() {
-                        pass.set_vertex_buffer(0, mesh.buffer.slice(..));
                         for chunk in mesh.chunks.iter().filter(|chunk| {
                             skipped.is_none_or(|cells| !cells.contains(&chunk.cell))
                                 && box_visible(&planes, chunk.min, chunk.max)
                         }) {
+                            pass.set_vertex_buffer(0, mesh.buffer_of(chunk).slice(..));
                             stats.chunks_drawn += 1;
                             stats.triangles_drawn += chunk.triangles;
                             for (key, range) in &chunk.batches {
@@ -1525,19 +1549,42 @@ impl Renderer3D {
         }
     }
 
-    /// Rebuilds the cached buffer of every brush edge when the geometry changed.
+    /// Brings the cached buffer of every brush edge up to the scene's geometry: just the
+    /// edges of the meshes that changed when they still fit where the old ones were,
+    /// otherwise everything.
     fn ensure_edges(&mut self, scene: &Scene) {
-        if self
-            .edges
-            .as_ref()
-            .is_none_or(|(generation, _)| *generation != scene.geometry_generation)
-        {
-            let mut vertices = Vec::new();
-            for mesh in &scene.meshes {
-                push_edges(&mut vertices, &mesh.edges, None, mesh.color);
-            }
-            self.edges = self.line_mesh(&vertices).map(|mesh| (scene.geometry_generation, mesh));
+        let generation = scene.geometry_generation;
+        if self.edges.as_ref().is_some_and(|edges| edges.generation == generation) {
+            return;
         }
+        if let Some(edges) = &mut self.edges {
+            if rewrite_edges(&self.queue, edges, scene) {
+                edges.generation = generation;
+                return;
+            }
+        }
+        let mut vertices = Vec::new();
+        let mut slots = Vec::with_capacity(scene.meshes.len());
+        for mesh in &scene.meshes {
+            let start = vertices.len();
+            push_edges(&mut vertices, &mesh.edges, None, mesh.color);
+            slots.push((start as u32, (vertices.len() - start) as u32));
+        }
+        let count = vertices.len() as u32;
+        let capacity = count + count / SPARE_EDGE_SHARE + SPARE_EDGES;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mallet edges"),
+            size: u64::from(capacity) * LINE_VERTEX_SIZE,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&vertices));
+        self.edges = Some(EdgeCache {
+            generation,
+            mesh: LineMesh { buffer, count },
+            capacity,
+            slots,
+        });
     }
 
     /// Draws one 2D view into viewport slot `slot`'s image of `pixels` size; `points` is the viewport's size
@@ -1712,31 +1759,33 @@ impl Renderer3D {
     /// been seen yet. Faces show a grey stand-in until their texture arrives. The threads
     /// hand over one texture at a time and wait while [`LOADED_QUEUE`] of them are still
     /// to be uploaded, so loading a large map never holds more than a few in memory.
-    fn load_textures(&mut self, scene: &Scene, materials: Option<&mut Materials>, models: &ModelCache) {
-        let model_materials = scene
-            .meshes
-            .iter()
+    fn load_textures(
+        &mut self,
+        scene: &Scene,
+        materials: Option<&mut Materials>,
+        models: &ModelCache,
+        only: Option<&[usize]>,
+    ) {
+        let meshes: Vec<&WireMesh> = match only {
+            Some(changed) => changed.iter().filter_map(|at| scene.meshes.get(*at)).collect(),
+            None => scene.meshes.iter().collect(),
+        };
+        let model_materials = meshes.iter().copied()
             .filter_map(|mesh| models.get(&mesh.model.as_ref()?.key)?.as_ref())
             .flat_map(|model| model.meshes.iter().map(|mesh| mesh.material.as_str()));
-        let blends: Vec<String> = scene
-            .meshes
-            .iter()
+        let blends: Vec<String> = meshes.iter().copied()
             .flat_map(|mesh| &mesh.faces)
             .filter(|face| face.displacement.is_some())
             .filter_map(|face| face.material.as_deref())
             .flat_map(|material| BLEND_LAYERS.map(move |layer| layer_key(&material_key(material), layer)))
             .collect();
-        let wanted: HashSet<String> = scene
-            .meshes
-            .iter()
+        let wanted: HashSet<String> = meshes.iter().copied()
             .flat_map(|mesh| &mesh.faces)
             .filter_map(|face| face.material.as_deref())
             .chain(blends.iter().map(String::as_str))
             .chain(model_materials)
             .chain(
-                scene
-                    .meshes
-                    .iter()
+                meshes.iter().copied()
                     .filter_map(|mesh| Some(mesh.sprite.as_ref()?.material.as_str())),
             )
             .map(material_key)
@@ -1889,25 +1938,18 @@ impl Renderer3D {
     /// retextured brushes when that is all that changed, otherwise everything.
     fn update_static_faces(&mut self, scene: &Scene) {
         if let Some(mut faces) = self.faces.take() {
-            // Follow the retexture steps from what was last drawn to now.
-            let mut generation = faces.generation;
-            let mut changed = Vec::new();
-            let mut previous = Vec::new();
-            for step in &scene.retextures {
-                if step.from == generation {
-                    changed.extend_from_slice(&step.meshes);
-                    previous.extend_from_slice(&step.previous);
-                    generation = step.to;
-                }
-            }
-            if generation == scene.geometry_generation && !changed.is_empty() {
+            if let Some((changed, previous)) = changed_meshes(scene, faces.generation) {
                 let dirty: HashSet<[i32; 3]> = changed
                     .iter()
                     .filter_map(|at| scene.meshes.get(*at))
-                    .map(|mesh| chunk_cell(&mesh.bounds))
-                    .chain(previous.iter().map(chunk_cell))
+                    .map(|mesh| &mesh.bounds)
+                    .chain(&previous)
+                    .filter(|bounds| !bounds.is_empty())
+                    .map(chunk_cell)
                     .collect();
-                self.rebuild_cells(&mut faces, scene, &dirty);
+                if !dirty.is_empty() {
+                    self.rebuild_cells(&mut faces, scene, &dirty);
+                }
                 faces.generation = scene.geometry_generation;
                 self.faces = Some(faces);
                 return;
@@ -1939,8 +1981,22 @@ impl Renderer3D {
             true,
         );
         faces.cells.retain(|cell, _| !dirty.contains(cell));
-        faces.cells.extend(rebuilt);
-        faces.opaque = self.upload_cells(&faces.cells);
+        faces.opaque.chunks.retain(|chunk| !dirty.contains(&chunk.cell));
+        let apart = faces.opaque.chunks.iter().filter(|chunk| chunk.own.is_some()).count();
+        if (apart + rebuilt.len()) * OWN_BUFFER_SHARE > faces.cells.len() + rebuilt.len() {
+            faces.cells.extend(rebuilt);
+            faces.opaque = self.upload_cells(&faces.cells);
+        } else {
+            for (at, cell) in &rebuilt {
+                let single = HashMap::from([(*at, cell.clone())]);
+                let FaceMesh { buffer, mut chunks } = self.upload_cells(&single);
+                if let Some(mut chunk) = chunks.pop() {
+                    chunk.own = Some(buffer);
+                    faces.opaque.chunks.push(chunk);
+                }
+            }
+            faces.cells.extend(rebuilt);
+        }
         faces.translucent = faces
             .cells
             .values()
@@ -2059,7 +2115,7 @@ impl Renderer3D {
     fn static_edges(&self) -> Option<&LineMesh> {
         match &self.drag_edges {
             Some((_, mesh)) => mesh.as_ref(),
-            None => self.edges.as_ref().map(|(_, mesh)| mesh),
+            None => self.edges.as_ref().map(|edges| &edges.mesh),
         }
     }
 
@@ -2255,6 +2311,7 @@ impl Renderer3D {
                     max: cell.max,
                     batches,
                     triangles: (written - first) / 3,
+                    own: None,
                 });
             }
         }
@@ -2269,7 +2326,7 @@ impl Renderer3D {
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mallet lines"),
             contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         Some(LineMesh {
             buffer,
@@ -2288,6 +2345,79 @@ fn ready<T>(future: impl Future<Output = T>) -> Option<T> {
 }
 
 /// Hashes whatever `feed` writes, to fingerprint what a viewport image was drawn from.
+/// Once this share of a face mesh's chunks, one in so many, have a vertex buffer of
+/// their own, the whole mesh is uploaded into one buffer again, so that the memory of
+/// the chunks they replaced is given back.
+const OWN_BUFFER_SHARE: usize = 3;
+
+/// The meshes that changed between geometry generation `from` and the scene's current
+/// one, with the bounds each had before, when the scene remembers every step between
+/// them ([`Scene::retextures`]); `None` when it does not and everything may have changed.
+fn changed_meshes(scene: &Scene, from: u64) -> Option<(Vec<usize>, Vec<mallet_vmf::geometry::Bounds>)> {
+    let mut generation = from;
+    let mut changed = Vec::new();
+    let mut previous = Vec::new();
+    for step in &scene.retextures {
+        if step.from == generation {
+            changed.extend_from_slice(&step.meshes);
+            previous.extend_from_slice(&step.previous);
+            generation = step.to;
+        }
+    }
+    (generation == scene.geometry_generation && generation != from).then_some((changed, previous))
+}
+
+/// The size of one [`LineVertex`] in a buffer.
+const LINE_VERTEX_SIZE: u64 = std::mem::size_of::<LineVertex>() as u64;
+
+/// The buffer of every edge is made this many vertices larger than the map needs, and
+/// by one more for every so many it holds, for the edges of what is added later.
+const SPARE_EDGES: u32 = 4096;
+const SPARE_EDGE_SHARE: u32 = 8;
+
+/// Writes the edges of the meshes that changed since `edges` was built into its buffer:
+/// over a mesh's old edges, the rest of their place blanked, or after the last edge
+/// when the mesh is new or has more of them. Returns `false` when the scene does not
+/// remember what changed or the buffer is full, and everything has to be written anew.
+fn rewrite_edges(queue: &wgpu::Queue, edges: &mut EdgeCache, scene: &Scene) -> bool {
+    let Some((changed, _)) = changed_meshes(scene, edges.generation) else {
+        return false;
+    };
+    if scene.meshes.len() < edges.slots.len() {
+        return false;
+    }
+    edges.slots.resize(scene.meshes.len(), (0, 0));
+    let write = |start: u32, vertices: &[LineVertex]| {
+        queue.write_buffer(
+            &edges.mesh.buffer,
+            u64::from(start) * LINE_VERTEX_SIZE,
+            bytemuck::cast_slice(vertices),
+        );
+    };
+    for at in changed {
+        let Some(mesh) = scene.meshes.get(at) else {
+            return false;
+        };
+        let (start, room) = edges.slots[at];
+        let mut vertices = Vec::new();
+        push_edges(&mut vertices, &mesh.edges, None, mesh.color);
+        let count = vertices.len() as u32;
+        if count <= room {
+            vertices.resize(room as usize, bytemuck::Zeroable::zeroed());
+            write(start, &vertices);
+            continue;
+        }
+        if edges.mesh.count + count > edges.capacity {
+            return false;
+        }
+        write(start, &vec![bytemuck::Zeroable::zeroed(); room as usize]);
+        write(edges.mesh.count, &vertices);
+        edges.slots[at] = (edges.mesh.count, count);
+        edges.mesh.count += count;
+    }
+    true
+}
+
 /// What the selection's outline and tinted faces are built from: the map, the
 /// selection, where a drag has taken it and its colour.
 fn selection_key(scene: &Scene, overlay: &Overlay, color: Color32) -> u64 {

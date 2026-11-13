@@ -115,6 +115,24 @@ space, and turns a drag into a move (the mouse ray's closest point on an axis, o
 on a plane), a rotation (the mouse's angle around the gizmo's centre on screen) or a
 scale; the result goes through the same commands as the 2D handles.
 
+Brushes and entities are found by id through `mallet_vmf::index`: a map remembers where
+each one was (`Vmf::entity_by_id`, `solid_by_id`, `solid_with_owner`, `world_solid`),
+checks every remembered position before using it, looks next to it when the map has
+shifted, and reads the whole map again only when that fails. Edits tell it what they add,
+so an id it does not hold is absent. This keeps moving, copying, deleting or just drawing
+a selection of tens of thousands of objects from reading the map once per object.
+
+After an edit the editor does not build the scene anew. `Edit::touched` names the brushes
+and entities the edit changed, added, removed, hid or showed, and `Scene::patch` brings
+only their meshes up to the map: a changed mesh is replaced where it stands, a new one
+goes after all others, and one that left the map leaves a hole, so every other mesh keeps
+its place and its face numbers. The pictures of overlays and decals lying on or near what
+changed are cut again. Each patch is a step in `Scene::retextures`, which the renderer
+follows to redo only the chunks, edges and textures of those meshes. When an edit touches
+more than a third of the scene, or too many holes have gathered, `Scene::build` runs
+instead, with the meshes built on every processor core. `editor::scene_update_tests`
+checks a patched scene against a built one after each kind of edit.
+
 ## Selection
 
 The side panel's selection mode (`PickMode`) decides what a click picks, as in Hammer.
@@ -159,7 +177,7 @@ per-object changes (groups, flags, colour) into one batch of `SetEditors` and `S
 Automatic groups (`AutoGroup`) are not stored. `visgroup::objects` sorts every world brush and
 entity, read from `hidden` blocks too, by class name and materials: world geometry, displacements,
 skybox, tool brushes and their kinds, point and brush entities, lights, nodes, triggers, details and
-props. `Editor::refresh_visgroups` runs after every edit, with the scene rebuild, and keeps the
+props. `Editor::refresh_visgroups` runs after every edit that may change the groups (`Touched::grouping`), and keeps the
 panel's rows (`Editor::visgroups`): member counts and whether a group shows, is hidden or is partly
 hidden, read from the members' flags. `editor/visgroups.rs` holds the operations, each one undo
 step, and `app/visgroups.rs` the side panel section, the Move Selection to VisGroup dialog and the
@@ -600,9 +618,10 @@ changes, never for selection changes or camera moves:
   materials read, tint and blend in gamma space by default (`$nosrgb`), so they are drawn
   in their own pass through a view of the image without the sRGB curve, where the
   graphics card has one; other shaders blend in linear light. Lines are drawn after them.
-- The selection, its red outline and tool previews are small and rebuilt every frame so
-  drags show live. In 3D the selection is drawn again over the cached geometry at equal
-  depth, tinted red.
+- The selection's red outline and, in 3D, its faces drawn again over the cached geometry
+  at equal depth, tinted red, are kept until the selection, the map, a drag or a texture
+  changes, so looking around a large selection builds nothing. Tool previews are small
+  and rebuilt every frame.
 
 `get_status` reports per-frame timings and how many chunks and triangles the camera drew,
 and View > Net Graph shows the same numbers in the camera view's bottom-right corner.

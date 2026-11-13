@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use eframe::egui::{Color32, Pos2, Rect, Vec2};
 use glam::{DVec2, DVec3};
 use mallet_vmf::build::box_solid;
-use mallet_vmf::edit::Edit;
+use mallet_vmf::edit::{Edit, Touched};
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::overlay::DECAL_CLASS;
 use mallet_vmf::sides::{CopiedSides, OtherFaces};
@@ -814,8 +814,8 @@ impl Editor {
     }
 
     fn set_document(&mut self, document: Document) {
-        self.ensure_models(&document.vmf);
-        self.ensure_decal_sizes(&document.vmf);
+        self.ensure_models(document.vmf.entities());
+        self.ensure_decal_sizes(document.vmf.entities());
         self.scene = Scene::build(
             &document.vmf,
             &self.models,
@@ -905,7 +905,7 @@ impl Editor {
             .apply(&mut document.vmf, edit)
             .map_err(|error| error.to_string())?;
         document.dirty = true;
-        self.rebuild_scene();
+        self.update_scene(edit.touched());
         Ok(())
     }
 
@@ -918,13 +918,19 @@ impl Editor {
             .apply_grouped(&mut document.vmf, edit, group)
             .map_err(|error| error.to_string())?;
         document.dirty = true;
-        self.rebuild_scene();
+        self.update_scene(edit.touched());
         Ok(())
     }
 
     /// Undoes or redoes one step. Returns whether anything changed.
     pub fn step_history(&mut self, redo: bool) -> Result<bool, String> {
         let document = self.document.as_mut().ok_or("no map is open")?;
+        let next = if redo {
+            document.history.next_redo()
+        } else {
+            document.history.next_undo()
+        };
+        let touched = next.and_then(Edit::touched);
         let result = if redo {
             document.history.redo(&mut document.vmf)
         } else {
@@ -934,7 +940,7 @@ impl Editor {
             Ok(changed) => {
                 if changed {
                     document.dirty = true;
-                    self.rebuild_scene();
+                    self.update_scene(touched);
                 }
                 Ok(changed)
             }
@@ -975,12 +981,50 @@ impl Editor {
         self.sound.running()
     }
 
+    /// Brings the wireframes up to the map after an edit. `touched` is what the edit
+    /// changed where it stands, as [`Edit::touched`] gives it: only those brushes and
+    /// entities are built again. Without it, or when that is not enough, everything is.
+    fn update_scene(&mut self, touched: Option<Touched>) {
+        if !touched.is_some_and(|touched| self.patch_scene(&touched)) {
+            self.rebuild_scene();
+        }
+    }
+
+    /// Rebuilds the wireframes of the brushes and entities in `touched`. Returns `false`
+    /// when the scene has to be built anew instead.
+    fn patch_scene(&mut self, touched: &Touched) -> bool {
+        if !self.scene.patches(touched) {
+            return false;
+        }
+        let Some(document) = self.document.take() else {
+            return false;
+        };
+        let entities = || touched.entities.iter().filter_map(|id| document.vmf.entity_by_id(*id));
+        self.ensure_models(entities());
+        self.ensure_decal_sizes(entities());
+        let patched = self.scene.patch(
+            &document.vmf,
+            &self.models,
+            self.game_data.as_deref(),
+            &self.decal_sizes,
+            touched,
+        );
+        self.document = Some(document);
+        if patched {
+            if touched.grouping {
+                self.refresh_visgroups();
+            }
+            self.sync_selection();
+        }
+        patched
+    }
+
     /// Rebuilds the wireframes after the map changed, dropping selected items that no
     /// longer exist.
     pub fn rebuild_scene(&mut self) {
         if let Some(document) = self.document.take() {
-            self.ensure_models(&document.vmf);
-            self.ensure_decal_sizes(&document.vmf);
+            self.ensure_models(document.vmf.entities());
+            self.ensure_decal_sizes(document.vmf.entities());
             self.scene = Scene::build(
                 &document.vmf,
                 &self.models,
@@ -1843,13 +1887,12 @@ impl Editor {
     }
 
     /// Loads, in parallel, every prop model the map uses that is not loaded yet.
-    fn ensure_models(&mut self, vmf: &Vmf) {
+    fn ensure_models<'a>(&mut self, entities: impl Iterator<Item = &'a Entity>) {
         let Some(materials) = &self.materials else {
             return;
         };
         let game_data = self.game_data.as_deref();
-        let mut missing: Vec<String> = vmf
-            .entities()
+        let mut missing: Vec<String> = entities
             .filter_map(|entity| entity_model(entity, game_data.and_then(|data| data.class(entity.classname()))))
             .map(model_key)
             .filter(|key| !self.models.contains_key(key))
@@ -1877,12 +1920,11 @@ impl Editor {
     /// Looks up the size of every decal texture in the map that has not been seen yet,
     /// so the scene can draw each `infodecal` as large as the game does: the texture's
     /// size times the material's `$decalscale`.
-    fn ensure_decal_sizes(&mut self, vmf: &Vmf) {
+    fn ensure_decal_sizes<'a>(&mut self, entities: impl Iterator<Item = &'a Entity>) {
         let Some(materials) = &mut self.materials else {
             return;
         };
-        let mut missing: Vec<String> = vmf
-            .entities()
+        let mut missing: Vec<String> = entities
             .filter(|entity| entity.classname().eq_ignore_ascii_case(DECAL_CLASS))
             .filter_map(|entity| entity.get("texture"))
             .map(decal_key)
@@ -2209,5 +2251,152 @@ mod hide_tests {
 
         assert!(editor.step_history(false).unwrap());
         assert!(editor.scene.owners().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod scene_update_tests {
+    use super::*;
+
+    /// A map with a grid of brushes and a row of lights: large enough that an edit
+    /// updates the scene where it changed instead of building it anew.
+    fn editor_with_grid() -> (Editor, Vec<u32>, Vec<u32>) {
+        let mut editor = Editor::default();
+        editor.new_map();
+        let mut brushes = Vec::new();
+        let mut lights = Vec::new();
+        for x in 0..8 {
+            for y in 0..8 {
+                let min = DVec3::new(f64::from(x) * 256.0, f64::from(y) * 256.0, 0.0);
+                brushes.push(editor.create_block(min, min + DVec3::splat(128.0)).unwrap());
+            }
+            let origin = DVec3::new(f64::from(x) * 256.0 + 64.0, 64.0, 256.0);
+            lights.push(editor.create_entity("light", origin, &[]).unwrap());
+        }
+        editor.clear_selection();
+        (editor, brushes, lights)
+    }
+
+    /// Checks that the scene an edit left behind shows the same as one built anew from
+    /// the map, and that the edit did not build it anew itself.
+    #[track_caller]
+    fn check(editor: &Editor, step: &str) {
+        let document = editor.document.as_ref().unwrap();
+        let fresh = Scene::build(
+            &document.vmf,
+            &editor.models,
+            editor.game_data.as_deref(),
+            &editor.decal_sizes,
+        );
+        assert!(editor.scene.outline() == fresh.outline(), "the scene is out of date after {step}");
+        assert_eq!(
+            (editor.scene.solid_count, editor.scene.entity_count),
+            (fresh.solid_count, fresh.entity_count),
+            "after {step}"
+        );
+        assert!(!editor.scene.retextures.is_empty(), "{step} built the whole scene anew");
+    }
+
+    /// The side id of the top face of a brush and the middle of that face.
+    fn top_face(editor: &Editor, brush: u32) -> (u32, DVec3) {
+        let mesh = editor
+            .scene
+            .meshes
+            .iter()
+            .find(|mesh| mesh.solid == Some(brush))
+            .unwrap();
+        let face = mesh.faces.iter().find(|face| face.normal.z > 0.9).unwrap();
+        let middle = face.vertices.iter().sum::<DVec3>() / face.vertices.len() as f64;
+        (face.side.unwrap(), middle)
+    }
+
+    #[test]
+    fn moves_clones_and_deletes_update_the_scene_in_place() {
+        let (mut editor, brushes, _) = editor_with_grid();
+        editor.select([Owner::Solid(brushes[0])], SelectMode::Replace);
+        editor.move_selection(DVec3::new(16.0, 0.0, 0.0)).unwrap();
+        check(&editor, "a move");
+        editor.clone_selection(DVec3::new(0.0, 0.0, 256.0)).unwrap();
+        check(&editor, "a clone");
+        assert_eq!(editor.selection.len(), 1, "the clone is selected");
+        assert_eq!(editor.delete_selection().unwrap(), 1);
+        check(&editor, "a delete");
+        for step in ["undoing the delete", "undoing the clone", "undoing the move"] {
+            assert!(editor.step_history(false).unwrap());
+            check(&editor, step);
+        }
+        for step in ["redoing the move", "redoing the clone", "redoing the delete"] {
+            assert!(editor.step_history(true).unwrap());
+            check(&editor, step);
+        }
+        editor.select([Owner::Solid(brushes[7])], SelectMode::Replace);
+        let bounds = editor.scene.selection_bounds();
+        editor
+            .resize_selection(Bounds {
+                min: bounds.min,
+                max: bounds.max + DVec3::new(64.0, 32.0, 16.0),
+            })
+            .unwrap();
+        check(&editor, "a resize");
+    }
+
+    #[test]
+    fn brush_entities_hollows_and_hiding_update_the_scene_in_place() {
+        let (mut editor, brushes, _) = editor_with_grid();
+        editor.select([Owner::Solid(brushes[1]), Owner::Solid(brushes[2])], SelectMode::Replace);
+        let detail = editor.tie_to_new_entity("func_detail").unwrap();
+        check(&editor, "tying to an entity");
+        editor.select([Owner::Entity(detail)], SelectMode::Replace);
+        editor.move_selection(DVec3::new(0.0, 0.0, 64.0)).unwrap();
+        check(&editor, "moving a brush entity");
+        editor.move_to_world().unwrap();
+        check(&editor, "moving to the world");
+        assert!(editor.step_history(false).unwrap());
+        check(&editor, "undoing the move to the world");
+
+        editor.select([Owner::Solid(brushes[4]), Owner::Entity(detail)], SelectMode::Replace);
+        assert_eq!(editor.hide_selection().unwrap(), 2);
+        check(&editor, "hiding");
+        assert_eq!(editor.show_all_hidden().unwrap(), 2);
+        check(&editor, "showing");
+
+        editor.select([Owner::Solid(brushes[3])], SelectMode::Replace);
+        assert!(editor.make_hollow(8.0).unwrap() > 1);
+        check(&editor, "making hollow");
+        assert!(editor.step_history(false).unwrap());
+        check(&editor, "undoing the hollow");
+    }
+
+    #[test]
+    fn entity_keys_overlays_and_decals_update_the_scene_in_place() {
+        let (mut editor, brushes, lights) = editor_with_grid();
+        editor.set_key_on(&[lights[0]], "origin", "8 16 320").unwrap();
+        check(&editor, "setting an origin");
+        editor.set_key_on(&[lights[1]], "classname", "info_target").unwrap();
+        check(&editor, "setting a classname");
+
+        let (side, middle) = top_face(&editor, brushes[5]);
+        let overlay = editor
+            .create_overlay(side, middle, "decals/test", Some(glam::DVec2::splat(32.0)))
+            .unwrap();
+        check(&editor, "placing an overlay");
+        editor.select([Owner::Solid(brushes[5])], SelectMode::Replace);
+        editor.move_selection(DVec3::new(0.0, 0.0, 32.0)).unwrap();
+        check(&editor, "moving a brush under an overlay");
+        editor.select([Owner::Entity(overlay)], SelectMode::Replace);
+        editor.move_selection(DVec3::new(16.0, 0.0, 0.0)).unwrap();
+        check(&editor, "moving an overlay");
+
+        let (_, middle) = top_face(&editor, brushes[6]);
+        let decal = editor.create_decal(middle + DVec3::Z, "decals/test").unwrap();
+        check(&editor, "placing a decal");
+        editor.select([Owner::Solid(brushes[6])], SelectMode::Replace);
+        editor.move_selection(DVec3::new(0.0, 0.0, 256.0)).unwrap();
+        check(&editor, "moving a brush out from under a decal");
+        assert!(editor.step_history(false).unwrap());
+        check(&editor, "moving it back");
+        editor.select([Owner::Entity(decal), Owner::Solid(brushes[6])], SelectMode::Replace);
+        assert_eq!(editor.delete_selection().unwrap(), 2);
+        check(&editor, "deleting a decal and its brush");
     }
 }
