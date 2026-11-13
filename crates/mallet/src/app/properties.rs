@@ -12,7 +12,7 @@ use mallet_content::{ClassKind, EntityClass, Property};
 use mallet_vmf::Connection;
 
 use super::MalletApp;
-use crate::editor::{Editor, SelectMode};
+use crate::editor::{Editor, SelectMode, UserGroupRow};
 use crate::properties::InputLink;
 use crate::scene::Owner;
 
@@ -29,6 +29,7 @@ pub(super) enum Tab {
     Outputs,
     Inputs,
     Flags,
+    VisGroups,
 }
 
 /// What the window remembers between frames.
@@ -80,6 +81,10 @@ struct Snapshot {
     /// The sound position key that the next click in the 3D view places, when it is
     /// picked for these entities.
     positioning: Option<String>,
+    /// The map's VisGroups, each with how many of the selected objects are in it.
+    visgroups: Vec<(UserGroupRow, usize)>,
+    /// How many objects are selected, which the VisGroups tab changes.
+    selected: usize,
 }
 
 /// A change made in the window, applied after drawing it.
@@ -101,6 +106,8 @@ enum Change {
     /// Start picking where this sound position key is with a click in the 3D view, or
     /// stop when it is being picked already.
     PickPosition(String),
+    /// Put the selected objects in a VisGroup, or take them out of it.
+    VisGroup(u32, bool),
 }
 
 impl MalletApp {
@@ -111,13 +118,14 @@ impl MalletApp {
             editor.stop_position_pick();
             return;
         }
-        let snapshot = snapshot(editor);
+        let snapshot = snapshot(editor, self.properties.tab == Tab::VisGroups);
         let state = &mut self.properties;
         if let Some(tab) = editor.properties_tab.take() {
             state.tab = match tab.as_str() {
                 "outputs" => Tab::Outputs,
                 "inputs" => Tab::Inputs,
                 "flags" => Tab::Flags,
+                "visgroups" => Tab::VisGroups,
                 _ => Tab::Keyvalues,
             };
         }
@@ -175,6 +183,7 @@ impl MalletApp {
                 Change::RemoveKey(key) => editor.remove_key_on(ids, &key),
                 Change::Flag(bit, on) => editor.set_flag_on(ids, bit, on),
                 Change::Outputs(outputs) => editor.set_outputs(ids[0], outputs),
+                Change::VisGroup(group, member) => editor.set_selection_in_visgroup(group, member).map(|_| ()),
                 Change::Select(id) => {
                     editor.select([Owner::Entity(id)], SelectMode::Replace);
                     Ok(())
@@ -225,8 +234,15 @@ impl MalletApp {
     }
 }
 
-fn snapshot(editor: &Editor) -> Snapshot {
+/// Copies what the window shows out of the editor. `groups` asks for the selection's
+/// VisGroups too, which only their tab needs.
+fn snapshot(editor: &Editor, groups: bool) -> Snapshot {
     let ids = editor.property_targets();
+    let (group_counts, selected) = if groups {
+        editor.selection_visgroups()
+    } else {
+        Default::default()
+    };
     let entities: Vec<_> = ids.iter().filter_map(|id| editor.entity(*id)).collect();
     let mut keys: Vec<(String, Value)> = Vec::new();
     for (index, entity) in entities.iter().enumerate() {
@@ -311,6 +327,13 @@ fn snapshot(editor: &Editor) -> Snapshot {
         targetnames: editor.targetnames(),
         picking,
         positioning,
+        visgroups: editor
+            .visgroups
+            .user
+            .iter()
+            .map(|row| (row.clone(), group_counts.get(&row.id).copied().unwrap_or(0)))
+            .collect(),
+        selected,
     }
 }
 
@@ -343,6 +366,7 @@ fn draw(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, cha
         if flags.is_some() {
             ui.selectable_value(&mut state.tab, Tab::Flags, format!("{} Flags", icon::FLAG));
         }
+        ui.selectable_value(&mut state.tab, Tab::VisGroups, format!("{} VisGroups", icon::EYE));
     });
     if flags.is_none() && state.tab == Tab::Flags {
         state.tab = Tab::Keyvalues;
@@ -366,6 +390,7 @@ fn draw(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, cha
                     flags_tab(ui, snapshot, flags, changes);
                 }
             }
+            Tab::VisGroups => visgroups_tab(ui, snapshot, changes),
         });
     ui.separator();
     let (title, text) = help.unwrap_or_else(|| match &snapshot.class {
@@ -393,6 +418,31 @@ fn draw(ui: &mut egui::Ui, state: &mut PropertiesState, snapshot: &Snapshot, cha
             apply_drafts(state, changes);
         }
     });
+}
+
+/// A tick box per VisGroup: ticked when every selected object is in the group, half
+/// ticked when only some are.
+fn visgroups_tab(ui: &mut egui::Ui, snapshot: &Snapshot, changes: &mut Vec<Change>) {
+    if snapshot.visgroups.is_empty() {
+        ui.label(
+            RichText::new("The map has no VisGroups. Make one with View > Move Selection to VisGroup.").color(MUTED),
+        );
+        return;
+    }
+    if snapshot.selected == 0 {
+        ui.label(RichText::new("Select brushes or entities to change their VisGroups.").color(MUTED));
+    }
+    for (row, count) in &snapshot.visgroups {
+        ui.horizontal(|ui| {
+            ui.add_space(14.0 * row.depth as f32);
+            let mut member = *count > 0 && *count == snapshot.selected;
+            let partial = *count > 0 && *count < snapshot.selected;
+            let tick = egui::Checkbox::new(&mut member, row.name.as_str()).indeterminate(partial);
+            if ui.add_enabled(snapshot.selected > 0, tick).clicked() {
+                changes.push(Change::VisGroup(row.id, partial || member));
+            }
+        });
+    }
 }
 
 /// Class name with a picker, and the entity id.
