@@ -6,7 +6,7 @@
 //! face under the cursor. Overlays also ride along with the brushes they lie on when
 //! those are moved with texture lock.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{DMat4, DVec2, DVec3};
 use mallet_vmf::edit::Edit;
@@ -64,6 +64,20 @@ impl Editor {
             .enumerate()
             .flat_map(|(index, (solids, _, _))| solids.iter().map(move |solid| (*solid, index)))
             .collect();
+        let moved_sides: HashSet<u32> = group_of
+            .keys()
+            .filter_map(|id| document.vmf.solid_by_id(*id))
+            .flat_map(|solid| solid.sides().map(|side| side.id))
+            .collect();
+        let listed = |entity: &mallet_vmf::Entity| {
+            let sides = entity.get("sides").unwrap_or_default();
+            sides
+                .split_whitespace()
+                .any(|word| word.parse().is_ok_and(|side: u32| moved_sides.contains(&side)))
+        };
+        if !riders.iter().any(|(_, entity)| listed(entity)) {
+            return Vec::new();
+        }
         let mut side_group: HashMap<u32, Option<usize>> = HashMap::new();
         for solid in document.vmf.all_entities().flat_map(mallet_vmf::Entity::solids) {
             let group = solid.id().and_then(|id| group_of.get(&id).copied());
