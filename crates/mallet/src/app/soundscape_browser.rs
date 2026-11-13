@@ -601,7 +601,8 @@ impl SoundscapeBrowserState {
         if !outline.positions.is_empty() {
             let numbers: Vec<String> = outline.positions.iter().map(i32::to_string).collect();
             ui.label(format!(
-                "Plays at sound position{} {}; its entity names them with position0 to position7.",
+                "Plays at sound position{} {}; its entity names them with position0 to position7. The crosshair \
+                 button next to those in Object Properties places one with a click in the 3D view.",
                 if numbers.len() == 1 { "" } else { "s" },
                 numbers.join(", ")
             ));

@@ -29,6 +29,7 @@ mod lighting;
 mod mcp;
 mod model_render;
 mod netgraph;
+mod position_pick;
 mod presence;
 mod problems;
 mod prop_brushes;

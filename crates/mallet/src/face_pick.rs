@@ -55,6 +55,7 @@ impl Editor {
     /// Starts picking faces for `key` of the entities `ids` with clicks in the 3D view,
     /// replacing any pick already running.
     pub fn start_face_pick(&mut self, ids: Vec<u32>, key: &str) {
+        self.position_pick = None;
         self.face_pick = Some(FacePick {
             tab: self.active_tab_id(),
             ids,

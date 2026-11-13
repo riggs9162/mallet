@@ -77,6 +77,9 @@ struct Snapshot {
     /// The side list key that clicks in the 3D view pick faces for, when it is picked
     /// for these entities.
     picking: Option<String>,
+    /// The sound position key that the next click in the 3D view places, when it is
+    /// picked for these entities.
+    positioning: Option<String>,
 }
 
 /// A change made in the window, applied after drawing it.
@@ -95,6 +98,9 @@ enum Change {
     /// Start picking faces for this side list key in the 3D view, or stop when it is
     /// being picked already.
     PickFaces(String),
+    /// Start picking where this sound position key is with a click in the 3D view, or
+    /// stop when it is being picked already.
+    PickPosition(String),
 }
 
 impl MalletApp {
@@ -102,6 +108,7 @@ impl MalletApp {
     pub(super) fn properties_window(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         if !editor.properties_open {
             editor.stop_face_pick();
+            editor.stop_position_pick();
             return;
         }
         let snapshot = snapshot(editor);
@@ -153,6 +160,13 @@ impl MalletApp {
         if stale_pick {
             editor.stop_face_pick();
         }
+        let stale_position = editor
+            .position_pick
+            .as_ref()
+            .is_some_and(|pick| pick.ids != snapshot.ids || pick.tab != editor.active_tab_id());
+        if stale_position {
+            editor.stop_position_pick();
+        }
         for change in changes {
             let ids = &snapshot.ids;
             let result = match change {
@@ -178,6 +192,14 @@ impl MalletApp {
                         editor.stop_face_pick();
                     } else {
                         editor.start_face_pick(ids.clone(), &key);
+                    }
+                    Ok(())
+                }
+                Change::PickPosition(key) => {
+                    if snapshot.positioning.as_ref() == Some(&key) {
+                        editor.stop_position_pick();
+                    } else {
+                        editor.start_position_pick(ids.clone(), &key);
                     }
                     Ok(())
                 }
@@ -255,6 +277,10 @@ fn snapshot(editor: &Editor) -> Snapshot {
         .active_face_pick()
         .filter(|pick| pick.ids == ids)
         .map(|pick| pick.key.clone());
+    let positioning = editor
+        .active_position_pick()
+        .filter(|pick| pick.ids == ids)
+        .map(|pick| pick.key.clone());
     Snapshot {
         target_valid: outputs_list
             .iter()
@@ -284,6 +310,7 @@ fn snapshot(editor: &Editor) -> Snapshot {
         inputs,
         targetnames: editor.targetnames(),
         picking,
+        positioning,
     }
 }
 
@@ -618,7 +645,44 @@ fn property_editor(
             .classname
             .as_deref()
             .is_some_and(crate::editor::class_plays_soundscape);
+    let names_position = snapshot
+        .classname
+        .as_deref()
+        .is_some_and(|classname| crate::position_pick::is_position_key(classname, &property.name));
     match property.kind.as_str() {
+        _ if names_position => {
+            ui.horizontal(|ui| {
+                let (response, committed) = target_field(
+                    ui,
+                    state,
+                    draft_key.clone(),
+                    &current,
+                    &hint,
+                    &snapshot.targetnames,
+                    width - 34.0,
+                );
+                if let Some(text) = committed {
+                    changes.push(Change::SetKey(property.name.clone(), text));
+                }
+                let positioning = snapshot.positioning.as_deref() == Some(property.name.as_str());
+                let tip = if positioning {
+                    "Stop picking the position (Escape)"
+                } else {
+                    "Pick the position in the 3D view: click a surface to put an info_target there and name \
+                     it here. A position that has an info_target of its own already moves it there."
+                };
+                if ui
+                    .selectable_label(positioning, icon::CROSSHAIR)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::PickPosition(property.name.clone()));
+                }
+                response
+            })
+            .inner
+        }
         _ if names_soundscape => {
             ui.horizontal(|ui| {
                 let width = (width - 92.0).max(80.0);

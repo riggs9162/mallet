@@ -437,6 +437,9 @@ pub struct Editor {
     pub face_selection: BTreeSet<u32>,
     /// The side list keyvalue that clicks in the 3D view pick faces for, if any.
     pub(crate) face_pick: Option<crate::face_pick::FacePick>,
+    /// The sound position key that the next click in the 3D view places, when its
+    /// button in Object Properties is on.
+    pub(crate) position_pick: Option<crate::position_pick::PositionPick>,
     /// The clipping tool's points and settings.
     pub clipper: crate::clipper::Clipper,
     /// What a texture tool click does.
@@ -553,6 +556,7 @@ impl Default for Editor {
             pointfile: None,
             face_selection: BTreeSet::new(),
             face_pick: None,
+            position_pick: None,
             clipper: crate::clipper::Clipper::default(),
             recent_materials: Vec::new(),
             texture_mode: crate::faces::TextureMode::default(),

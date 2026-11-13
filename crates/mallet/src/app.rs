@@ -1075,7 +1075,8 @@ impl MalletApp {
         }
         let placing = editor.follow_paste_cursor();
         let picking = editor.active_face_pick().is_some();
-        let busy = picking || placing;
+        let positioning = editor.active_position_pick().is_some();
+        let busy = picking || positioning || placing;
         let painting = !busy && self.paint_displacements_3d(slot, rect, response, editor, pointer);
         let gizmo_hot = !busy
             && !self.paint_selecting(slot)
@@ -1084,7 +1085,7 @@ impl MalletApp {
                 || self.overlay_tool_3d(slot, rect, response, editor, pointer)
                 || painting);
         let selecting = !busy && self.paint_select_3d(slot, rect, response, editor, pointer, gizmo_hot);
-        if picking && response.hovered() && !looking {
+        if (picking || positioning) && response.hovered() && !looking {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         let clicked = if looking {
@@ -1099,6 +1100,9 @@ impl MalletApp {
         } else if let (true, Some(aim), true) = (clicked, aim, picking) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             editor.face_pick_click(origin, direction, pointer.modifiers.ctrl);
+        } else if let (true, Some(aim), true) = (clicked, aim, positioning) {
+            let (origin, direction) = editor.camera.ray(rect, aim);
+            editor.position_pick_click(origin, direction);
         } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
             let (origin, direction) = editor.camera.ray(rect, aim);
             match editor.tool {
@@ -2594,6 +2598,7 @@ fn sound_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
 /// Tells what clicks in the 3D view do while they pick faces for a keyvalue.
 fn face_pick_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
     let Some(pick) = editor.active_face_pick() else {
+        position_pick_notice(painter, rect, editor);
         return;
     };
     painter.text(
@@ -2603,6 +2608,20 @@ fn face_pick_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
             "Picking faces for {}: click lists one face, Ctrl+click adds or takes off, Escape stops",
             pick.key
         ),
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_rgb(255, 210, 60),
+    );
+}
+
+/// Tells what the next click in the 3D view does while it places a sound position.
+fn position_pick_notice(painter: &egui::Painter, rect: Rect, editor: &Editor) {
+    let Some(pick) = editor.active_position_pick() else {
+        return;
+    };
+    painter.text(
+        rect.center_top() + egui::vec2(0.0, 26.0),
+        egui::Align2::CENTER_TOP,
+        format!("Picking {}: click a surface to put it there, Escape stops", pick.key),
         egui::FontId::proportional(13.0),
         egui::Color32::from_rgb(255, 210, 60),
     );
@@ -2764,6 +2783,7 @@ fn run(action: Action, editor: &mut Editor) {
         Action::IgnoreGroups => editor.cycle_pick_mode(),
         Action::ClearSelection if editor.cancel_paste() => {}
         Action::ClearSelection if editor.stop_face_pick() => {}
+        Action::ClearSelection if editor.stop_position_pick() => {}
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()
                 | editor.overlay.entity.take().is_some()
