@@ -210,6 +210,8 @@ pub(super) struct SpriteLighting {
 
 /// One sprite ready to sort and draw.
 struct SpriteQuad {
+    /// For a glow, the point the camera must see for the sprite to show at all.
+    sight: Option<DVec3>,
     center: Vec3,
     min: Vec3,
     max: Vec3,
@@ -410,6 +412,31 @@ fn fog_at(fog: &Fog, eye: DVec3, point: DVec3) -> (f32, DVec3) {
     (amount as f32, color)
 }
 
+/// How much of a Glow or World Space Glow sprite shows while its proxy is in sight, from
+/// 0 to 1, as `StandardGlowBlend` works it out, and the proxy point the camera must see:
+/// less with the square of the distance past 1200 units, unless it has Constant Glow. A
+/// Glow sprite also grows with distance, so it keeps its size on screen. `None` for a
+/// sprite the camera stands in.
+fn glow_blend(camera: &Camera3D, game: &GameSprite, origin: DVec3, scale: &mut f64) -> Option<(f64, DVec3)> {
+    let offset = origin - camera.position;
+    let distance = offset.length();
+    if distance <= 0.0 {
+        return None;
+    }
+    let proxy = origin - offset / distance * game.proxy.min(distance);
+    if game.fx == FX_NO_DISSIPATION {
+        return Some((f64::from(game.amount) / 255.0, proxy));
+    }
+    let fade = (GLOW_FULL_DISTANCE * GLOW_FULL_DISTANCE / (distance * distance)).clamp(0.0, 1.0);
+    if game.mode != WORLD_GLOW {
+        if *scale == 0.0 {
+            *scale = 1.0;
+        }
+        *scale *= distance / GLOW_SIZE_DISTANCE;
+    }
+    Some((fade, proxy))
+}
+
 impl Renderer3D {
     /// The game sprite of a mesh, with its material's first frame once it has loaded.
     fn game_sprite<'a>(&'a self, mesh: &'a WireMesh) -> Option<(&'a GameSprite, String, &'a GpuTexture)> {
@@ -473,14 +500,17 @@ impl Renderer3D {
                 (game.framerate > 0.0 && texture.facts.frames > 2) || (game.mode != NORMAL && fx_animates(game.fx));
             let point = origin.as_vec3();
             animated |= changes && box_visible(planes, point, point);
-            if let Some(quad) =
-                self.sprite_quad(scene, models, camera, mesh, game, &key, texture, origin, lighting, now)
-            {
+            if let Some(quad) = self.sprite_quad(camera, mesh, game, &key, texture, origin, lighting, now) {
                 quads.push(quad);
             }
         }
         let eye = camera.position.as_vec3();
-        quads.retain(|quad| box_visible(planes, quad.min, quad.max));
+        quads.retain(|quad| {
+            box_visible(planes, quad.min, quad.max)
+                && quad
+                    .sight
+                    .is_none_or(|proxy| !self.glow_hidden(scene, models, camera, proxy))
+        });
         quads.sort_by(|a, b| {
             b.center
                 .distance_squared(eye)
@@ -495,12 +525,11 @@ impl Renderer3D {
     }
 
     /// One sprite as `C_SpriteRenderer::DrawSprite` draws it, or `None` when the game would
-    /// draw nothing.
+    /// draw nothing. A glow is returned with the point the camera must see for it to
+    /// show, in [`SpriteQuad::sight`], which is left for the caller to test.
     #[allow(clippy::too_many_arguments)]
     fn sprite_quad(
         &self,
-        scene: &Scene,
-        models: &ModelCache,
         camera: &Camera3D,
         mesh: &WireMesh,
         game: &GameSprite,
@@ -517,11 +546,14 @@ impl Renderer3D {
         }
         let mut color = game.color.map(f64::from);
         let mut scale = game.scale;
+        let mut sight = None;
         if mode != NORMAL {
             let mut blend = f64::from(fx_blend(game, camera, origin, now)) / 255.0;
             if matches!(mode, GLOW | WORLD_GLOW) {
-                blend *= self.glow_blend(scene, models, camera, game, origin, &mut scale);
+                let (shown, proxy) = glow_blend(camera, game, origin, &mut scale)?;
+                blend *= shown;
                 color = color.map(|channel| channel * blend);
+                sight = Some(proxy);
             }
             if blend <= 0.0 {
                 return None;
@@ -618,6 +650,7 @@ impl Renderer3D {
                 (min.min(point), max.max(point))
             });
         Some(SpriteQuad {
+            sight,
             center: origin.as_vec3(),
             min,
             max,
@@ -628,45 +661,16 @@ impl Renderer3D {
         })
     }
 
-    /// How much of a Glow or World Space Glow sprite shows, from 0 to 1, as
-    /// `StandardGlowBlend` works it out: nothing when its proxy is out of sight, and less
-    /// with the square of the distance past 1200 units, unless it has Constant Glow. A Glow
-    /// sprite also grows with distance, so it keeps its size on screen.
-    fn glow_blend(
-        &self,
-        scene: &Scene,
-        models: &ModelCache,
-        camera: &Camera3D,
-        game: &GameSprite,
-        origin: DVec3,
-        scale: &mut f64,
-    ) -> f64 {
-        let offset = origin - camera.position;
-        let distance = offset.length();
-        if distance <= 0.0 {
-            return 0.0;
-        }
-        let near_side = origin - offset / distance * game.proxy.min(distance);
+    /// Whether a glow's proxy point is out of the camera's sight, behind a face the game
+    /// draws, so the glow does not show, as `StandardGlowBlend` tests it.
+    fn glow_hidden(&self, scene: &Scene, models: &ModelCache, camera: &Camera3D, proxy: DVec3) -> bool {
         let drawn = |face: &SceneFace| {
             face.material.as_deref().is_none_or(|material| {
                 let texture = self.texture_for(&material_key(material));
                 !matches!(texture.surface, Surface::Tool | Surface::Nodraw) && !texture.alpha.see_through()
             })
         };
-        if scene.line_blocked(camera.position, near_side, models, drawn) {
-            return 0.0;
-        }
-        if game.fx == FX_NO_DISSIPATION {
-            return f64::from(game.amount) / 255.0;
-        }
-        let fade = (GLOW_FULL_DISTANCE * GLOW_FULL_DISTANCE / (distance * distance)).clamp(0.0, 1.0);
-        if game.mode != WORLD_GLOW {
-            if *scale == 0.0 {
-                *scale = 1.0;
-            }
-            *scale *= distance / GLOW_SIZE_DISTANCE;
-        }
-        fade
+        scene.line_blocked(camera.position, proxy, models, drawn)
     }
 
     /// Uploads sorted sprites into one vertex buffer, in runs that share a texture and a
