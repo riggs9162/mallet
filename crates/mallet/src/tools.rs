@@ -10,6 +10,7 @@ use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::Bounds;
 use mallet_vmf::light::{Falloff, CATALOGUE};
 use mallet_vmf::sound::{OutlineKind, SoundscapeKind};
+use mallet_vmf::visgroup::AutoGroup;
 use mallet_vmf::{Connection, Entity, EntityItem};
 use serde_json::{json, Value};
 
@@ -17,7 +18,9 @@ use eframe::egui::Pos2;
 
 use crate::compile::{self, Outcome, Preset, Severity};
 use crate::config::{self, Config, ToolKind};
-use crate::editor::{Editor, SelectMode, ShotTarget, Tool, ViewMode, MAX_GRID, MIN_GRID};
+use crate::editor::{
+    Editor, GroupState, MoveOptions, SelectMode, ShotTarget, Tool, ViewMode, MAX_GRID, MIN_GRID,
+};
 use crate::face_pick::PickMode;
 use crate::faces::{FaceChange, FaceInfo, FaceValues};
 use crate::input::{self, InputFrame};
@@ -356,8 +359,84 @@ pub fn definitions() -> Value {
         ),
         tool(
             "show_all_hidden",
-            "Show every hidden brush and entity again, as Hammer's Show All does. Undoable.",
+            "Show every brush and entity QuickHide hid again, as Hammer's Unhide QuickHide Objects does. Objects \
+             a VisGroup hides stay hidden: show those with set_visgroup_visible. Undoable.",
             json!({}),
+            &[]
+        ),
+        tool(
+            "list_visgroups",
+            "List the map's VisGroups, Hammer's named sets of objects that show and hide together: the user's \
+             groups (id, name, colour, nesting depth, member count and whether they show) and the automatic \
+             groups Mallet fills by what objects are (such as lights, props or tool brushes), plus how many \
+             objects QuickHide hides.",
+            json!({}),
+            &[]
+        ),
+        tool(
+            "create_visgroup",
+            "Create a VisGroup, by default from the selected brushes and entities, which leave their other \
+             VisGroups. Undoable. Returns the new group's id.",
+            json!({
+                "name": { "type": "string", "description": "Name of the group; default is VisGroup and its number." },
+                "color": { "type": "array", "items": { "type": "integer" }, "minItems": 3, "maxItems": 3, "description": "Red, green and blue from 0 to 255 for an empty group; a group made from the selection picks its own." },
+                "empty": { "type": "boolean", "description": "Create the group without members. Default false." },
+                "hide": { "type": "boolean", "description": "Hide the group once the selection is in it. Default false." }
+            }),
+            &[]
+        ),
+        tool(
+            "move_selection_to_visgroup",
+            "Hammer's Move Selection to VisGroup: put the selected brushes and entities in a VisGroup, or take \
+             them out of it with remove. Undoable.",
+            json!({
+                "id": { "type": "integer", "description": "The VisGroup's id, from list_visgroups." },
+                "keep_others": { "type": "boolean", "description": "Keep the objects in their other VisGroups too. Default false." },
+                "hide": { "type": "boolean", "description": "Hide the objects once they are in the group. Default false." },
+                "remove": { "type": "boolean", "description": "Take the selection out of the group instead. Default false." }
+            }),
+            &["id"]
+        ),
+        tool(
+            "set_visgroup_visible",
+            "Show or hide a VisGroup and the groups nested in it, or one of the automatic groups. With neither \
+             id nor auto, visible true shows every VisGroup again. Hidden objects stay in the map and leave the \
+             views and the selection. Undoable.",
+            json!({
+                "id": { "type": "integer", "description": "A user VisGroup's id, from list_visgroups." },
+                "auto": { "type": "string", "description": "An automatic group's key, from list_visgroups, such as lights, props or tool_brushes." },
+                "visible": { "type": "boolean", "description": "true to show, false to hide." }
+            }),
+            &["visible"]
+        ),
+        tool(
+            "edit_visgroup",
+            "Rename or recolour a VisGroup. Its members take the new colour. Undoable.",
+            json!({
+                "id": { "type": "integer", "description": "The VisGroup's id, from list_visgroups." },
+                "name": { "type": "string", "description": "New name." },
+                "color": { "type": "array", "items": { "type": "integer" }, "minItems": 3, "maxItems": 3, "description": "Red, green and blue from 0 to 255." }
+            }),
+            &["id"]
+        ),
+        tool(
+            "delete_visgroup",
+            "Remove a VisGroup and the groups nested in it. Their objects stay in the map and show again when \
+             no other group holds them. With purge_empty, remove every VisGroup without objects instead. Undoable.",
+            json!({
+                "id": { "type": "integer", "description": "The VisGroup's id, from list_visgroups." },
+                "purge_empty": { "type": "boolean", "description": "Remove every empty VisGroup; id is not needed. Default false." }
+            }),
+            &[]
+        ),
+        tool(
+            "select_visgroup",
+            "Select the members of a VisGroup, or of an automatic group, that are not hidden, as Hammer's Mark \
+             button does.",
+            json!({
+                "id": { "type": "integer", "description": "A user VisGroup's id, from list_visgroups." },
+                "auto": { "type": "string", "description": "An automatic group's key, from list_visgroups." }
+            }),
             &[]
         ),
         tool(
@@ -1800,6 +1879,71 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 "Showed {count} hidden objects. Undo with the undo tool or Ctrl+Z."
             )))
         }
+        "list_visgroups" => Ok(ToolResult::json(&visgroups_json(editor))),
+        "create_visgroup" => {
+            let name = optional_string(args, "name")?.unwrap_or_default();
+            let id = if optional_flag(args, "empty")? == Some(true) {
+                editor.create_visgroup(name, color_arg(args)?)?
+            } else {
+                let options = MoveOptions {
+                    leave_others: true,
+                    hide: optional_flag(args, "hide")? == Some(true),
+                };
+                editor.selection_to_new_visgroup(name, options)?
+            };
+            Ok(ToolResult::json(&json!({ "id": id, "message": editor.message })))
+        }
+        "move_selection_to_visgroup" => {
+            let id = id_arg(args)?;
+            if optional_flag(args, "remove")? == Some(true) {
+                editor.set_selection_in_visgroup(id, false)?;
+            } else {
+                let options = MoveOptions {
+                    leave_others: optional_flag(args, "keep_others")? != Some(true),
+                    hide: optional_flag(args, "hide")? == Some(true),
+                };
+                editor.selection_to_visgroup(id, options)?;
+            }
+            Ok(ToolResult::text(editor.message.clone()))
+        }
+        "set_visgroup_visible" => {
+            let visible = optional_flag(args, "visible")?.ok_or("\"visible\" must be true or false")?;
+            match (args.get("id").filter(|id| !id.is_null()), auto_group_arg(args)?) {
+                (Some(_), _) => editor.set_visgroup_shown(id_arg(args)?, visible)?,
+                (None, Some(group)) => editor.set_auto_visgroup_shown(group, visible)?,
+                (None, None) if visible => editor.show_all_visgroups()?,
+                (None, None) => return Err("give the \"id\" or the \"auto\" group to hide".to_owned()),
+            };
+            Ok(ToolResult::text(editor.message.clone()))
+        }
+        "edit_visgroup" => {
+            let id = id_arg(args)?;
+            let row = editor
+                .visgroups
+                .user
+                .iter()
+                .find(|row| row.id == id)
+                .ok_or_else(|| format!("no VisGroup has id {id}"))?;
+            let name = optional_string(args, "name")?.unwrap_or(&row.name).to_owned();
+            let color = color_arg(args)?.unwrap_or(row.color);
+            editor.edit_visgroup(id, &name, color)?;
+            Ok(ToolResult::text(editor.message.clone()))
+        }
+        "delete_visgroup" => {
+            if optional_flag(args, "purge_empty")? == Some(true) {
+                editor.purge_empty_visgroups()?;
+            } else {
+                editor.delete_visgroup(id_arg(args)?)?;
+            }
+            Ok(ToolResult::text(editor.message.clone()))
+        }
+        "select_visgroup" => {
+            match auto_group_arg(args)? {
+                Some(group) => editor.select_auto_visgroup(group)?,
+                None => editor.select_visgroup(id_arg(args)?)?,
+            };
+            Ok(ToolResult::json(&selection_json(editor)))
+        }
         "clip_selection" => {
             let points = args
                 .get("points")
@@ -3154,6 +3298,67 @@ fn displacement_json(solid: u32, patch: &Patch, vertices: bool, collapsed: Optio
         }
     }
     json
+}
+
+/// The lists of the VisGroups panel, for agents.
+fn visgroups_json(editor: &Editor) -> Value {
+    let state = |state: GroupState| match state {
+        GroupState::Shown => "shown",
+        GroupState::Partial => "partly hidden",
+        GroupState::Hidden => "hidden",
+    };
+    let user: Vec<Value> = editor
+        .visgroups
+        .user
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.id,
+                "name": row.name,
+                "color": row.color,
+                "depth": row.depth,
+                "members": row.members,
+                "state": state(row.state),
+            })
+        })
+        .collect();
+    let auto: Vec<Value> = editor
+        .visgroups
+        .auto
+        .iter()
+        .map(|row| {
+            json!({
+                "auto": row.group.key(),
+                "name": row.group.label(),
+                "parent": row.group.parent().map(AutoGroup::key),
+                "members": row.members,
+                "state": state(row.state),
+            })
+        })
+        .collect();
+    json!({ "user": user, "auto": auto, "quick_hidden": editor.visgroups.quick_hidden })
+}
+
+/// The automatic VisGroup the "auto" argument names, when it is given.
+fn auto_group_arg(args: &Value) -> Result<Option<AutoGroup>, String> {
+    let Some(key) = optional_string(args, "auto")? else {
+        return Ok(None);
+    };
+    AutoGroup::from_key(key).map(Some).ok_or_else(|| {
+        let keys: Vec<&str> = AutoGroup::ALL.iter().map(|group| group.key()).collect();
+        format!("\"{key}\" is not an automatic group; use one of {}", keys.join(", "))
+    })
+}
+
+/// The "color" argument as red, green and blue from 0 to 255, when it is given.
+fn color_arg(args: &Value) -> Result<Option<[u8; 3]>, String> {
+    let Some(color) = optional_numbers::<3>(args, "color")? else {
+        return Ok(None);
+    };
+    if color.iter().any(|part| !(0.0..=255.0).contains(part)) {
+        return Err("\"color\" must be three numbers from 0 to 255".to_owned());
+    }
+    Ok(Some(color.map(|part| part.round() as u8)))
 }
 
 fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
