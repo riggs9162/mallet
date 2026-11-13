@@ -374,6 +374,18 @@ struct FaceMesh {
     chunks: Vec<Chunk>,
 }
 
+/// The selected brushes' faces with the selection tint, where a drag has taken them.
+/// Building them takes as long as the selection is large, so they are kept until the
+/// selection, the map, the drag or a texture changes.
+struct SelectionFaces {
+    /// [`selection_key`] with the textures' version: what these were built from.
+    key: u64,
+    opaque: FaceMesh,
+    translucent: Vec<TranslucentFace>,
+    /// What is selected, as the map's own blended faces of these give way to the tinted.
+    owners: HashSet<Owner>,
+}
+
 /// The chunks that hold selected brushes, rebuilt without them, so a drag does not leave a
 /// copy of the selection behind where it started.
 struct DragFaces {
@@ -521,6 +533,11 @@ pub struct Renderer3D {
     /// The chunks of [`Self::faces`] that hold selected brushes, rebuilt without them,
     /// for while a drag shows the selection elsewhere.
     drag_faces: Option<DragFaces>,
+    /// The selection's tinted faces, kept while the camera moves around it.
+    selection_faces: Option<SelectionFaces>,
+    /// The selection's outline where a drag has taken it, kept while the views move;
+    /// shared by the camera and the 2D views. Keyed by [`selection_key`].
+    selection_edges: Option<(u64, Option<LineMesh>)>,
     /// The geometry generation whose materials have been loaded.
     textures_checked: u64,
     /// One image per viewport slot.
@@ -709,6 +726,8 @@ impl Renderer3D {
             edges: None,
             drag_edges: None,
             drag_faces: None,
+            selection_faces: None,
+            selection_edges: None,
             textures_checked: 0,
             targets: [None, None, None, None],
             stats: RenderStats::default(),
@@ -981,31 +1000,24 @@ impl Renderer3D {
         } else {
             self.update_edges(scene, overlay);
         }
-        let selected: Vec<&WireMesh> = scene.meshes.iter().filter(|mesh| mesh.selected).collect();
-        let selected_faces = selected_face_meshes(scene);
-        let (tinted, tinted_translucent) = if textured {
-            let (opaque, translucent) = self.face_mesh(
-                selected.iter().copied(),
-                overlay.transform.as_ref(),
-                SELECTION_TINT,
-                false,
-            );
-            (Some(opaque), translucent)
+        self.update_selection_edges(scene, overlay, look.selection);
+        if textured {
+            self.update_selection_faces(scene, overlay, look.selection);
         } else {
-            (None, Vec::new())
-        };
+            self.selection_faces = None;
+        }
+        let selection = self.selection_faces.as_ref();
+        let tinted = selection.map(|selection| &selection.opaque);
+        let selection_edges = self.selection_edges.as_ref().and_then(|(_, mesh)| mesh.as_ref());
+        let selected_faces = selected_face_meshes(scene);
         // Faces picked with the texture tool get a lighter tint, so the texture being
         // lined up stays easy to see.
         let face_tinted = (textured && !selected_faces.is_empty() && !overlay.hide_face_mask)
             .then(|| self.face_mesh(selected_faces.iter(), None, FACE_TINT, false).0);
-        let selected_owners: HashSet<Owner> = selected.iter().filter_map(|mesh| mesh.owner).collect();
         let mut outline = Vec::new();
         // Lines that belong to nothing, such as a leak line, show in the textured view too.
         for mesh in scene.meshes.iter().filter(|mesh| mesh.owner.is_none()) {
             push_edges(&mut outline, &mesh.edges, None, mesh.color);
-        }
-        for mesh in &selected {
-            push_edges(&mut outline, &mesh.edges, overlay.transform.as_ref(), look.selection);
         }
         for mesh in &selected_faces {
             push_edges(&mut outline, &mesh.edges, None, look.selected_faces);
@@ -1057,10 +1069,14 @@ impl Renderer3D {
                 // clone drag, which leaves the original where it is.
                 let keep_originals = overlay.transform.is_some() && overlay.cloning;
                 let unselected = faces.translucent.iter().filter(|face| {
-                    keep_originals || face.owner.is_none_or(|owner| !selected_owners.contains(&owner))
+                    keep_originals
+                        || !selection.is_some_and(|selection| {
+                            face.owner.is_some_and(|owner| selection.owners.contains(&owner))
+                        })
                 });
+                let tinted_translucent = selection.map_or(&[][..], |selection| &selection.translucent);
                 self.sorted_translucent(
-                    unselected.chain(&tinted_translucent).chain(&sprites),
+                    unselected.chain(tinted_translucent).chain(&sprites),
                     &see_through_props,
                     camera,
                     &planes,
@@ -1128,7 +1144,7 @@ impl Renderer3D {
                     if let Some((buffer, ranges)) = &instances {
                         self.draw_models(&mut pass, buffer, ranges, &mut stats);
                     }
-                    for tinted in [&tinted, &face_tinted].into_iter().flatten() {
+                    for tinted in [tinted, face_tinted.as_ref()].into_iter().flatten() {
                         pass.set_pipeline(&self.overdraw_pipeline);
                         pass.set_vertex_buffer(0, tinted.buffer.slice(..));
                         for (key, range) in tinted.chunks.iter().flat_map(|chunk| &chunk.batches) {
@@ -1149,7 +1165,8 @@ impl Renderer3D {
                 }
                 (CameraStyle::Lit, Some(_)) => {
                     if let Some(state) = &lit_state {
-                        let tinted_meshes: Vec<&FaceMesh> = [&tinted, &face_tinted].into_iter().flatten().collect();
+                        let tinted_meshes: Vec<&FaceMesh> =
+                            [tinted, face_tinted.as_ref()].into_iter().flatten().collect();
                         state.draw(
                             self,
                             &mut pass,
@@ -1173,6 +1190,7 @@ impl Renderer3D {
                 (_, None) => {}
             }
             if game_sprites.is_empty() {
+                self.draw_lines(&mut pass, selection_edges);
                 self.draw_lines(&mut pass, outline.as_ref());
             }
         }
@@ -1191,6 +1209,7 @@ impl Renderer3D {
             if let (Some(draws), None) = (&game_sprites.gamma, &target.gamma_view) {
                 self.draw_sprites(&mut pass, draws, false);
             }
+            self.draw_lines(&mut pass, selection_edges);
             self.draw_lines(&mut pass, outline.as_ref());
         }
         self.queue.submit([encoder.finish()]);
@@ -1204,6 +1223,36 @@ impl Renderer3D {
             &self.targets[slot].as_ref().expect("target exists").color_view,
             recreated,
         )
+    }
+
+    /// Keeps [`Self::selection_edges`] matching the selection and the drag it is in.
+    fn update_selection_edges(&mut self, scene: &Scene, overlay: &Overlay, color: Color32) {
+        let key = selection_key(scene, overlay, color);
+        if self.selection_edges.as_ref().is_some_and(|(built, _)| *built == key) {
+            return;
+        }
+        let mut vertices = Vec::new();
+        for mesh in scene.meshes.iter().filter(|mesh| mesh.selected) {
+            push_edges(&mut vertices, &mesh.edges, overlay.transform.as_ref(), color);
+        }
+        self.selection_edges = Some((key, self.line_mesh(&vertices)));
+    }
+
+    /// Keeps [`Self::selection_faces`] matching the selection, the drag it is in and the
+    /// textures loaded so far.
+    fn update_selection_faces(&mut self, scene: &Scene, overlay: &Overlay, color: Color32) {
+        let key = signature(|hasher| (selection_key(scene, overlay, color), self.textures_version).hash(hasher));
+        if self.selection_faces.as_ref().is_some_and(|faces| faces.key == key) {
+            return;
+        }
+        let selected = || scene.meshes.iter().filter(|mesh| mesh.selected);
+        let (opaque, translucent) = self.face_mesh(selected(), overlay.transform.as_ref(), SELECTION_TINT, false);
+        self.selection_faces = Some(SelectionFaces {
+            key,
+            opaque,
+            translucent,
+            owners: selected().filter_map(|mesh| mesh.owner).collect(),
+        });
     }
 
     /// Draws the outlines and tool lines on top of everything.
@@ -1541,6 +1590,7 @@ impl Renderer3D {
         }
         self.signatures[slot] = Some(signature);
         self.update_edges(scene, overlay);
+        self.update_selection_edges(scene, overlay, look.selection);
 
         let local = Rect::from_min_size(Pos2::ZERO, points);
         let mut under = Vec::new();
@@ -1556,23 +1606,23 @@ impl Renderer3D {
         for ([a, b], color) in view.centre_crosses(local, scene, overlay) {
             push_edges(&mut over, &[[view.axis.lift(a), view.axis.lift(b)]], None, color);
         }
-        for mesh in scene.meshes.iter().filter(|mesh| mesh.selected) {
-            push_edges(&mut over, &mesh.edges, overlay.transform.as_ref(), look.selection);
-        }
+        let mut tools = Vec::new();
         if let Some(block) = &overlay.block {
-            push_edges(&mut over, &box_edges(block), None, look.tool);
+            push_edges(&mut tools, &box_edges(block), None, look.tool);
         }
         if let Some(point) = overlay.entity {
-            push_edges(&mut over, &entity_marker_edges(point), None, look.tool);
+            push_edges(&mut tools, &entity_marker_edges(point), None, look.tool);
         }
-        push_edges(&mut over, &overlay.agent_camera, None, AGENT_CAMERA_COLOR);
+        push_edges(&mut tools, &overlay.agent_camera, None, AGENT_CAMERA_COLOR);
         if let Some(clip) = &overlay.clip {
             for (edge, color) in clip.edges_2d() {
-                push_edges(&mut over, &[edge], None, color);
+                push_edges(&mut tools, &[edge], None, color);
             }
         }
         let under = self.line_mesh(&under);
         let over = self.line_mesh(&over);
+        let tools = self.line_mesh(&tools);
+        let selection = self.selection_edges.as_ref().and_then(|(_, mesh)| mesh.as_ref());
 
         let target = self.targets[slot].as_ref().expect("target was just created");
         let matrix = orthographic(view, points);
@@ -1588,7 +1638,7 @@ impl Renderer3D {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_pipeline(&self.flat_line_pipeline);
             pass.set_bind_group(0, &target.uniform_group, &[]);
-            for lines in [under.as_ref(), self.static_edges(), over.as_ref()]
+            for lines in [under.as_ref(), self.static_edges(), over.as_ref(), selection, tools.as_ref()]
                 .into_iter()
                 .flatten()
             {
@@ -2238,6 +2288,19 @@ fn ready<T>(future: impl Future<Output = T>) -> Option<T> {
 }
 
 /// Hashes whatever `feed` writes, to fingerprint what a viewport image was drawn from.
+/// What the selection's outline and tinted faces are built from: the map, the
+/// selection, where a drag has taken it and its colour.
+fn selection_key(scene: &Scene, overlay: &Overlay, color: Color32) -> u64 {
+    signature(|hasher| {
+        (scene.geometry_generation, scene.selection_generation, color).hash(hasher);
+        if let Some(remap) = &overlay.transform {
+            for value in remap.matrix.to_cols_array() {
+                value.to_bits().hash(hasher);
+            }
+        }
+    })
+}
+
 fn signature(feed: impl FnOnce(&mut DefaultHasher)) -> u64 {
     let mut hasher = DefaultHasher::new();
     feed(&mut hasher);
