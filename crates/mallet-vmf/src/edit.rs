@@ -4,6 +4,7 @@
 //! such as an MCP server, is expressed as an [`Edit`]. Applying an edit returns its inverse,
 //! which is what makes undo and redo work the same way for every caller.
 
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
@@ -12,7 +13,7 @@ use glam::{DMat4, DVec3};
 use crate::geometry::Bounds;
 use crate::kv::{Block, Item};
 use crate::transform::{self, TextureLock};
-use crate::{Connection, Entity, EntityItem, Solid, TopLevel, Vmf};
+use crate::{Connection, Entity, EntityItem, Solid, SolidItem, TopLevel, Vmf};
 
 /// One reversible change to a map.
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +130,17 @@ pub enum Edit {
         /// Whether the objects become hidden (`true`) or visible (`false`).
         hidden: bool,
     },
+    /// Replaces the `editor` blocks of brushes and entities, which hold their colour, their
+    /// group and their VisGroups. `None` removes the block. Hidden objects are changed
+    /// where they are kept, without showing them.
+    SetEditors {
+        /// Brush ids, each with its new `editor` block.
+        solids: Vec<(u32, Option<Block>)>,
+        /// Entity ids, each with its new `editor` block.
+        entities: Vec<(u32, Option<Block>)>,
+    },
+    /// Replaces the map's `visgroups` block, the list of its VisGroups. `None` removes it.
+    SetVisGroups(Option<Block>),
     /// Several edits applied in order and undone in reverse as a single step.
     Batch(Vec<Edit>),
 }
@@ -385,6 +397,37 @@ impl Edit {
                 entities,
                 hidden,
             } => set_hidden(vmf, solids, entities, *hidden),
+            Self::SetEditors { solids, entities } => set_editors(vmf, solids, entities),
+            Self::SetVisGroups(block) => {
+                let position = vmf.items.iter().position(
+                    |item| matches!(item, TopLevel::Other(block) if block.name.eq_ignore_ascii_case("visgroups")),
+                );
+                let previous = match (position, block) {
+                    (Some(index), Some(block)) => {
+                        match std::mem::replace(&mut vmf.items[index], TopLevel::Other(block.clone())) {
+                            TopLevel::Other(old) => Some(old),
+                            _ => None,
+                        }
+                    }
+                    (Some(index), None) => match vmf.items.remove(index) {
+                        TopLevel::Other(old) => Some(old),
+                        _ => None,
+                    },
+                    (None, Some(block)) => {
+                        let at = vmf
+                            .items
+                            .iter()
+                            .position(
+                                |item| matches!(item, TopLevel::Other(block) if block.name.eq_ignore_ascii_case("versioninfo")),
+                            )
+                            .map_or(0, |index| index + 1);
+                        vmf.items.insert(at, TopLevel::Other(block.clone()));
+                        None
+                    }
+                    (None, None) => None,
+                };
+                Ok(Self::SetVisGroups(previous))
+            }
             Self::Batch(edits) => {
                 let mut inverses = Vec::with_capacity(edits.len());
                 for edit in edits {
@@ -445,7 +488,6 @@ fn solid_mut(vmf: &mut Vmf, id: u32) -> Option<&mut Solid> {
     }
 }
 
-/// Just after the entity's last brush, or after its keys when it has none.
 /// The ids of every hidden brush and entity, brushes first. Hidden objects are invisible
 /// to [`Vmf::all_entities`] and to the editor, so this is how they are found again.
 pub fn hidden_ids(vmf: &Vmf) -> (Vec<u32>, Vec<u32>) {
@@ -471,26 +513,97 @@ pub fn hidden_ids(vmf: &Vmf) -> (Vec<u32>, Vec<u32>) {
     (solids, entities)
 }
 
+/// Where a brush or an entity sits in the map.
+#[derive(Clone, Copy)]
+struct Place {
+    /// Position among the map's top-level items: the entity itself, or a brush's owner.
+    top: usize,
+    /// A brush's position among its owner's items.
+    item: usize,
+    /// Whether the object is wrapped in a `hidden` block.
+    hidden: bool,
+}
+
+/// Every brush and entity of a map by id, hidden ones included, so edits that touch many
+/// objects look each one up once. A visible object wins over a hidden one with its id.
+struct ObjectIndex {
+    solids: HashMap<u32, Place>,
+    entities: HashMap<u32, Place>,
+}
+
+impl ObjectIndex {
+    fn new(vmf: &Vmf) -> Self {
+        let mut index = Self {
+            solids: HashMap::new(),
+            entities: HashMap::new(),
+        };
+        for (top, item) in vmf.items.iter().enumerate() {
+            match item {
+                TopLevel::World(entity) | TopLevel::Entity(entity) => {
+                    if let (TopLevel::Entity(_), Some(id)) = (item, entity.id()) {
+                        Self::add(&mut index.entities, id, Place { top, item: 0, hidden: false });
+                    }
+                    for (position, item) in entity.items.iter().enumerate() {
+                        match item {
+                            EntityItem::Solid(solid) => {
+                                if let Some(id) = solid.id() {
+                                    let place = Place { top, item: position, hidden: false };
+                                    Self::add(&mut index.solids, id, place);
+                                }
+                            }
+                            EntityItem::Other(block) if is_hidden_block(block) => {
+                                for id in block.blocks().filter_map(|child| child_id(child, "solid")) {
+                                    let place = Place { top, item: position, hidden: true };
+                                    Self::add(&mut index.solids, id, place);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                TopLevel::Other(block) if is_hidden_block(block) => {
+                    for id in block.blocks().filter_map(|child| child_id(child, "entity")) {
+                        Self::add(&mut index.entities, id, Place { top, item: 0, hidden: true });
+                    }
+                }
+                _ => {}
+            }
+        }
+        index
+    }
+
+    fn add(places: &mut HashMap<u32, Place>, id: u32, place: Place) {
+        let known = places.entry(id).or_insert(place);
+        if known.hidden && !place.hidden {
+            *known = place;
+        }
+    }
+}
+
 /// Hides or shows the given objects, checking all of them before changing any so that a
 /// failing edit leaves the map alone. Returns the edit that undoes it, naming only the
 /// objects that actually changed.
 fn set_hidden(vmf: &mut Vmf, solids: &[u32], entities: &[u32], hidden: bool) -> Result<Edit, EditError> {
     let world_id = vmf.world().and_then(Entity::id);
+    let index = ObjectIndex::new(vmf);
+    let mut seen = HashSet::new();
     let mut changed_solids = Vec::new();
     for &id in solids {
-        let visible = find_solid(vmf, id).is_some();
-        let hidden_now = find_hidden_solid(vmf, id).is_some();
-        if !visible && !hidden_now {
-            return Err(EditError::NoSuchSolid(id));
-        }
-        if hidden_now == hidden {
+        let place = *index.solids.get(&id).ok_or(EditError::NoSuchSolid(id))?;
+        if place.hidden == hidden || !seen.insert(id) {
             continue;
         }
-        if !hidden && hidden_solid(vmf, id).and_then(|block| Solid::from_block(block).ok()).is_none() {
-            return Err(EditError::CannotShow(id));
-        }
-        changed_solids.push(id);
+        let shown = if hidden {
+            None
+        } else {
+            let solid = hidden_solid(vmf, place, id)
+                .and_then(|block| Solid::from_block(block.clone()).ok())
+                .ok_or(EditError::CannotShow(id))?;
+            Some(solid)
+        };
+        changed_solids.push((id, place, shown));
     }
+    seen.clear();
     let mut changed_entities = Vec::new();
     for &id in entities {
         if world_id == Some(id) {
@@ -499,63 +612,164 @@ fn set_hidden(vmf: &mut Vmf, solids: &[u32], entities: &[u32], hidden: bool) -> 
             }
             continue;
         }
-        let visible = find_entity_position(vmf, id).is_some();
-        let hidden_now = find_hidden_entity(vmf, id).is_some();
-        if !visible && !hidden_now {
-            return Err(EditError::NoSuchEntity(id));
-        }
-        if hidden_now == hidden {
+        let place = *index.entities.get(&id).ok_or(EditError::NoSuchEntity(id))?;
+        if place.hidden == hidden || !seen.insert(id) {
             continue;
         }
-        if !hidden && hidden_entity(vmf, id).and_then(|block| Entity::from_block(block).ok()).is_none() {
-            return Err(EditError::CannotShow(id));
-        }
-        changed_entities.push(id);
-    }
-    for &id in &changed_solids {
-        if hidden {
-            let (entity_index, item_index) = find_solid(vmf, id).ok_or(EditError::NoSuchSolid(id))?;
-            let entity = top_level_entity_mut(vmf, entity_index);
-            let EntityItem::Solid(solid) = entity.items.remove(item_index) else {
-                unreachable!("find_solid only returns solid positions");
-            };
-            entity
-                .items
-                .insert(item_index, EntityItem::Other(hidden_wrapper(solid.to_block())));
+        let shown = if hidden {
+            None
         } else {
-            let (entity_index, item_index) = find_hidden_solid(vmf, id).ok_or(EditError::NoSuchSolid(id))?;
-            let entity = top_level_entity_mut(vmf, entity_index);
-            let EntityItem::Other(wrapper) = entity.items.remove(item_index) else {
-                unreachable!("find_hidden_solid only returns hidden block positions");
-            };
-            let child = unwrap_hidden(wrapper, "solid", id).ok_or(EditError::NoSuchSolid(id))?;
-            let solid = Solid::from_block(child).map_err(|_| EditError::CannotShow(id))?;
-            entity.items.insert(item_index, EntityItem::Solid(solid));
-        }
+            let entity = hidden_entity(vmf, place, id)
+                .and_then(|block| Entity::from_block(block.clone()).ok())
+                .ok_or(EditError::CannotShow(id))?;
+            Some(entity)
+        };
+        changed_entities.push((id, place, shown));
     }
-    for &id in &changed_entities {
-        if hidden {
-            let index = find_entity_position(vmf, id).ok_or(EditError::NoSuchEntity(id))?;
-            let TopLevel::Entity(entity) = vmf.items.remove(index) else {
-                unreachable!("find_entity_position only returns entity positions");
-            };
-            vmf.items
-                .insert(index, TopLevel::Other(hidden_wrapper(entity.to_block("entity"))));
-        } else {
-            let index = find_hidden_entity(vmf, id).ok_or(EditError::NoSuchEntity(id))?;
-            let TopLevel::Other(wrapper) = vmf.items.remove(index) else {
-                unreachable!("find_hidden_entity only returns hidden block positions");
-            };
-            let child = unwrap_hidden(wrapper, "entity", id).ok_or(EditError::NoSuchEntity(id))?;
-            let entity = Entity::from_block(child).map_err(|_| EditError::CannotShow(id))?;
-            vmf.items.insert(index, TopLevel::Entity(entity));
-        }
+    let solid_ids = changed_solids.iter().map(|(id, _, _)| *id).collect();
+    let entity_ids = changed_entities.iter().map(|(id, _, _)| *id).collect();
+    for (_, place, shown) in changed_solids {
+        let slot = &mut top_level_entity_mut(vmf, place.top).items[place.item];
+        *slot = match (shown, std::mem::replace(slot, EntityItem::Other(Block::default()))) {
+            (Some(solid), _) => EntityItem::Solid(solid),
+            (None, EntityItem::Solid(solid)) => EntityItem::Other(hidden_wrapper(solid.to_block())),
+            (None, other) => other,
+        };
+    }
+    for (_, place, shown) in changed_entities {
+        let slot = &mut vmf.items[place.top];
+        *slot = match (shown, std::mem::replace(slot, TopLevel::Other(Block::default()))) {
+            (Some(entity), _) => TopLevel::Entity(entity),
+            (None, TopLevel::Entity(entity)) => TopLevel::Other(hidden_wrapper(entity.to_block("entity"))),
+            (None, other) => other,
+        };
     }
     Ok(Edit::SetHidden {
-        solids: changed_solids,
-        entities: changed_entities,
+        solids: solid_ids,
+        entities: entity_ids,
         hidden: !hidden,
     })
+}
+
+/// Replaces the `editor` blocks of the given objects, checking that all of them exist
+/// before changing any. Returns the edit that puts the old blocks back.
+fn set_editors(
+    vmf: &mut Vmf,
+    solids: &[(u32, Option<Block>)],
+    entities: &[(u32, Option<Block>)],
+) -> Result<Edit, EditError> {
+    let index = ObjectIndex::new(vmf);
+    if let Some((id, _)) = solids.iter().find(|(id, _)| !index.solids.contains_key(id)) {
+        return Err(EditError::NoSuchSolid(*id));
+    }
+    if let Some((id, _)) = entities.iter().find(|(id, _)| !index.entities.contains_key(id)) {
+        return Err(EditError::NoSuchEntity(*id));
+    }
+    let mut old_solids = Vec::with_capacity(solids.len());
+    for (id, editor) in solids {
+        let place = index.solids[id];
+        let previous = match &mut top_level_entity_mut(vmf, place.top).items[place.item] {
+            EntityItem::Solid(solid) => swap_solid_editor(solid, editor.clone()),
+            EntityItem::Other(wrapper) => {
+                wrapped_child_mut(wrapper, "solid", *id).and_then(|child| swap_block_editor(child, editor.clone()))
+            }
+            EntityItem::Key(_) => None,
+        };
+        old_solids.push((*id, previous));
+    }
+    let mut old_entities = Vec::with_capacity(entities.len());
+    for (id, editor) in entities {
+        let previous = match &mut vmf.items[index.entities[id].top] {
+            TopLevel::Entity(entity) => swap_entity_editor(entity, editor.clone()),
+            TopLevel::Other(wrapper) => {
+                wrapped_child_mut(wrapper, "entity", *id).and_then(|child| swap_block_editor(child, editor.clone()))
+            }
+            _ => None,
+        };
+        old_entities.push((*id, previous));
+    }
+    old_solids.reverse();
+    old_entities.reverse();
+    Ok(Edit::SetEditors {
+        solids: old_solids,
+        entities: old_entities,
+    })
+}
+
+fn is_editor_block(block: &Block) -> bool {
+    block.name.eq_ignore_ascii_case("editor")
+}
+
+/// Puts `editor` in place of a brush's `editor` block, or at its end when it has none,
+/// and returns the old block.
+fn swap_solid_editor(solid: &mut Solid, editor: Option<Block>) -> Option<Block> {
+    let position = solid
+        .items
+        .iter()
+        .position(|item| matches!(item, SolidItem::Other(block) if is_editor_block(block)));
+    match (position, editor) {
+        (Some(index), Some(editor)) => match std::mem::replace(&mut solid.items[index], SolidItem::Other(editor)) {
+            SolidItem::Other(old) => Some(old),
+            _ => None,
+        },
+        (Some(index), None) => match solid.items.remove(index) {
+            SolidItem::Other(old) => Some(old),
+            _ => None,
+        },
+        (None, Some(editor)) => {
+            solid.items.push(SolidItem::Other(editor));
+            None
+        }
+        (None, None) => None,
+    }
+}
+
+/// Puts `editor` in place of an entity's `editor` block, or at its end when it has none,
+/// and returns the old block.
+fn swap_entity_editor(entity: &mut Entity, editor: Option<Block>) -> Option<Block> {
+    let position = entity
+        .items
+        .iter()
+        .position(|item| matches!(item, EntityItem::Other(block) if is_editor_block(block)));
+    match (position, editor) {
+        (Some(index), Some(editor)) => match std::mem::replace(&mut entity.items[index], EntityItem::Other(editor)) {
+            EntityItem::Other(old) => Some(old),
+            _ => None,
+        },
+        (Some(index), None) => match entity.items.remove(index) {
+            EntityItem::Other(old) => Some(old),
+            _ => None,
+        },
+        (None, Some(editor)) => {
+            entity.items.push(EntityItem::Other(editor));
+            None
+        }
+        (None, None) => None,
+    }
+}
+
+/// Puts `editor` in place of the `editor` block of a brush or entity that is kept as a
+/// plain block while hidden, or at its end when it has none, and returns the old block.
+fn swap_block_editor(object: &mut Block, editor: Option<Block>) -> Option<Block> {
+    let position = object
+        .items
+        .iter()
+        .position(|item| matches!(item, Item::Block(block) if is_editor_block(block)));
+    match (position, editor) {
+        (Some(index), Some(editor)) => match std::mem::replace(&mut object.items[index], Item::Block(editor)) {
+            Item::Block(old) => Some(old),
+            Item::Pair(_) => None,
+        },
+        (Some(index), None) => match object.items.remove(index) {
+            Item::Block(old) => Some(old),
+            Item::Pair(_) => None,
+        },
+        (None, Some(editor)) => {
+            object.items.push(Item::Block(editor));
+            None
+        }
+        (None, None) => None,
+    }
 }
 
 /// A `hidden` block around one brush or entity block.
@@ -565,83 +779,50 @@ fn hidden_wrapper(child: Block) -> Block {
     wrapper
 }
 
-fn is_hidden_block(block: &Block) -> bool {
+pub(crate) fn is_hidden_block(block: &Block) -> bool {
     block.name.eq_ignore_ascii_case("hidden")
 }
 
 /// The numeric `id` of a child block, when it has one of the given name.
-fn child_id(block: &Block, name: &str) -> Option<u32> {
+pub(crate) fn child_id(block: &Block, name: &str) -> Option<u32> {
     if !block.name.eq_ignore_ascii_case(name) {
         return None;
     }
     block.get("id")?.trim().parse().ok()
 }
 
-/// Takes the child of kind `name` with the given id out of a `hidden` block.
-fn unwrap_hidden(wrapper: Block, name: &str, id: u32) -> Option<Block> {
-    wrapper.items.into_iter().find_map(|item| match item {
-        Item::Block(child) if child_id(&child, name) == Some(id) => Some(child),
+/// The child of kind `name` with the given id inside a `hidden` block.
+fn wrapped_child<'a>(wrapper: &'a Block, name: &str, id: u32) -> Option<&'a Block> {
+    wrapper.blocks().find(|child| child_id(child, name) == Some(id))
+}
+
+fn wrapped_child_mut<'a>(wrapper: &'a mut Block, name: &str, id: u32) -> Option<&'a mut Block> {
+    wrapper.items.iter_mut().find_map(|item| match item {
+        Item::Block(child) if child_id(child, name) == Some(id) => Some(child),
         _ => None,
     })
 }
 
-/// Finds a hidden brush: the top-level entity that holds it, and the position of its
-/// `hidden` block among that entity's items.
-fn find_hidden_solid(vmf: &Vmf, id: u32) -> Option<(usize, usize)> {
-    vmf.items.iter().enumerate().find_map(|(entity_index, item)| {
-        let (TopLevel::World(entity) | TopLevel::Entity(entity)) = item else {
-            return None;
-        };
-        entity
-            .items
-            .iter()
-            .position(|item| match item {
-                EntityItem::Other(block) => is_hidden_block(block) && hidden_child_matches(block, "solid", id),
-                _ => false,
-            })
-            .map(|item_index| (entity_index, item_index))
-    })
-}
-
-/// A copy of a hidden brush's block, for checking that it reads back.
-fn hidden_solid(vmf: &Vmf, id: u32) -> Option<Block> {
-    let (entity_index, item_index) = find_hidden_solid(vmf, id)?;
-    let (TopLevel::World(entity) | TopLevel::Entity(entity)) = &vmf.items[entity_index] else {
+/// The block of a hidden brush, found through its place in the map.
+fn hidden_solid(vmf: &Vmf, place: Place, id: u32) -> Option<&Block> {
+    let (TopLevel::World(entity) | TopLevel::Entity(entity)) = &vmf.items[place.top] else {
         return None;
     };
-    match &entity.items[item_index] {
-        EntityItem::Other(wrapper) => unwrap_hidden(wrapper.clone(), "solid", id),
+    match &entity.items[place.item] {
+        EntityItem::Other(wrapper) => wrapped_child(wrapper, "solid", id),
         _ => None,
     }
 }
 
-/// The position of a visible entity among the map's top-level items.
-fn find_entity_position(vmf: &Vmf, id: u32) -> Option<usize> {
-    vmf.items
-        .iter()
-        .position(|item| matches!(item, TopLevel::Entity(entity) if entity.id() == Some(id)))
-}
-
-/// The position of a hidden entity's `hidden` block among the map's top-level items.
-fn find_hidden_entity(vmf: &Vmf, id: u32) -> Option<usize> {
-    vmf.items.iter().position(|item| match item {
-        TopLevel::Other(block) => is_hidden_block(block) && hidden_child_matches(block, "entity", id),
-        _ => false,
-    })
-}
-
-/// A copy of a hidden entity's block, for checking that it reads back.
-fn hidden_entity(vmf: &Vmf, id: u32) -> Option<Block> {
-    match &vmf.items[find_hidden_entity(vmf, id)?] {
-        TopLevel::Other(wrapper) => unwrap_hidden(wrapper.clone(), "entity", id),
+/// The block of a hidden entity, found through its place in the map.
+fn hidden_entity(vmf: &Vmf, place: Place, id: u32) -> Option<&Block> {
+    match &vmf.items[place.top] {
+        TopLevel::Other(wrapper) => wrapped_child(wrapper, "entity", id),
         _ => None,
     }
 }
 
-fn hidden_child_matches(wrapper: &Block, name: &str, id: u32) -> bool {
-    wrapper.blocks().any(|child| child_id(child, name) == Some(id))
-}
-
+/// Just after the entity's last brush, or after its keys when it has none.
 fn default_solid_index(entity: &Entity) -> usize {
     entity
         .items

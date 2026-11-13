@@ -22,6 +22,7 @@ pub mod texture;
 pub mod transform;
 pub mod vertex;
 mod view;
+pub mod visgroup;
 
 pub use mallet_kv as kv;
 pub use model::*;
