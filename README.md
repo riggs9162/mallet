@@ -308,6 +308,12 @@ them: every file `scripts/soundscapes_manifest.txt` lists, then the map's own
 sounds play on their timers at their positions (`position0` to `position7`, or around
 the listener), and sub-soundscapes bring their volume and position overrides.
 
+To give a soundscape entity a sound position, press the crosshair button next to
+`position0` to `position7` in Object Properties and click a surface in the 3D view. Mallet
+puts an `info_target` there, names it after the entity and the position, and writes that
+name into the key, all as one step you can undo. Picking a position that has an
+`info_target` of its own already moves that one. Press the button again or Escape to stop.
+
 Every `ambient_generic` that is looped and does not start silent plays too, from its
 `SourceEntityName` when it has one, at its volume and pitch, with its fade in and spin
 up. A sound file fades with distance by its `radius`; a name from the game's sound scripts

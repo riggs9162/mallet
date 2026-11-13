@@ -246,6 +246,13 @@ the tab. While it is active in the tab the window shows, clicks in the 3D view g
 Ctrl+click and the `pick_face` MCP tool use it too. The pick ends with Escape, the button,
 closing the window, or a selection or tab change.
 
+`position0` to `position7` of an entity that plays a soundscape get a crosshair button next
+to their target name field. It starts a position pick (`position_pick.rs`), which takes
+the next click in the 3D view the same way: `position_pick_click` finds the surface point
+and `place_position` adds an `info_target` there with a free targetname and sets the key
+to it in one batch edit, or moves the single `info_target` the key already names. One
+click ends the pick, and a face pick and a position pick never run together.
+
 ## Texturing
 
 `mallet_vmf::texture` holds the Face Edit math, tested on its own: Hammer's world axes
