@@ -4,7 +4,7 @@
 //! calls therefore never wait for a frame, and keep working while the window is covered
 //! or minimized.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -174,6 +174,9 @@ const FREE_STEP: f64 = 1.0 / 64.0;
 /// The most frames a screenshot draws to let textures load, small shadow maps draw and
 /// luxels bake, a batch of lights a frame.
 const SCREENSHOT_ROUNDS: usize = 600;
+/// Up to this many owners are looked for in the scene one by one when the selection
+/// changes; more are checked against a list of everything in it, read once.
+const FEW_OWNERS: usize = 4;
 /// Pixels between the four viewports.
 pub const VIEWPORT_GAP: f32 = 2.0;
 /// Viewport area assumed until the window has laid itself out.
@@ -996,8 +999,8 @@ impl Editor {
     /// Drops selected brushes, entities and faces that are no longer in the map, and
     /// marks the rest as selected in the scene.
     fn sync_selection(&mut self) {
-        let scene = &self.scene;
-        self.selection.retain(|owner| scene.contains(*owner));
+        let selectable = self.scene.selectable();
+        self.selection.retain(|owner| selectable.contains(owner));
         self.scene.mark_selected(&self.selection);
         let sides: BTreeSet<u32> = self
             .scene
@@ -1112,7 +1115,13 @@ impl Editor {
     /// Changes the selection. Owners that are not in the map are ignored. The texture
     /// tool selects faces rather than brushes, so there it selects the owners' faces.
     pub fn select(&mut self, owners: impl IntoIterator<Item = Owner>, mode: SelectMode) {
-        let owners: Vec<Owner> = owners.into_iter().filter(|owner| self.scene.contains(*owner)).collect();
+        let mut owners: Vec<Owner> = owners.into_iter().collect();
+        if owners.len() <= FEW_OWNERS {
+            owners.retain(|owner| self.scene.contains(*owner));
+        } else {
+            let selectable = self.scene.selectable();
+            owners.retain(|owner| selectable.contains(owner));
+        }
         if self.tool == Tool::Texture {
             return self.select_owner_faces(&owners, mode);
         }
@@ -1149,7 +1158,7 @@ impl Editor {
     /// brings its whole group along. Other callers pass owners as they are, through
     /// [`Editor::select`].
     pub fn select_picked(&mut self, owners: impl IntoIterator<Item = Owner>, mode: SelectMode) {
-        let owners: Vec<Owner> = owners.into_iter().flat_map(|owner| self.group_members(owner)).collect();
+        let owners = self.with_groups(owners.into_iter().collect());
         self.select(owners, mode);
     }
 
@@ -1171,30 +1180,26 @@ impl Editor {
         }
     }
 
-    /// Everything a click on `owner` selects: in Groups mode, the whole Hammer group the
-    /// owner is in (world brushes and entities that share its `groupid`); otherwise, or
-    /// when the owner is in no group, the owner alone.
-    fn group_members(&self, owner: Owner) -> Vec<Owner> {
+    /// Everything a click or a box on `owners` selects: in Groups mode, each owner and
+    /// the whole Hammer group it is in (world brushes and entities that share its
+    /// `groupid`); otherwise, or for owners in no group, the owners alone.
+    fn with_groups(&self, owners: BTreeSet<Owner>) -> BTreeSet<Owner> {
         let Some(document) = self.document.as_ref().filter(|_| self.pick_mode == PickMode::Groups) else {
-            return vec![owner];
+            return owners;
         };
         let vmf = &document.vmf;
-        let group = match owner {
-            Owner::Entity(id) => vmf
-                .all_entities()
-                .find(|entity| entity.id() == Some(id))
-                .and_then(|entity| entity.editor()?.get("groupid").map(str::to_owned)),
-            Owner::Solid(id) => vmf
-                .all_entities()
-                .flat_map(|entity| entity.solids())
-                .find(|solid| solid.id() == Some(id))
-                .and_then(|solid| solid.editor()?.get("groupid").map(str::to_owned)),
-        };
-        let Some(group) = group else {
-            return vec![owner];
-        };
-        let in_group = |editor: Option<&str>| editor == Some(group.as_str());
-        let mut members = Vec::new();
+        let groups: HashSet<&str> = owners
+            .iter()
+            .filter_map(|owner| match *owner {
+                Owner::Entity(id) => vmf.entity_by_id(id)?.editor()?.get("groupid"),
+                Owner::Solid(id) => vmf.solid_by_id(id)?.editor()?.get("groupid"),
+            })
+            .collect();
+        if groups.is_empty() {
+            return owners;
+        }
+        let in_group = |editor: Option<&str>| editor.is_some_and(|group| groups.contains(group));
+        let mut members = owners;
         for entity in vmf.all_entities() {
             if entity.classname().eq_ignore_ascii_case("worldspawn") {
                 members.extend(

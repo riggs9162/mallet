@@ -868,6 +868,17 @@ impl Scene {
         self.meshes.iter().any(|mesh| mesh.selects(owner))
     }
 
+    /// Everything a selection may hold: each mesh's owner, and each brush's own solid,
+    /// which Solids mode selects.
+    pub fn selectable(&self) -> HashSet<Owner> {
+        let mut owners = HashSet::with_capacity(self.meshes.len());
+        for mesh in &self.meshes {
+            owners.extend(mesh.owner);
+            owners.extend(mesh.solid.map(Owner::Solid));
+        }
+        owners
+    }
+
     /// Flags the meshes the selection covers: those whose owner is selected, and brushes
     /// whose own solid is selected, as in Solids mode.
     pub fn mark_selected(&mut self, selection: &BTreeSet<Owner>) {

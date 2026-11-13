@@ -33,12 +33,12 @@ impl MalletApp {
         let mut convert = None;
         let mut paste = false;
         let can_paste = !editor.clipboard.is_empty();
-        let props = editor.selected_props().len();
         let selected = !editor.selection.is_empty();
         let options = &mut self.context_menu.options;
         let keymap = &self.keymap;
         response.context_menu(|ui| {
             ui.set_min_width(180.0);
+            let props = editor.selected_props().len();
             let mesh_menu = |ui: &mut egui::Ui| {
                 let collision = ui
                     .button("From Collision Model")
