@@ -63,7 +63,7 @@ impl MalletApp {
                 ui.horizontal(|ui| {
                     let has_object = picked.is_some_and(|problem| problem.object.is_some());
                     go_to |= ui.add_enabled(has_object, egui::Button::new("Go to Error")).clicked();
-                    let fixable = picked.is_some_and(|problem| problem.kind.fixable());
+                    let fixable = picked.is_some_and(Problem::fixable);
                     fix_one = ui.add_enabled(fixable, egui::Button::new("Fix")).clicked();
                     fix_all = ui
                         .add_enabled(fixable, egui::Button::new("Fix All"))
@@ -71,12 +71,15 @@ impl MalletApp {
                         .clicked();
                     check_again = ui.button("Check Again").clicked();
                 });
-                if let Some(problem) = picked.filter(|problem| !problem.kind.fixable()) {
+                if let Some(problem) = picked.filter(|problem| !problem.fixable()) {
                     ui.label(
                         RichText::new(format!("{} has to be fixed by hand.", problem.kind.label()))
                             .small()
                             .weak(),
                     );
+                }
+                if let Some(note) = picked.and_then(Problem::fix_note) {
+                    ui.label(RichText::new(note).small().weak());
                 }
             });
         let picked = self.problems.selected.and_then(|index| problems.get(index)).cloned();

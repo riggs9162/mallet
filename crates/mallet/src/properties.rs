@@ -122,6 +122,13 @@ impl Editor {
         if classname.is_empty() {
             return Err("a class name cannot be empty".to_owned());
         }
+        let edits = self.class_change_edits(ids, classname);
+        self.apply_edits(edits)
+    }
+
+    /// The edits that change the class of several entities the way
+    /// [`Editor::set_class_on`] does, for a step that does more than that.
+    pub(crate) fn class_change_edits(&self, ids: &[u32], classname: &str) -> Vec<Edit> {
         let defaults = self.class_defaults(classname);
         let has_fgd = self.entity_class(classname).is_some();
         let mut edits = Vec::new();
@@ -147,7 +154,7 @@ impl Editor {
                 }
             }
         }
-        self.apply_edits(edits)
+        edits
     }
 
     /// Removes a key from every entity in `ids` that has it, as one undoable step.

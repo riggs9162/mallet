@@ -129,6 +129,23 @@ impl PropTraits {
             .find(|class| self.works_as(class, collision))
             .unwrap_or("prop_dynamic_override")
     }
+
+    /// The class to turn a prop into when its own class loses a model with these traits:
+    /// one that keeps the model and leaves the prop doing what it did. A static prop
+    /// becomes a dynamic one, which stays where it is put all the same, and a dynamic or
+    /// a physics prop becomes the `_override` class that stands in for it. `None` when
+    /// the class keeps the model, and when no class stands in for it, as for a physics
+    /// prop without a collision model.
+    pub fn replacement_class(&self, classname: &str, collision: bool) -> Option<&'static str> {
+        self.class_problem(classname, collision)?;
+        let replacement = match classname.trim().to_ascii_lowercase().as_str() {
+            "prop_static" if self.works_as("prop_dynamic", collision) => "prop_dynamic",
+            "prop_static" | "prop_dynamic" => "prop_dynamic_override",
+            "prop_physics" => "prop_physics_override",
+            _ => return None,
+        };
+        self.works_as(replacement, collision).then_some(replacement)
+    }
 }
 
 /// What a model is, beyond its geometry, for the model browser.
@@ -552,6 +569,34 @@ mod tests {
         assert_eq!(traits(false, None).default_class(true), "prop_dynamic");
         assert!(traits(true, None).works_as("prop_static", false));
         assert!(!traits(true, data(false)).works_as("prop_static", true));
+    }
+
+    #[test]
+    fn a_prop_that_loses_its_model_gets_a_class_that_does_the_same() {
+        let data = Some(PropData {
+            base: Some("Metal.Medium".to_owned()),
+            allow_static: false,
+        });
+        let drum = PropTraits {
+            static_prop: true,
+            prop_data: data,
+        };
+        let lamp = PropTraits {
+            static_prop: true,
+            prop_data: None,
+        };
+        let citizen = PropTraits::default();
+        let (dynamic, physics) = (Some("prop_dynamic_override"), Some("prop_physics_override"));
+        assert_eq!(drum.replacement_class("prop_static", true), dynamic);
+        assert_eq!(drum.replacement_class("Prop_Dynamic", true), dynamic);
+        assert_eq!(drum.replacement_class("prop_physics", true), None, "it keeps the model");
+        assert_eq!(drum.replacement_class("prop_physics", false), None, "nothing stands in");
+        assert_eq!(drum.replacement_class("prop_dynamic_ornament", true), None);
+        assert_eq!(citizen.replacement_class("prop_static", true), Some("prop_dynamic"));
+        assert_eq!(lamp.replacement_class("prop_static", false), None);
+        assert_eq!(lamp.replacement_class("prop_physics", true), physics);
+        assert_eq!(lamp.replacement_class("prop_physics", false), None);
+        assert_eq!(lamp.replacement_class("prop_ragdoll", false), None);
     }
 
     /// The start of a `.mdl` file with these flags, followed by its keyvalues.

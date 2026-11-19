@@ -433,7 +433,8 @@ fn editor_definitions() -> Value {
              with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused \
              keyvalues, lightmap scales of 0 and duplicate ids. It also finds props whose class loses their \
              model in the map compiler or in game, such as a model with prop data on a prop_static, and says \
-             why. With fix, also fixes the ones that can be fixed (as one undo step) and checks again.",
+             why. With fix, also fixes the ones that can be fixed (as one undo step) and checks again; a prop \
+             with the wrong class is given the class its entry names under fix, such as prop_dynamic_override.",
             json!({ "fix": { "type": "boolean", "description": "Fix what can be fixed first." } }),
             &[],
         ),
@@ -2025,15 +2026,19 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 .check_for_problems()
                 .iter()
                 .map(|problem| {
-                    json!({
+                    let mut entry = json!({
                         "kind": problem.kind.label(),
                         "detail": problem.detail,
-                        "fixable": problem.kind.fixable(),
+                        "fixable": problem.fixable(),
                         "object": problem.object.map(|owner| match owner {
                             crate::scene::Owner::Solid(id) => json!({ "solid": id }),
                             crate::scene::Owner::Entity(id) => json!({ "entity": id }),
                         }),
-                    })
+                    });
+                    if let Some(note) = problem.fix_note() {
+                        entry["fix"] = json!(note);
+                    }
+                    entry
                 })
                 .collect();
             Ok(ToolResult::json(&json!({ "problems": problems })))

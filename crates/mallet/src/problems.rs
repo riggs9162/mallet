@@ -62,14 +62,6 @@ impl ProblemKind {
             Self::WrongPropClass => "Wrong prop class",
         }
     }
-
-    /// Whether Fix can repair it.
-    pub fn fixable(self) -> bool {
-        matches!(
-            self,
-            Self::NoClass | Self::EmptyBrushEntity | Self::InvalidSolid | Self::UnusedKeys | Self::BadLightmapScale
-        )
-    }
 }
 
 /// One problem: its kind, the object it is about, and what exactly is wrong.
@@ -78,8 +70,35 @@ pub struct Problem {
     pub kind: ProblemKind,
     pub object: Option<Owner>,
     pub detail: String,
-    /// For unused keyvalues, the keys; for a bad lightmap scale, the side ids.
+    /// For unused keyvalues, the keys; for a bad lightmap scale, the side ids; for a prop
+    /// with the wrong class, the class Fix gives it, when one stands in for its own.
     pub items: Vec<String>,
+}
+
+impl Problem {
+    /// Whether Fix can repair it. A prop with the wrong class can be fixed when a class
+    /// stands in for its own.
+    pub fn fixable(&self) -> bool {
+        match self.kind {
+            ProblemKind::NoClass
+            | ProblemKind::EmptyBrushEntity
+            | ProblemKind::InvalidSolid
+            | ProblemKind::UnusedKeys
+            | ProblemKind::BadLightmapScale => true,
+            ProblemKind::WrongPropClass => !self.items.is_empty(),
+            ProblemKind::NoPlayerStart | ProblemKind::MissingTarget | ProblemKind::DuplicateId => false,
+        }
+    }
+
+    /// What Fix does about it, where the kind of problem does not say: the class a prop
+    /// with the wrong class is given.
+    pub fn fix_note(&self) -> Option<String> {
+        let class = self
+            .items
+            .first()
+            .filter(|_| self.kind == ProblemKind::WrongPropClass)?;
+        Some(format!("Fix makes it a {class}, which keeps the model."))
+    }
 }
 
 /// What decides which prop classes keep the models a check meets, read once for each
@@ -101,9 +120,9 @@ impl PropModels {
     }
 
     /// The problem of a prop whose class the map compiler or the game takes its model
-    /// from, when `entity` is one. Only the `prop_` classes have such rules, so no other
-    /// entity's model is read. Nothing is said without a game, or about a model that
-    /// cannot be read.
+    /// from, when `entity` is one, with the class that stands in for its own if there is
+    /// one. Only the `prop_` classes have such rules, so no other entity's model is
+    /// read. Nothing is said without a game, or about a model that cannot be read.
     fn wrong_class(&mut self, entity: &Entity, owner: Option<Owner>) -> Option<Problem> {
         let classname = entity.classname();
         if !classname.trim().to_ascii_lowercase().starts_with("prop_") {
@@ -123,7 +142,11 @@ impl PropModels {
             kind: ProblemKind::WrongPropClass,
             object: owner,
             detail: format!("{classname} {} uses {model}. {reason}", entity.id().unwrap_or(0)),
-            items: Vec::new(),
+            items: traits
+                .replacement_class(classname, *collision)
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
         })
     }
 }
@@ -298,14 +321,48 @@ impl Editor {
         }
     }
 
+    /// The edits that give a prop another class to keep its model: the class change
+    /// Object Properties makes, and the removal of each key that still holds a default of
+    /// the old class and that the new class does not have, so the fix leaves no unused
+    /// keyvalues behind. A key that was given a value of its own stays, and so does every
+    /// key when the game data lacks either class.
+    fn prop_class_edits(&self, id: u32, classname: &str) -> Vec<Edit> {
+        let mut edits = self.class_change_edits(&[id], classname);
+        let Some(entity) = self.entity(id) else {
+            return edits;
+        };
+        let (Some(old), Some(new)) = (self.entity_class(entity.classname()), self.entity_class(classname)) else {
+            return edits;
+        };
+        let stale = entity
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                mallet_vmf::EntityItem::Key(pair) => Some(pair),
+                _ => None,
+            })
+            .filter(|pair| !ALWAYS_USED.iter().any(|always| always.eq_ignore_ascii_case(&pair.key)))
+            .filter(|pair| new.property(&pair.key).is_none())
+            .filter(|pair| {
+                old.property(&pair.key)
+                    .is_some_and(|property| !property.default.is_empty() && property.default == pair.value)
+            });
+        edits.extend(stale.map(|pair| Edit::RemoveKey {
+            entity: id,
+            key: pair.key.clone(),
+        }));
+        edits
+    }
+
     /// Fixes the problems that can be fixed, as one undo step: entities with no class or
-    /// no brushes and invalid brushes are deleted, unused keys removed and lightmap scales
-    /// of 0 set to 16. Returns how many problems were fixed.
+    /// no brushes and invalid brushes are deleted, unused keys removed, lightmap scales
+    /// of 0 set to 16, and a prop with the wrong class is given the class that stands in
+    /// for its own. Returns how many problems were fixed.
     pub fn fix_problems(&mut self, problems: &[Problem]) -> Result<usize, String> {
         let mut edits = Vec::new();
         let mut fixed = 0;
         let mut scales: Vec<u32> = Vec::new();
-        for problem in problems.iter().filter(|problem| problem.kind.fixable()) {
+        for problem in problems.iter().filter(|problem| problem.fixable()) {
             match (problem.kind, problem.object) {
                 (ProblemKind::NoClass | ProblemKind::EmptyBrushEntity, Some(Owner::Entity(entity))) => {
                     edits.push(Edit::RemoveEntity { entity });
@@ -328,6 +385,10 @@ impl Editor {
                 (ProblemKind::BadLightmapScale, _) => {
                     scales.extend(problem.items.iter().filter_map(|id| id.parse::<u32>().ok()));
                 }
+                (ProblemKind::WrongPropClass, Some(Owner::Entity(entity))) => {
+                    let Some(class) = problem.items.first() else { continue };
+                    edits.extend(self.prop_class_edits(entity, class));
+                }
                 _ => continue,
             }
             fixed += 1;
@@ -347,9 +408,11 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
+    use serde_json::json;
 
     use super::*;
-    use crate::tools::test_game::TestGame;
+    use crate::tools::run;
+    use crate::tools::test_game::{json_of, TestGame};
 
     /// Adds an entity of a class with a model, and returns its id.
     fn place(editor: &mut Editor, classname: &str, model: &str) -> u32 {
@@ -399,6 +462,140 @@ mod tests {
         );
         assert!(found[2].detail.contains("no prop data"), "{}", found[2].detail);
         assert!(found[3].detail.contains("$staticprop"), "{}", found[3].detail);
+    }
+
+    #[test]
+    fn fixing_a_prop_gives_it_a_class_that_keeps_its_model() {
+        let game = TestGame::new("prop-class-fix");
+        game.model("test/drum", true, Some("Metal.Medium"), true);
+        game.model("test/crate", true, None, true);
+        game.model("test/citizen", false, None, true);
+        game.model("test/sign", true, None, false);
+        let mut editor = game.editor();
+        let props = [
+            place(&mut editor, "prop_static", "models/test/drum.mdl"),
+            place(&mut editor, "prop_dynamic", "models/test/drum.mdl"),
+            place(&mut editor, "prop_physics", "models/test/crate.mdl"),
+            place(&mut editor, "prop_static", "models/test/citizen.mdl"),
+            place(&mut editor, "prop_physics", "models/test/sign.mdl"),
+        ];
+        let classes = |editor: &Editor| props.map(|id| editor.entity(id).unwrap().classname().to_owned());
+
+        let found = wrong_classes(&editor);
+        let fixes: Vec<&str> = found
+            .iter()
+            .map(|problem| problem.items.first().map_or("none", String::as_str))
+            .collect();
+        let fixed = [
+            "prop_dynamic_override",
+            "prop_dynamic_override",
+            "prop_physics_override",
+            "prop_dynamic",
+        ];
+        assert_eq!(fixes[..4], fixed);
+        assert_eq!(
+            fixes[4], "none",
+            "no class stands in for a physics prop without a collision model"
+        );
+        assert!(found[0].fixable() && !found[4].fixable());
+        assert_eq!(
+            found[0].fix_note().as_deref(),
+            Some("Fix makes it a prop_dynamic_override, which keeps the model.")
+        );
+        assert_eq!(found[4].fix_note(), None);
+
+        assert_eq!(editor.fix_problems(&found), Ok(4));
+        assert_eq!(classes(&editor)[..4], fixed);
+        assert_eq!(classes(&editor)[4], "prop_physics");
+        let left = wrong_classes(&editor);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].object, Some(Owner::Entity(props[4])));
+
+        assert_eq!(
+            editor.step_history(false),
+            Ok(true),
+            "the whole fix is one step to undo"
+        );
+        let before = [
+            "prop_static",
+            "prop_dynamic",
+            "prop_physics",
+            "prop_static",
+            "prop_physics",
+        ];
+        assert_eq!(classes(&editor), before);
+    }
+
+    #[test]
+    fn fixing_a_prop_drops_the_defaults_its_new_class_has_no_use_for() {
+        let classes = "@PointClass = prop_static : \"A static prop.\" [\n\
+            model(studio) : \"Model\"\n\
+            solid(integer) : \"Collisions\" : 6\n\
+            screenspacefade(integer) : \"Screen space fade\" : 0\n\
+            ]\n\
+            @PointClass = prop_dynamic_override : \"A dynamic prop.\" [\n\
+            model(studio) : \"Model\"\n\
+            solid(integer) : \"Collisions\" : 6\n\
+            health(integer) : \"Health\" : 0\n\
+            ]\n";
+        let game = TestGame::new("prop-class-keys");
+        game.model("test/drum", true, Some("Metal.Medium"), true);
+        let mut editor = game.editor();
+        editor.game_data = Some(std::sync::Arc::new(mallet_content::GameData::parse(classes).unwrap()));
+        let plain = place(&mut editor, "prop_static", "models/test/drum.mdl");
+        let tuned = place(&mut editor, "prop_static", "models/test/drum.mdl");
+        editor.set_key_on(&[tuned], "screenspacefade", "1").unwrap();
+        editor.set_key_on(&[tuned], "targetname", "drum").unwrap();
+        assert_eq!(editor.entity(plain).unwrap().get("screenspacefade"), Some("0"));
+
+        let found = wrong_classes(&editor);
+        assert_eq!(editor.fix_problems(&found), Ok(2));
+        let keys = |id: u32| {
+            let entity = editor.entity(id).unwrap();
+            ["classname", "screenspacefade", "solid", "health", "targetname"].map(|key| entity.get(key))
+        };
+        let class = Some("prop_dynamic_override");
+        assert_eq!(keys(plain), [class, None, Some("6"), Some("0"), None]);
+        assert_eq!(keys(tuned), [class, Some("1"), Some("6"), Some("0"), Some("drum")]);
+        let unused: Vec<Option<Owner>> = editor
+            .check_for_problems()
+            .iter()
+            .filter(|problem| problem.kind == ProblemKind::UnusedKeys)
+            .map(|problem| problem.object)
+            .collect();
+        assert_eq!(
+            unused,
+            [Some(Owner::Entity(tuned))],
+            "only keys with a value of their own are left"
+        );
+    }
+
+    #[test]
+    fn agents_are_told_the_fix_and_can_ask_for_it() {
+        let game = TestGame::new("prop-class-tool");
+        game.model("test/drum", true, Some("Metal.Medium"), true);
+        let mut editor = game.editor();
+        let drum = place(&mut editor, "prop_static", "models/test/drum.mdl");
+        let wrong = |listed: &serde_json::Value| -> Vec<serde_json::Value> {
+            let problems = listed["problems"].as_array().unwrap().iter();
+            problems
+                .filter(|entry| entry["kind"] == "Wrong prop class")
+                .cloned()
+                .collect()
+        };
+
+        let listed = wrong(&json_of(&run(&mut editor, "check_for_problems", &json!({}))));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["object"]["entity"], drum);
+        assert_eq!(listed[0]["fixable"], true);
+        assert_eq!(
+            listed[0]["fix"],
+            "Fix makes it a prop_dynamic_override, which keeps the model."
+        );
+
+        let fixed = json_of(&run(&mut editor, "check_for_problems", &json!({ "fix": true })));
+        assert!(wrong(&fixed).is_empty());
+        assert_eq!(editor.entity(drum).unwrap().classname(), "prop_dynamic_override");
     }
 
     #[test]
