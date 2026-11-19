@@ -1,6 +1,6 @@
 //! The tools that find a map's objects in bulk, so an agent asks one question instead of
 //! reading every object: selecting by what objects are and where they are,
-//! and listing entities with filters.
+//! and listing entities and brushes with filters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,13 +9,44 @@ use mallet_vmf::geometry::Bounds;
 use mallet_vmf::Entity;
 use serde_json::{json, Value};
 
-use super::{id_list, optional_flag, optional_numbers, optional_string, whole_number, DEFAULT_LIST_LIMIT};
+use super::{id_list, optional_flag, optional_numbers, optional_string, tool, whole_number, DEFAULT_LIST_LIMIT};
 use crate::editor::{Editor, SelectMode};
 use crate::mcp::ToolResult;
 use crate::scene::{Owner, WireMesh};
 
 /// Selections of more objects of a kind than this give their ids as ranges.
 const MAX_LISTED_IDS: usize = 100;
+/// How many brushes `list_solids` returns when no limit is given.
+const DEFAULT_SOLIDS: u64 = 100;
+
+/// The `tools/list` entries of the tools this module adds.
+pub fn definitions() -> Vec<Value> {
+    let vec3 = json!({ "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 });
+    let area = json!({
+        "type": "object",
+        "properties": { "min": vec3, "max": vec3 },
+        "required": ["min", "max"],
+        "description": "Only objects inside this box, or with touching, objects that reach into it."
+    });
+    vec![
+        tool(
+            "list_solids",
+            "List brushes, of the world and of brush entities, with their id, the entity they belong to, the \
+             box around them, their face count and their materials: all of them, or those of one entity, with \
+             a material, in a box or in the selection. Hidden brushes are left out.",
+            json!({
+                "entity": { "type": "integer", "description": "Only brushes of this entity; the world is usually 1." },
+                "material": { "type": "string", "description": "Only brushes with a face of this material; * stands for any text, as in tools/*." },
+                "box": area,
+                "touching": { "type": "boolean", "description": "With box, also brushes that only reach into it. Default false." },
+                "selected_only": { "type": "boolean", "description": "Only selected brushes and the brushes of selected entities." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Default 100." },
+                "offset": { "type": "integer", "minimum": 0, "description": "How many matching brushes to skip; default 0." }
+            }),
+            &[],
+        ),
+    ]
+}
 
 /// Whether `text` matches `pattern`, ignoring case and which way slashes lean. A `*` in
 /// the pattern stands for any text, so `trigger_*` matches by prefix and `*door*`
@@ -345,6 +376,65 @@ pub(super) fn list_entities(editor: &Editor, args: &Value) -> Result<Value, Stri
     Ok(listed)
 }
 
+/// The `list_solids` tool.
+pub(super) fn list_solids(editor: &Editor, args: &Value) -> Result<Value, String> {
+    let vmf = &editor.document.as_ref().ok_or("no map is open")?.vmf;
+    let world = vmf.world().and_then(Entity::id);
+    let entity = whole_number(args, "entity")?.map(|id| id as u32);
+    let material = optional_string(args, "material")?;
+    let area = Area::from_args(args)?;
+    let selected_only = optional_flag(args, "selected_only")? == Some(true);
+    let limit = whole_number(args, "limit")?.unwrap_or(DEFAULT_SOLIDS).max(1) as usize;
+    let offset = whole_number(args, "offset")?.unwrap_or(0) as usize;
+    let owner_of = |mesh: &WireMesh| match mesh.owner {
+        Some(Owner::Entity(id)) => Some(id),
+        Some(Owner::Solid(_)) => world,
+        None => None,
+    };
+    let matching: Vec<&WireMesh> = editor
+        .scene
+        .meshes
+        .iter()
+        .filter(|mesh| mesh.solid.is_some() && !mesh.decal)
+        .filter(|mesh| entity.is_none_or(|wanted| owner_of(mesh) == Some(wanted)))
+        .filter(|mesh| material.is_none_or(|pattern| has_material(mesh, pattern)))
+        .filter(|mesh| area.as_ref().is_none_or(|area| area.takes(&mesh.geometry_bounds)))
+        .filter(|mesh| !selected_only || mesh.selected)
+        .collect();
+    let solids: Vec<Value> = matching
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|mesh| {
+            let sides: Vec<&str> = mesh
+                .faces
+                .iter()
+                .filter(|face| face.side.is_some())
+                .filter_map(|face| face.material.as_deref())
+                .collect();
+            let materials: BTreeSet<&str> = sides.iter().copied().collect();
+            json!({
+                "solid": mesh.solid,
+                "entity": owner_of(mesh),
+                "min": mesh.geometry_bounds.min.to_array(),
+                "max": mesh.geometry_bounds.max.to_array(),
+                "faces": sides.len(),
+                "materials": materials,
+            })
+        })
+        .collect();
+    let returned = solids.len();
+    let mut listed = json!({
+        "total": matching.len(),
+        "returned": returned,
+        "solids": solids,
+    });
+    if offset + returned < matching.len() {
+        listed["next_offset"] = json!(offset + returned);
+    }
+    Ok(listed)
+}
+
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
@@ -517,6 +607,30 @@ mod tests {
         run(&mut editor, "select", &json!({ "entities": [light] }));
         let selected = json_of(&run(&mut editor, "list_entities", &json!({ "selected_only": true })));
         assert_eq!(selected["entities"][0]["classname"], "light");
+    }
+
+    #[test]
+    fn brushes_are_listed_with_their_boxes_and_materials() {
+        let (mut editor, [floor, wall], _) = editor();
+        let all = json_of(&run(&mut editor, "list_solids", &json!({})));
+        assert_eq!(all["total"], 2);
+        assert_eq!(all["solids"][0]["solid"], floor);
+        assert_eq!(all["solids"][0]["min"], json!([-256.0, -256.0, -16.0]));
+        assert_eq!(all["solids"][0]["faces"], 6);
+        assert_eq!(all["solids"][0]["materials"], json!(["CONCRETE/FLOOR"]));
+
+        let bricks = json_of(&run(&mut editor, "list_solids", &json!({ "material": "brick/wall" })));
+        assert_eq!(bricks["solids"][0]["solid"], wall);
+
+        run(&mut editor, "select", &json!({ "solids": [wall] }));
+        let detail = json_of(&run(&mut editor, "tie_to_entity", &json!({})))["entity"]
+            .as_u64()
+            .unwrap();
+        let tied = json_of(&run(&mut editor, "list_solids", &json!({ "entity": detail })));
+        assert_eq!(tied["total"], 1);
+        assert_eq!(tied["solids"][0]["entity"], detail);
+        let selected = json_of(&run(&mut editor, "list_solids", &json!({ "selected_only": true })));
+        assert_eq!(selected["solids"][0]["solid"], wall);
     }
 
 }
