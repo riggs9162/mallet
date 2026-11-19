@@ -1276,7 +1276,7 @@ impl ModelBrowserState {
             .listing
             .as_ref()
             .is_some_and(|listing| listing.collision.contains(&path));
-        let is_static = self.prop_traits.get(&path).map(|traits| traits.static_prop);
+        let traits = self.prop_traits.get(&path).cloned();
         let preview = &mut self.preview;
         if preview.worker.as_ref().is_none_or(|worker| &worker.game != game) {
             preview.worker = Some(PreviewWorker::start(game, loader));
@@ -1376,7 +1376,7 @@ impl ModelBrowserState {
                 reveal(loader, &path);
             }
         });
-        for warning in warnings(&target.classes, is_static, collision) {
+        for warning in warnings(&target.classes, traits.as_ref(), collision) {
             ui.label(RichText::new(format!("{} {warning}", icon::WARNING)).color(WARNING));
         }
         ui.separator();
@@ -1733,17 +1733,17 @@ fn kinds_label(kinds: ModelKinds) -> &'static str {
     }
 }
 
-/// What will go wrong in game when a model is used on entities of these classes.
-fn warnings(classes: &[String], is_static: Option<bool>, collision: bool) -> Vec<&'static str> {
-    let mut warnings = Vec::new();
-    if is_static == Some(false) && classes.iter().any(|class| class == "prop_static") {
-        warnings.push("Not compiled as a static prop, so prop_static will not show it in game.");
-    }
-    let physical = |class: &String| class.starts_with("prop_physics") || class == "prop_ragdoll";
-    if !collision && classes.iter().any(physical) {
-        warnings.push("No collision model, so the game removes it as a physics prop.");
-    }
-    warnings
+/// What will go wrong in game when a model is used on entities of these classes, one
+/// line for each class the compiler or the game takes the model from. Nothing is said
+/// about a model that has not been looked at yet.
+fn warnings(classes: &[String], traits: Option<&PropTraits>, collision: bool) -> Vec<String> {
+    let Some(traits) = traits else {
+        return Vec::new();
+    };
+    classes
+        .iter()
+        .filter_map(|class| Some(format!("{class}: {}", traits.class_problem(class, collision)?)))
+        .collect()
 }
 
 /// The words of a search: every plain word must be in a name, and no word that started
@@ -1904,6 +1904,24 @@ mod tests {
             state.filtered(&used),
             [1],
             "a physics prop needs prop data and a collision model"
+        );
+    }
+
+    #[test]
+    fn warnings_name_each_class_that_loses_the_model() {
+        let classes = ["prop_dynamic", "prop_physics", "prop_static"].map(str::to_owned);
+        let lines = warnings(&classes, Some(&drum()), true);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with("prop_dynamic: ") && lines[0].contains("prop_dynamic_override"));
+        assert!(lines[1].starts_with("prop_static: ") && lines[1].contains("VBSP"));
+        assert!(warnings(&classes, Some(&drum()), false)
+            .iter()
+            .any(|line| line.starts_with("prop_physics: ") && line.contains("collision")));
+        assert!(warnings(&classes[2..], Some(&lamp()), false).is_empty());
+        assert!(warnings(&["npc_citizen".to_owned()], Some(&drum()), false).is_empty());
+        assert!(
+            warnings(&classes, None, true).is_empty(),
+            "nothing is said about a model that was not looked at yet"
         );
     }
 }
