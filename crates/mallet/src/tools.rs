@@ -72,7 +72,8 @@ pub fn definitions() -> Value {
         ),
         tool(
             "list_tabs",
-            "List the open map tabs, which one is active, and which have unsaved changes.",
+            "List the open map tabs, which one is active, which have unsaved changes, and the autosaved copy \
+             that holds those changes once one has been made.",
             json!({}),
             &[]
         ),
@@ -584,8 +585,8 @@ pub fn definitions() -> Value {
         tool(
             "get_settings",
             "Read Mallet Options: game and Steam folders, FGD files, compile tool paths (with the programs found \
-             on this computer), compile behaviour, viewport options and colours, editing defaults, files, the \
-             texture browser, the interface and the MCP server.",
+             on this computer), compile behaviour, viewport options and colours, editing defaults, files, \
+             autosave, the texture browser, the interface and the MCP server.",
             json!({}),
             &[],
         ),
@@ -2364,7 +2365,14 @@ fn tabs_json(editor: &Editor) -> Value {
     let tabs: Vec<Value> = editor
         .tabs()
         .into_iter()
-        .map(|tab| json!({ "title": tab.title, "path": tab.path, "unsaved": tab.dirty }))
+        .map(|tab| {
+            json!({
+                "title": tab.title,
+                "path": tab.path,
+                "unsaved": tab.dirty,
+                "autosave": tab.backup.map(|copy| copy.display().to_string()),
+            })
+        })
         .collect();
     let agent = editor.config.agents.own_view.then(|| editor.agent_tab());
     json!({ "active": editor.window_tab(), "agent": agent, "tabs": tabs })

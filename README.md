@@ -76,6 +76,20 @@ setup is Windows-only; the section hides itself elsewhere.) Opening a map from E
 while Mallet runs adds it as a tab in that window instead of starting a second Mallet, as
 Hammer does.
 
+## Autosave
+
+Every five minutes Mallet copies each map that has unsaved changes to an autosave folder,
+as Hammer does, so a power cut or a frozen computer costs a few minutes of work at most.
+The copies are named like `rp_city_autosave_0007.vmf`, in the map's own format, with the
+highest number the newest. Five are kept of each map, and the oldest of any map go once
+the folder passes 500 MB. The map's own file is only ever written when you save. An
+autosave waits until you let go of the mouse and writes in the background, so it does not
+get in the way, and the status bar says when one was made.
+
+Edit > Mallet Options > Files turns autosave off, sets the time between autosaves, the
+number of copies and the space they may take, and picks the folder: `%APPDATA%\Mallet\autosave`
+on Windows and `~/.config/Mallet/autosave` on Linux unless you choose another.
+
 ## Layout
 
 The window follows Hammer++: menus with an icon toolbar underneath, browser-style map
@@ -526,7 +540,8 @@ as you change it:
 - **Editing**: the texture new brushes get, the Entity tool's class, how many recent
   textures are listed, texture lock and texture scale lock, the rotation snap step,
   arrow-key nudging and the 3D gizmo.
-- **Files**: the format new maps are saved in, how many recent maps are kept, and the
+- **Files**: the format new maps are saved in, how many recent maps are kept, autosave
+  (how often, how many copies of each map, how much space and which folder), and the
   Windows file types.
 - **Texture browser**: scrolling, thumbnail size, loading threads and how many
   thumbnails stay in memory.

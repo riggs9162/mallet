@@ -34,6 +34,7 @@ use crate::view2d::{Axis2D, View2D};
 use crate::view3d::Camera3D;
 
 mod agent;
+mod autosave;
 mod brush_entities;
 mod cameras;
 mod carve;
@@ -47,6 +48,7 @@ mod views;
 mod visgroups;
 
 pub use agent::AgentView;
+pub use autosave::AutosaveState;
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
 pub use displacements::{
     displacement_count, effect_label, AxisChoice, DisplacementMode, DisplacementTool, DEFAULT_ALPHA,
@@ -326,6 +328,8 @@ pub struct TabInfo {
     pub path: String,
     /// Whether the map has unsaved changes.
     pub dirty: bool,
+    /// The autosaved copy that holds the map's unsaved changes, if one has been made.
+    pub backup: Option<PathBuf>,
 }
 
 fn default_views() -> [View2D; 3] {
@@ -481,6 +485,8 @@ pub struct Editor {
     pub texture_lights: Arc<TextureLights>,
     /// The sound preview: the soundscape and ambient sounds heard at the 3D camera.
     pub sound: crate::sound::SoundPreview,
+    /// When maps were last autosaved, and whether an autosave has to wait.
+    pub autosave: AutosaveState,
     /// The vertex tool's brushes and selected vertices.
     pub vertex: crate::vertex_tool::VertexState,
     /// The Displacement tab's tool and paint brush settings.
@@ -583,6 +589,7 @@ impl Default for Editor {
             gpu: None,
             texture_lights: Arc::new(TextureLights::new()),
             sound: crate::sound::SoundPreview::default(),
+            autosave: AutosaveState::default(),
             vertex: Default::default(),
             displacement: DisplacementTool::default(),
             collapsed_points: None,
@@ -621,11 +628,17 @@ impl Editor {
                 title: document.file_name(),
                 path: document.display_path(),
                 dirty: document.dirty,
+                backup: document
+                    .backup
+                    .as_ref()
+                    .filter(|_| document.dirty)
+                    .map(|backup| backup.file.clone()),
             },
             None => TabInfo {
                 title: "empty".to_owned(),
                 path: String::new(),
                 dirty: false,
+                backup: None,
             },
         };
         self.tabs
@@ -864,6 +877,7 @@ impl Editor {
         let result = document.save();
         if result.is_ok() {
             document.dirty = false;
+            document.backup = None;
         }
         let message = match &result {
             Ok(()) => format!("Saved {}", document.display_path()),

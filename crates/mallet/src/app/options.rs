@@ -1580,6 +1580,9 @@ fn files_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         }
     });
 
+    ui.add_space(14.0);
+    autosave_options(ui, &mut editor.config.autosave, dirty);
+
     #[cfg(windows)]
     {
         ui.add_space(14.0);
@@ -1616,6 +1619,62 @@ fn files_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
             Some(Ok(())) => editor.message = "Updated the Windows file types".to_owned(),
             Some(Err(error)) => editor.message = format!("Could not update the Windows file types: {error}"),
             None => {}
+        }
+    }
+}
+
+/// The autosave settings of the Files section: whether and how often maps with unsaved
+/// changes are copied, how many copies are kept, the space they may take and their folder.
+fn autosave_options(ui: &mut egui::Ui, autosave: &mut config::AutosaveOptions, dirty: &mut bool) {
+    ui.strong("Autosave");
+    ui.label(
+        RichText::new(
+            "Maps with unsaved changes are copied to a folder of their own, in their own format, so little is \
+             lost when the computer or Mallet stops without warning.",
+        )
+        .color(MUTED),
+    );
+    ui.add_space(4.0);
+    *dirty |= ui
+        .checkbox(&mut autosave.enabled, "Autosave maps with unsaved changes")
+        .changed();
+    egui::Grid::new("autosave_options")
+        .num_columns(2)
+        .spacing([16.0, 8.0])
+        .show(ui, |ui| {
+            ui.add_enabled_ui(autosave.enabled, |ui| ui.label("Time between autosaves"));
+            let unit = if autosave.minutes == 1 { " minute" } else { " minutes" };
+            let minutes = egui::DragValue::new(&mut autosave.minutes)
+                .range(1..=config::AutosaveOptions::MAX_MINUTES)
+                .suffix(unit);
+            *dirty |= ui.add_enabled(autosave.enabled, minutes).changed();
+            ui.end_row();
+            ui.label("Copies kept of each map")
+                .on_hover_text("The oldest copy of a map is removed when it has more than this.");
+            let copies = egui::DragValue::new(&mut autosave.copies).range(1..=config::AutosaveOptions::MAX_COPIES);
+            *dirty |= ui.add(copies).changed();
+            ui.end_row();
+            ui.label("Space the copies may take")
+                .on_hover_text("Past this, the oldest copies of any map are removed.");
+            let megabytes = egui::DragValue::new(&mut autosave.megabytes)
+                .range(config::AutosaveOptions::MEGABYTES)
+                .speed(10.0)
+                .suffix(" MB");
+            *dirty |= ui.add(megabytes).changed();
+            ui.end_row();
+        });
+    ui.add_space(4.0);
+    ui.label("Autosave folder");
+    let usual = config::default_autosave_folder()
+        .map(|folder| folder.display().to_string())
+        .unwrap_or_default();
+    *dirty |= folder_field(ui, &mut autosave.folder, &usual);
+    if let Some(folder) = autosave.folder() {
+        if ui
+            .button(format!("{} Open the autosave folder", icon::FOLDER_OPEN))
+            .clicked()
+        {
+            open_folder(&folder);
         }
     }
 }

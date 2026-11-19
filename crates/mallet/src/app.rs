@@ -300,7 +300,8 @@ pub struct MalletApp {
 }
 
 impl MalletApp {
-    /// Creates the window, starts the MCP server and opens `path` if one was given.
+    /// Creates the window, starts the MCP server and the autosave thread, and opens `path`
+    /// if one was given.
     ///
     /// The server listens on the port set in Mallet Options (7414 unless changed), or on
     /// `MALLET_MCP_PORT` when set; a value of `0` or `off` disables it, as does turning it
@@ -363,6 +364,8 @@ impl MalletApp {
         load_game_content(&mut editor);
         open_or_new(&mut editor, path);
         drop(editor);
+        let ctx = cc.egui_ctx.clone();
+        crate::autosave::start(Arc::clone(&app.editor), move || ctx.request_repaint());
         app
     }
 
@@ -1986,6 +1989,7 @@ impl eframe::App for MalletApp {
         editor.timings.interval_max_ms = max;
         editor.timings.recent_intervals_ms = self.net_graph.recent_intervals(40);
         editor.snap_suspended = ctx.input(|input| input.modifiers.alt);
+        editor.autosave.pointer_held = ctx.input(|input| input.pointer.any_down());
         self.handle_input(ctx, &mut editor);
         take_window_shot(ctx, &mut editor);
         self.update_title(ctx, &editor);

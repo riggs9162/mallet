@@ -11,6 +11,7 @@
 #![recursion_limit = "256"]
 
 mod app;
+mod autosave;
 mod branding;
 mod canvas;
 mod clipper;

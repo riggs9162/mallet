@@ -4,8 +4,9 @@
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mallet_format::FormatError;
 use mallet_vmf::edit::History;
@@ -118,6 +119,42 @@ impl From<FormatError> for DocumentError {
     }
 }
 
+/// The autosaved copy of a map's unsaved changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backup {
+    /// The copy, in the autosave folder.
+    pub file: PathBuf,
+    /// How many changes the map had seen when the copy was made, as
+    /// [`History::changes`] counts them.
+    pub changes: u64,
+}
+
+/// A map as it was at one moment, held as the bytes of a `.mallet` file, so it can be
+/// written to disk later without the document it was taken from. Taking one is quicker
+/// than copying the map in memory.
+pub struct Snapshot {
+    bytes: Vec<u8>,
+}
+
+impl Snapshot {
+    /// Writes the map to `path`, in the format its extension names, and waits until it
+    /// has reached the disk. The copy goes through a temporary file, like
+    /// [`Document::export`].
+    pub fn write(&self, path: &Path) -> Result<(), DocumentError> {
+        match MapFormat::for_path(path) {
+            MapFormat::Mallet => write_file(path, &self.bytes, true),
+            MapFormat::Vmf => {
+                let file = mallet_format::read(&self.bytes)?;
+                let encoding = text_encoding(file.meta.as_deref());
+                write_file(path, &encode(&file.vmf, encoding, MapFormat::Vmf), true)
+            }
+        }
+    }
+}
+
+/// The number the next document gets as its [`Document::serial`].
+static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
+
 /// An open map.
 pub struct Document {
     /// Where the map is saved; `None` for a new map that has never been saved.
@@ -128,7 +165,10 @@ pub struct Document {
     pub history: History,
     /// Whether the map has changed since it was opened or last saved.
     pub dirty: bool,
+    /// The latest autosaved copy of the map's unsaved changes, if one has been made.
+    pub backup: Option<Backup>,
     encoding: TextEncoding,
+    serial: u64,
 }
 
 impl Document {
@@ -138,12 +178,8 @@ impl Document {
         let bytes = fs::read(path)?;
         let (vmf, encoding) = if mallet_format::is_mallet(&bytes) {
             let file = mallet_format::read(&bytes)?;
-            let meta: MalletMeta = file
-                .meta
-                .as_deref()
-                .and_then(|meta| serde_json::from_str(meta).ok())
-                .unwrap_or_default();
-            (file.vmf, meta.text_encoding)
+            let encoding = text_encoding(file.meta.as_deref());
+            (file.vmf, encoding)
         } else {
             let (text, encoding) = match String::from_utf8(bytes) {
                 Ok(text) => (text, TextEncoding::Utf8),
@@ -159,7 +195,9 @@ impl Document {
             vmf,
             history: History::default(),
             dirty: false,
+            backup: None,
             encoding,
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
         })
     }
 
@@ -170,7 +208,9 @@ impl Document {
             vmf: Vmf::new_map(),
             history: History::default(),
             dirty: false,
+            backup: None,
             encoding: TextEncoding::Utf8,
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -184,37 +224,30 @@ impl Document {
     /// making it the document's file. The copy goes through a temporary file, so a failed
     /// write never leaves a half-written map behind.
     pub fn export(&self, path: &Path) -> Result<(), DocumentError> {
-        let bytes = self.encode(MapFormat::for_path(path));
-        let mut temporary = path.as_os_str().to_owned();
-        temporary.push(".tmp");
-        let temporary = PathBuf::from(temporary);
-        fs::write(&temporary, bytes)?;
-        fs::rename(&temporary, path)?;
-        Ok(())
+        let bytes = encode(&self.vmf, self.encoding, MapFormat::for_path(path));
+        write_file(path, &bytes, false)
     }
 
-    /// The map as the bytes of a file in `format`.
-    fn encode(&self, format: MapFormat) -> Vec<u8> {
-        match format {
-            MapFormat::Mallet => {
-                let meta = MalletMeta {
-                    writer: format!("Mallet {}", env!("CARGO_PKG_VERSION")),
-                    text_encoding: self.encoding,
-                };
-                let meta = serde_json::to_string(&meta).expect("the editor state is plain data");
-                mallet_format::write(&self.vmf, Some(&meta))
-            }
-            MapFormat::Vmf => {
-                let text = self.vmf.to_text();
-                match self.encoding {
-                    TextEncoding::Utf8 => text.into_bytes(),
-                    TextEncoding::Latin1 => text
-                        .chars()
-                        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
-                        .collect(),
-                }
-            }
+    /// The map as it is now, to write to a file later.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            bytes: encode(&self.vmf, self.encoding, MapFormat::Mallet),
         }
+    }
+
+    /// A number no other map opened or started by this Mallet has, which tells the
+    /// document apart from every other one while tabs open, close and change places.
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// Whether the map has unsaved changes that no autosaved copy holds yet.
+    pub fn needs_backup(&self) -> bool {
+        self.dirty
+            && self
+                .backup
+                .as_ref()
+                .is_none_or(|backup| backup.changes != self.history.changes())
     }
 
     /// The format the map is saved in.
@@ -241,9 +274,100 @@ impl Document {
     }
 }
 
+/// The text encoding a `.mallet` file's notes name, or UTF-8 when it has none.
+fn text_encoding(meta: Option<&str>) -> TextEncoding {
+    meta.and_then(|meta| serde_json::from_str::<MalletMeta>(meta).ok())
+        .unwrap_or_default()
+        .text_encoding
+}
+
+/// A map as the bytes of a file in `format`.
+fn encode(vmf: &Vmf, encoding: TextEncoding, format: MapFormat) -> Vec<u8> {
+    match format {
+        MapFormat::Mallet => {
+            let meta = MalletMeta {
+                writer: format!("Mallet {}", env!("CARGO_PKG_VERSION")),
+                text_encoding: encoding,
+            };
+            let meta = serde_json::to_string(&meta).expect("the editor state is plain data");
+            mallet_format::write(vmf, Some(&meta))
+        }
+        MapFormat::Vmf => {
+            let text = vmf.to_text();
+            match encoding {
+                TextEncoding::Utf8 => text.into_bytes(),
+                TextEncoding::Latin1 => text
+                    .chars()
+                    .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// Writes a file through a temporary one beside it, so a failed write never leaves a
+/// half-written map behind. With `durable` it also waits until the bytes are on the disk,
+/// so the file is whole even when the computer loses power right after.
+fn write_file(path: &Path, bytes: &[u8], durable: bool) -> Result<(), DocumentError> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(bytes)?;
+    if durable {
+        file.sync_all()?;
+    }
+    drop(file);
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_writes_the_map_in_either_format() {
+        let folder = std::env::temp_dir().join(format!("mallet-snapshot-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let text = Vmf::new_map().to_text().replace("sky_day01_01", "sky_caf\u{e9}");
+        let bytes: Vec<u8> = text.chars().map(|c| u8::try_from(u32::from(c)).unwrap()).collect();
+        let original = folder.join("map.vmf");
+        fs::write(&original, &bytes).unwrap();
+        let document = Document::load(&original).unwrap();
+        let snapshot = document.snapshot();
+
+        let as_vmf = folder.join("copy.vmf");
+        snapshot.write(&as_vmf).unwrap();
+        assert_eq!(fs::read(&as_vmf).unwrap(), bytes, "a VMF copy has the map's own bytes");
+        let as_mallet = folder.join("copy.mallet");
+        snapshot.write(&as_mallet).unwrap();
+        assert_eq!(Document::load(&as_mallet).unwrap().vmf, document.vmf);
+        assert!(!folder.join("copy.vmf.tmp").exists());
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_map_needs_a_backup_until_a_copy_holds_its_changes() {
+        let mut document = Document::untitled();
+        assert_ne!(document.serial(), Document::untitled().serial());
+        assert!(!document.needs_backup(), "a map without unsaved changes needs none");
+        document.dirty = true;
+        assert!(document.needs_backup());
+        document.backup = Some(Backup {
+            file: PathBuf::from("copy.vmf"),
+            changes: document.history.changes(),
+        });
+        assert!(!document.needs_backup());
+        let world = document.vmf.world().and_then(mallet_vmf::Entity::id).unwrap();
+        let edit = mallet_vmf::edit::Edit::SetKey {
+            entity: world,
+            key: "skyname".to_owned(),
+            value: "sky_day02_01".to_owned(),
+        };
+        document.history.apply(&mut document.vmf, &edit).unwrap();
+        assert!(document.needs_backup(), "a change after the copy needs a new one");
+    }
 
     #[test]
     fn converts_between_formats_without_losing_bytes() {

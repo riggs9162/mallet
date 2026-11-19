@@ -83,6 +83,7 @@ pub struct Config {
     pub colors: ColorOptions,
     pub editing: EditingOptions,
     pub files: FileOptions,
+    pub autosave: AutosaveOptions,
     pub texture_browser: TextureBrowserOptions,
     /// What the texture browser shows, as it was last left.
     pub texture_browser_view: TextureBrowserView,
@@ -360,6 +361,74 @@ impl FileOptions {
     pub fn recent_map_count(&self) -> usize {
         self.recent_maps.clamp(1, MAX_RECENT_MAPS)
     }
+}
+
+/// How maps with unsaved changes are copied to the autosave folder, as Hammer's autosave
+/// does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutosaveOptions {
+    /// Copy every map with unsaved changes to the autosave folder every few minutes.
+    /// Maps are copied when an error stops Mallet whether this is on or not.
+    pub enabled: bool,
+    /// Minutes between autosaves.
+    pub minutes: u32,
+    /// How many copies of each map the folder keeps; older ones are removed.
+    pub copies: usize,
+    /// The most megabytes the folder's copies may take; the oldest are removed past it.
+    pub megabytes: u64,
+    /// Where the copies go; `None` for the `autosave` folder beside Mallet's settings.
+    pub folder: Option<PathBuf>,
+}
+
+impl Default for AutosaveOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            minutes: 5,
+            copies: 5,
+            megabytes: 500,
+            folder: None,
+        }
+    }
+}
+
+impl AutosaveOptions {
+    /// The longest time between autosaves that can be set, in minutes.
+    pub const MAX_MINUTES: u32 = 120;
+    /// The most copies of a map that can be kept.
+    pub const MAX_COPIES: usize = 50;
+    /// The least and the most space the copies can be given, in megabytes.
+    pub const MEGABYTES: std::ops::RangeInclusive<u64> = 10..=100_000;
+
+    /// The time between autosaves, from one minute to two hours.
+    pub fn interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.minutes.clamp(1, Self::MAX_MINUTES)) * 60)
+    }
+
+    /// How many copies of each map are kept, from 1 to [`Self::MAX_COPIES`].
+    pub fn copy_count(&self) -> usize {
+        self.copies.clamp(1, Self::MAX_COPIES)
+    }
+
+    /// The most bytes the folder's copies may take.
+    pub fn byte_limit(&self) -> u64 {
+        self.megabytes.clamp(*Self::MEGABYTES.start(), *Self::MEGABYTES.end()) * 1024 * 1024
+    }
+
+    /// The folder the copies go to: the chosen one, or `autosave` beside Mallet's
+    /// settings. `None` when neither can be told.
+    pub fn folder(&self) -> Option<PathBuf> {
+        self.folder
+            .clone()
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .or_else(default_autosave_folder)
+    }
+}
+
+/// Where autosaved copies go unless Mallet Options names another folder.
+pub fn default_autosave_folder() -> Option<PathBuf> {
+    data_dir().map(|dir| dir.join("autosave"))
 }
 
 /// What new brushes, entities and lists start with.

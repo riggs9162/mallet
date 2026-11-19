@@ -929,6 +929,8 @@ pub struct History {
     /// The group of the latest edit made with [`History::apply_grouped`], while nothing
     /// else has happened since.
     last_group: Option<u64>,
+    /// How many edits, undos and redos have been applied; see [`History::changes`].
+    changes: u64,
 }
 
 impl History {
@@ -938,6 +940,7 @@ impl History {
         self.undo.push(inverse);
         self.redo.clear();
         self.last_group = None;
+        self.changes += 1;
         Ok(())
     }
 
@@ -959,6 +962,7 @@ impl History {
         }
         self.redo.clear();
         self.last_group = Some(group);
+        self.changes += 1;
         Ok(())
     }
 
@@ -981,6 +985,7 @@ impl History {
         };
         let inverse = edit.apply(vmf)?;
         self.redo.push(inverse);
+        self.changes += 1;
         Ok(true)
     }
 
@@ -992,7 +997,14 @@ impl History {
         };
         let inverse = edit.apply(vmf)?;
         self.undo.push(inverse);
+        self.changes += 1;
         Ok(true)
+    }
+
+    /// How many edits, undos and redos this history has applied. The count only ever
+    /// grows, so a map whose count has not moved has not changed.
+    pub fn changes(&self) -> u64 {
+        self.changes
     }
 
     /// The edit the next undo applies, if there is one.
@@ -1059,6 +1071,26 @@ entity { "id" "3" "classname" "info_target" }
         assert!(history.undo(&mut vmf).unwrap());
         assert_eq!(vmf.to_text(), original, "the three steps of group 7 undo as one");
         assert!(!history.undo(&mut vmf).unwrap());
+    }
+
+    #[test]
+    fn every_change_to_the_map_is_counted() {
+        let mut vmf = Vmf::parse(MAP).unwrap();
+        let mut history = History::default();
+        let rename = Edit::SetKey {
+            entity: 2,
+            key: "targetname".to_owned(),
+            value: "renamed".to_owned(),
+        };
+        assert_eq!(history.changes(), 0);
+        history.apply(&mut vmf, &rename).unwrap();
+        history.apply_grouped(&mut vmf, &rename, 7).unwrap();
+        assert_eq!(history.changes(), 2);
+        assert!(history.undo(&mut vmf).unwrap());
+        assert!(history.redo(&mut vmf).unwrap());
+        assert_eq!(history.changes(), 4, "an undo and a redo change the map too");
+        assert!(!history.redo(&mut vmf).unwrap());
+        assert_eq!(history.changes(), 4, "a redo with nothing to redo changes nothing");
     }
 
     #[test]
