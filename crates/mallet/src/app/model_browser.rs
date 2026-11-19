@@ -473,9 +473,9 @@ impl MalletApp {
                         .listing
                         .as_ref()
                         .is_some_and(|listing| listing.collision.contains(&model));
-                    let traits = self.model_browser.prop_traits.get(&model);
-                    let is_static = traits.map(|traits| traits.static_prop);
-                    let result = use_model(editor, &pick, &model, variant, look_chosen, is_static, collision);
+                    let known = self.model_browser.prop_traits.get(&model).cloned();
+                    let traits = known.or_else(|| loader.model_prop_traits(&model));
+                    let result = use_model(editor, &pick, &model, variant, look_chosen, traits.as_ref(), collision);
                     if let Err(error) = result {
                         editor.message = error;
                     }
@@ -496,14 +496,15 @@ impl MalletApp {
 /// Puts a picked model where `pick` says. On entities it sets the key, and the skin and
 /// body groups too when they were chosen in the preview and the class has them. For new
 /// props it becomes the entity tool's model, and the tool switches to a prop class that
-/// suits the model when its class takes none.
+/// takes the model when its own class takes none: `traits` and `collision` say which
+/// classes do, and a model that could not be looked at becomes a `prop_dynamic`.
 fn use_model(
     editor: &mut Editor,
     pick: &Pick,
     model: &str,
     variant: ModelVariant,
     look_chosen: bool,
-    is_static: Option<bool>,
+    traits: Option<&PropTraits>,
     collision: bool,
 ) -> Result<(), String> {
     match pick {
@@ -536,12 +537,9 @@ fn use_model(
         Pick::NewEntity => {
             editor.prop_model = model.to_owned();
             if !editor.class_takes_model(&editor.entity_class) {
-                editor.entity_class = match (is_static, collision) {
-                    (Some(true), _) => "prop_static",
-                    (_, true) => "prop_physics",
-                    _ => "prop_dynamic",
-                }
-                .to_owned();
+                editor.entity_class = traits
+                    .map_or("prop_dynamic", |traits| traits.default_class(collision))
+                    .to_owned();
             }
             editor.set_tool(Tool::Entity);
             editor.message = format!("The entity tool now places {} with {model}", editor.entity_class);
@@ -1922,6 +1920,43 @@ mod tests {
         assert!(
             warnings(&classes, None, true).is_empty(),
             "nothing is said about a model that was not looked at yet"
+        );
+    }
+
+    #[test]
+    fn a_new_prop_gets_a_class_that_takes_its_model() {
+        let placed_as = |class: Option<&str>, traits: Option<PropTraits>, collision: bool| {
+            let mut editor = Editor::default();
+            if let Some(class) = class {
+                editor.entity_class = class.to_owned();
+            }
+            let variant = ModelVariant::default();
+            use_model(
+                &mut editor,
+                &Pick::NewEntity,
+                "models/a.mdl",
+                variant,
+                false,
+                traits.as_ref(),
+                collision,
+            )
+            .unwrap();
+            assert_eq!(editor.prop_model, "models/a.mdl");
+            editor.entity_class
+        };
+        assert_eq!(placed_as(None, Some(lamp()), false), "prop_static");
+        assert_eq!(placed_as(None, Some(drum()), true), "prop_physics");
+        assert_eq!(placed_as(None, Some(drum()), false), "prop_dynamic_override");
+        assert_eq!(placed_as(None, Some(PropTraits::default()), true), "prop_dynamic");
+        assert_eq!(
+            placed_as(None, None, true),
+            "prop_dynamic",
+            "a model that could not be read"
+        );
+        assert_eq!(
+            placed_as(Some("prop_dynamic"), Some(lamp()), false),
+            "prop_dynamic",
+            "a class that takes a model is kept"
         );
     }
 }
