@@ -319,6 +319,7 @@ pub struct MapState {
     refit_on_layout: bool,
     pointfile: Option<Vec<DVec3>>,
     face_selection: BTreeSet<u32>,
+    visgroups: VisGroupList,
 }
 
 /// What a tab shows in the tab strip.
@@ -781,6 +782,7 @@ impl Editor {
             refit_on_layout: std::mem::take(&mut self.refit_on_layout),
             pointfile: self.pointfile.take(),
             face_selection: std::mem::take(&mut self.face_selection),
+            visgroups: std::mem::take(&mut self.visgroups),
         }
     }
 
@@ -795,6 +797,7 @@ impl Editor {
         self.refit_on_layout = map.refit_on_layout;
         self.pointfile = map.pointfile;
         self.face_selection = map.face_selection;
+        self.visgroups = map.visgroups;
         self.refresh_face_marks();
         self.clear_clip_points();
     }
@@ -878,6 +881,7 @@ impl Editor {
         self.selection.clear();
         self.overlay = Overlay::default();
         self.reload_texture_lights();
+        self.refresh_visgroups();
     }
 
     /// Reads the texture lights again: the game's `lights.rad`, then the open map's own

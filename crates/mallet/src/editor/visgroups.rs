@@ -637,4 +637,24 @@ mod tests {
         assert_eq!(editor.purge_empty_visgroups().unwrap(), 1);
         assert_eq!(editor.visgroups.user.len(), 1);
     }
+
+    #[test]
+    fn every_tab_lists_its_own_groups() {
+        let (mut editor, _, _, _) = editor_with_objects();
+        editor.select_all();
+        editor.selection_to_new_visgroup("Walls", MoveOptions::default()).unwrap();
+        let world = |editor: &Editor| editor.visgroups.auto[0].members;
+        assert_eq!((editor.visgroups.user.len(), world(&editor)), (1, 2));
+
+        editor.new_tab();
+        assert_eq!((editor.visgroups.user.len(), world(&editor)), (0, 0), "a new map has no groups");
+        editor.create_block(DVec3::ZERO, DVec3::splat(32.0)).unwrap();
+        assert_eq!(world(&editor), 1);
+
+        editor.switch_tab(0).unwrap();
+        assert_eq!((editor.visgroups.user.len(), world(&editor)), (1, 2));
+        assert_eq!(editor.visgroups.user[0].name, "Walls");
+        editor.switch_tab(1).unwrap();
+        assert_eq!((editor.visgroups.user.len(), world(&editor)), (0, 1));
+    }
 }
