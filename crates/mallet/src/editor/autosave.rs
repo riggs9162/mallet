@@ -1,10 +1,13 @@
 //! Autosave from the editor's side: which open maps are due a copy, what became of the
-//! copies, and opening a copy again as the map it was made from.
+//! copies, copying every unsaved map at once when Mallet has to stop, and opening a copy
+//! again as the map it was made from.
 
+use std::panic::{self, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::Editor;
-use crate::autosave::{Job, Limits, ListedMap, Outcome, Pass, Session};
+use crate::autosave::{self, Job, Limits, ListedMap, Outcome, Pass, Session};
 use crate::document::{Backup, Document, MapFormat};
 
 /// How long an autosave that is due waits for a drag or mouselook to end before it goes
@@ -23,6 +26,14 @@ pub struct AutosaveState {
     listed: Vec<ListedMap>,
     /// When the open maps were last copied, or when the wait for the first copy began.
     last_pass: Option<Instant>,
+}
+
+/// A map that had unsaved changes when Mallet had to stop.
+pub struct Rescued {
+    /// The map's file name, or `untitled`.
+    pub title: String,
+    /// The copy that holds the map, or why none could be made.
+    pub copy: Result<PathBuf, String>,
 }
 
 /// The name a map's copies start with: its file name without the extension.
@@ -89,7 +100,7 @@ impl Editor {
     /// The copies an autosave is due to make now, if any: one of every map with unsaved
     /// changes that its latest copy does not hold, once the time between autosaves has
     /// passed. A drag or mouselook puts it off for a while. The copies are snapshots, to
-    /// be written with [`crate::autosave::run`] once the editor is unlocked and reported back
+    /// be written with [`autosave::run`] once the editor is unlocked and reported back
     /// with [`Editor::autosave_done`].
     pub fn autosave_pass(&mut self) -> Option<Pass> {
         self.list_backups();
@@ -185,6 +196,44 @@ impl Editor {
         }
     }
 
+    /// Copies every map with unsaved changes to the autosave folder at once, for when an
+    /// error is about to stop Mallet, and lists the copies so the next start offers them
+    /// back. This happens whether autosaving is turned on or not. A map whose latest copy
+    /// already holds its changes keeps that copy, and one map that cannot be written does
+    /// not stop the others.
+    pub fn rescue_maps(&mut self) -> Vec<Rescued> {
+        let folder = self.config.autosave.folder();
+        let limits = self.autosave_limits();
+        let untitled = self.untitled_format();
+        let listed = autosave::listed_copies();
+        let mut rescued = Vec::new();
+        for document in self.documents_mut().filter(|document| document.dirty) {
+            let copy = match (&document.backup, &folder) {
+                (Some(backup), _) if !document.needs_backup() => Ok(backup.file.clone()),
+                (_, None) => Err("there is no autosave folder".to_owned()),
+                (_, Some(folder)) => panic::catch_unwind(AssertUnwindSafe(|| {
+                    let format = copy_format(document, untitled);
+                    autosave::write_copy(folder, &copy_stem(document), format, limits, &listed, |path| {
+                        document.export_durable(path)
+                    })
+                }))
+                .unwrap_or_else(|_| Err("the map could not be written".to_owned())),
+            };
+            if let Ok(file) = &copy {
+                document.backup = Some(Backup {
+                    file: file.clone(),
+                    changes: document.history.changes(),
+                });
+            }
+            rescued.push(Rescued {
+                title: document.file_name(),
+                copy,
+            });
+        }
+        self.list_backups();
+        rescued
+    }
+
     /// Opens an autosaved copy as the map it was made from: under the map's own path, so
     /// saving writes there, and with unsaved changes, as the map's file has not been
     /// touched. A tab that shows the same map without changes of its own makes way for
@@ -219,12 +268,11 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use glam::DVec3;
 
     use super::*;
-    use crate::autosave;
 
     fn editor_saving_to(name: &str) -> (Editor, PathBuf) {
         let folder = std::env::temp_dir().join(format!("mallet-editor-autosave-{name}-{}", std::process::id()));
@@ -341,6 +389,33 @@ mod tests {
             0,
             "the map's own file is left alone"
         );
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn every_unsaved_map_is_copied_when_mallet_has_to_stop() {
+        let (mut editor, folder) = editor_saving_to("rescue");
+        editor.config.autosave.enabled = false;
+        assert!(
+            editor.rescue_maps().is_empty(),
+            "a map without unsaved changes needs no copy"
+        );
+        add_block(&mut editor);
+        editor.new_tab();
+        let map = folder.join("city.vmf");
+        editor.document.as_mut().unwrap().path = Some(map);
+        add_block(&mut editor);
+        let rescued = editor.rescue_maps();
+        let titles: Vec<&str> = rescued.iter().map(|map| map.title.as_str()).collect();
+        assert_eq!(titles, ["city.vmf", "untitled"]);
+        assert_eq!(
+            copies(&folder),
+            ["city_autosave_0001.vmf", "untitled_autosave_0001.mallet"],
+            "maps are copied whether autosaving is on or not"
+        );
+        let again = editor.rescue_maps();
+        assert_eq!(again[0].copy, rescued[0].copy, "a copy that holds every change is kept");
+        assert_eq!(copies(&folder).len(), 2);
         let _ = fs::remove_dir_all(&folder);
     }
 }

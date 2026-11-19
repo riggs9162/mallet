@@ -28,6 +28,7 @@ mod transform_window;
 mod vertex_tool;
 mod visgroups;
 
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -304,17 +305,17 @@ pub struct MalletApp {
 }
 
 impl MalletApp {
-    /// Creates the window, starts the MCP server and the autosave thread, and opens `path`
-    /// if one was given.
+    /// Creates the window around `editor`, starts the MCP server and the autosave thread,
+    /// and opens `path` if one was given.
     ///
     /// The server listens on the port set in Mallet Options (7414 unless changed), or on
     /// `MALLET_MCP_PORT` when set; a value of `0` or `off` disables it, as does turning it
     /// off in Mallet Options.
-    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>, editor: Arc<Mutex<Editor>>) -> Self {
         // Always dark, like Hammer++, whatever Windows uses or a saved layout says.
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         let mut app = Self {
-            editor: Arc::new(Mutex::new(Editor::default())),
+            editor,
             keymap: KeyMap::hammer_plus_plus_defaults(),
             cursor: None,
             title: String::new(),
@@ -1975,11 +1976,10 @@ fn on_selection(editor: &Editor, axis: Axis2D, point: DVec2, hit: Option<crate::
 /// camera and random sounds play on time while nothing else changes.
 const SOUND_UPDATE_INTERVAL: Duration = Duration::from_millis(40);
 
-impl eframe::App for MalletApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+impl MalletApp {
+    /// Handles input and draws the window for one frame.
+    fn frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame, editor: &mut Editor) {
         let update_started = Instant::now();
-        let shared = Arc::clone(&self.editor);
-        let mut editor = editor::lock(&shared);
         editor.timings.previous_frame_cpu_ms = frame.info().cpu_usage.map_or(0.0, |seconds| seconds * 1000.0);
         let interval = ctx.input(|input| input.unstable_dt);
         if editor.gpu_info.is_empty() {
@@ -1996,52 +1996,66 @@ impl eframe::App for MalletApp {
         editor.timings.recent_intervals_ms = self.net_graph.recent_intervals(40);
         editor.snap_suspended = ctx.input(|input| input.modifiers.alt);
         editor.autosave.pointer_held = ctx.input(|input| input.pointer.any_down());
-        self.handle_input(ctx, &mut editor);
-        take_window_shot(ctx, &mut editor);
-        self.update_title(ctx, &editor);
-        self.presence.set(presence_status(&editor));
-        self.menu_bar(ctx, &mut editor);
-        self.toolbar(ctx, &mut editor);
-        self.tab_strip(ctx, &mut editor);
-        self.status_bar(ctx, &editor);
-        self.key_hints(ctx, &editor);
-        self.tool_palette(ctx, &mut editor);
-        self.side_panel(ctx, &mut editor);
-        self.close_dialog(ctx, &mut editor);
-        self.recovery_window(ctx, &mut editor);
-        self.tie_prompt_window(ctx, &mut editor);
-        self.hollow_window(ctx, &mut editor);
-        self.arch_window(ctx, &mut editor);
-        self.map_dialogs(ctx, &mut editor);
-        self.visgroup_windows(ctx, &mut editor);
-        self.problems_window(ctx, &mut editor);
-        self.entity_report_window(ctx, &mut editor);
-        self.properties_window(ctx, &mut editor);
-        self.run_map_window(ctx, &mut editor);
-        self.compile_window(ctx, &mut editor);
-        self.face_edit_window(ctx, &mut editor);
-        self.vertex_merge_window(ctx, &mut editor);
-        self.texture_browser_window(ctx, &mut editor);
-        self.model_browser_window(ctx, &mut editor);
-        self.soundscape_browser_window(ctx, &mut editor);
-        self.options_window(ctx, &mut editor);
-        self.about_window(ctx, &mut editor);
-        self.transform_window(ctx, &mut editor);
-        self.paste_special_window(ctx, &mut editor);
+        self.handle_input(ctx, editor);
+        take_window_shot(ctx, editor);
+        self.update_title(ctx, editor);
+        self.presence.set(presence_status(editor));
+        self.menu_bar(ctx, editor);
+        self.toolbar(ctx, editor);
+        self.tab_strip(ctx, editor);
+        self.status_bar(ctx, editor);
+        self.key_hints(ctx, editor);
+        self.tool_palette(ctx, editor);
+        self.side_panel(ctx, editor);
+        self.close_dialog(ctx, editor);
+        self.recovery_window(ctx, editor);
+        self.tie_prompt_window(ctx, editor);
+        self.hollow_window(ctx, editor);
+        self.arch_window(ctx, editor);
+        self.map_dialogs(ctx, editor);
+        self.visgroup_windows(ctx, editor);
+        self.problems_window(ctx, editor);
+        self.entity_report_window(ctx, editor);
+        self.properties_window(ctx, editor);
+        self.run_map_window(ctx, editor);
+        self.compile_window(ctx, editor);
+        self.face_edit_window(ctx, editor);
+        self.vertex_merge_window(ctx, editor);
+        self.texture_browser_window(ctx, editor);
+        self.model_browser_window(ctx, editor);
+        self.soundscape_browser_window(ctx, editor);
+        self.options_window(ctx, editor);
+        self.about_window(ctx, editor);
+        self.transform_window(ctx, editor);
+        self.paste_special_window(ctx, editor);
         if let Some(text) = editor.system_clipboard.take() {
             ctx.copy_text(text);
         }
-        self.finish_compile(ctx, &mut editor);
-        apply_view_options(&mut editor);
-        self.apply_interface_options(ctx, &editor);
+        self.finish_compile(ctx, editor);
+        apply_view_options(editor);
+        self.apply_interface_options(ctx, editor);
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(egui::Color32::from_gray(30)))
-            .show(ctx, |ui| self.viewports(ui, &mut editor, frame));
+            .show(ctx, |ui| self.viewports(ui, editor, frame));
         if editor.update_sound(ctx.input(|input| input.focused)) {
             ctx.request_repaint_after(SOUND_UPDATE_INTERVAL);
         }
         editor.timings.update_ms = elapsed_ms(update_started);
         editor.frames_drawn += 1;
+    }
+}
+
+impl eframe::App for MalletApp {
+    /// Draws one frame. An error in it does not just close the window: the editor is
+    /// still held here, so [`crate::crash::stop`] can copy the unsaved maps to the
+    /// autosave folder and say what happened before Mallet ends.
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let shared = Arc::clone(&self.editor);
+        let mut editor = editor::lock(&shared);
+        let drawn = panic::catch_unwind(AssertUnwindSafe(|| self.frame(ctx, frame, &mut editor)));
+        if drawn.is_err() {
+            crate::crash::stop(&mut editor);
+        }
     }
 
     /// Mallet is shutting down correctly, so its marker goes and the next start has

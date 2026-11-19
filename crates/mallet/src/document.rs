@@ -228,6 +228,13 @@ impl Document {
         write_file(path, &bytes, false)
     }
 
+    /// Writes a copy like [`Document::export`] and waits until it has reached the disk,
+    /// for copies made to keep a map from being lost.
+    pub fn export_durable(&self, path: &Path) -> Result<(), DocumentError> {
+        let bytes = encode(&self.vmf, self.encoding, MapFormat::for_path(path));
+        write_file(path, &bytes, true)
+    }
+
     /// The map as it is now, to write to a file later.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {

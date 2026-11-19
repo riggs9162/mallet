@@ -1631,7 +1631,8 @@ fn autosave_options(ui: &mut egui::Ui, autosave: &mut config::AutosaveOptions, d
         RichText::new(
             "Maps with unsaved changes are copied to a folder of their own, in their own format, so little is \
              lost when the computer or Mallet stops without warning. When Mallet did not shut down correctly, \
-             the next start offers the copies back.",
+             the next start offers the copies back. An error that stops Mallet copies every unsaved map \
+             first, whether this is on or not.",
         )
         .color(MUTED),
     );

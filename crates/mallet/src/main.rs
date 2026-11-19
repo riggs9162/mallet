@@ -6,6 +6,8 @@
 //! The window always opens centred on the main monitor, keeping the size and maximized state
 //! it had when Mallet last closed.
 //! AI agents can drive the editor through its MCP server; see `mcp`.
+//! When an error stops Mallet, every map with unsaved changes is copied to the autosave
+//! folder first; see `crash`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
@@ -17,6 +19,7 @@ mod canvas;
 mod clipper;
 mod compile;
 mod config;
+mod crash;
 mod decals;
 mod document;
 mod editor;
@@ -46,12 +49,14 @@ mod vertex_tool;
 mod view2d;
 mod view3d;
 
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 
 fn main() -> eframe::Result {
-    report_crashes();
+    crash::install_hook();
     let path = std::env::args_os().nth(1).map(PathBuf::from);
     let settings = config::Config::load();
     // A map opened from Explorer while Mallet runs goes to that Mallet, as in Hammer.
@@ -93,27 +98,17 @@ fn main() -> eframe::Result {
         },
         ..Default::default()
     };
-    eframe::run_native(
-        &app_id,
-        options,
-        Box::new(move |cc| Ok(Box::new(app::MalletApp::new(cc, path)))),
-    )
-}
-
-/// Has Mallet write what went wrong to `crash.log` in its `%APPDATA%` folder when an
-/// error stops it, as its window otherwise just closes without a word. Only an error on
-/// the main thread stops Mallet; the worker threads' are recovered from and left out.
-fn report_crashes() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let folder = config::data_dir().filter(|_| std::thread::current().name() == Some("main"));
-        if let Some(folder) = folder {
-            let version = env!("CARGO_PKG_VERSION");
-            let trace = std::backtrace::Backtrace::force_capture();
-            let _ = std::fs::create_dir_all(&folder);
-            let report = format!("Mallet {version} stopped: {info}\n\n{trace}\n");
-            let _ = std::fs::write(folder.join("crash.log"), report);
-        }
-        previous(info);
-    }));
+    let editor = Arc::new(Mutex::new(editor::Editor::default()));
+    let shared = Arc::clone(&editor);
+    let run = move || {
+        eframe::run_native(
+            &app_id,
+            options,
+            Box::new(move |cc| Ok(Box::new(app::MalletApp::new(cc, path, shared)))),
+        )
+    };
+    match panic::catch_unwind(AssertUnwindSafe(run)) {
+        Ok(result) => result,
+        Err(_) => crash::stop(&mut editor::lock(&editor)),
+    }
 }

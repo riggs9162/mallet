@@ -76,7 +76,7 @@ setup is Windows-only; the section hides itself elsewhere.) Opening a map from E
 while Mallet runs adds it as a tab in that window instead of starting a second Mallet, as
 Hammer does.
 
-## Autosave
+## Autosave and crash recovery
 
 Every five minutes Mallet copies each map that has unsaved changes to an autosave folder,
 as Hammer does, so a power cut or a frozen computer costs a few minutes of work at most.
@@ -86,11 +86,13 @@ the folder passes 500 MB. The map's own file is only ever written when you save.
 autosave waits until you let go of the mouse and writes in the background, so it does not
 get in the way, and the status bar says when one was made.
 
-The next time Mallet starts after it did not shut down correctly, whether it crashed, was
-ended from the Task Manager or the computer lost power, it lists the maps that had
-unsaved changes and offers to restore them from their copies. A restored map opens under
-its own name with unsaved changes, and nothing is overwritten until you save it. Choosing
-not to restore leaves the copies in the folder.
+If an error stops Mallet, it first copies every map with unsaved changes to the autosave
+folder, then says what went wrong and where the copies are, as Hammer++ does. The next
+time Mallet starts after it did not shut down correctly, whether it crashed, was ended
+from the Task Manager or the computer lost power, it lists the maps that had unsaved
+changes and offers to restore them from their copies. A restored map opens under its own
+name with unsaved changes, and nothing is overwritten until you save it. Choosing not to
+restore leaves the copies in the folder.
 
 Edit > Mallet Options > Files turns autosave off, sets the time between autosaves, the
 number of copies and the space they may take, and picks the folder: `%APPDATA%\Mallet\autosave`
@@ -561,7 +563,8 @@ Settings are saved in `%APPDATA%\Mallet\config.json` on Windows and
 
 If an error ever closes Mallet, it writes what went wrong to `%APPDATA%\Mallet\crash.log`
 on Windows or `~/.config/Mallet/crash.log` on Linux. Attach that file when you report the
-problem.
+problem. Your unsaved maps are copied to the autosave folder first; see
+[Autosave and crash recovery](#autosave-and-crash-recovery).
 
 Where you leave the main window and every panel (Face Edit, the texture browser, Compile,
 Options and the rest), and their sizes, are remembered between runs in

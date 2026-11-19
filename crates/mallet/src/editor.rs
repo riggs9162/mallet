@@ -48,7 +48,7 @@ mod views;
 mod visgroups;
 
 pub use agent::AgentView;
-pub use autosave::AutosaveState;
+pub use autosave::{AutosaveState, Rescued};
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
 pub use displacements::{
     displacement_count, effect_label, AxisChoice, DisplacementMode, DisplacementTool, DEFAULT_ALPHA,
