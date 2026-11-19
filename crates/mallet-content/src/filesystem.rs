@@ -273,6 +273,18 @@ impl GameFs {
         })
     }
 
+    /// The source a game file is read from: the one of the first mount that has it.
+    pub fn source_of(&self, path: &str) -> Option<&Source> {
+        let path = normalize(path);
+        self.mounts
+            .iter()
+            .find(|mount| match &mount.place {
+                Place::Folder(folder) => folder.file(&path).is_some_and(|file| file.is_file()),
+                Place::Vpk(archive) => archive.contains(&path),
+            })
+            .and_then(|mount| self.sources.get(mount.source))
+    }
+
     /// Where a game file lies on disk, when it is a loose file rather than in a VPK.
     pub fn locate(&self, path: &str) -> Option<PathBuf> {
         let path = normalize(path);

@@ -40,6 +40,7 @@ mod prop_brushes;
 mod properties;
 mod render3d;
 mod scene;
+mod sheet;
 mod shell;
 mod sound;
 mod style;

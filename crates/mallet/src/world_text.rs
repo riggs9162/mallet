@@ -315,6 +315,12 @@ impl TypefaceLayout {
     }
 }
 
+/// egui's built-in monospace typeface, which also captions the pictures made for AI
+/// agents. `None` when egui has no such typeface.
+pub fn typeface() -> Option<&'static FontRef<'static>> {
+    TYPEFACE_LAYOUT.as_ref().map(|layout| &layout.font)
+}
+
 /// The picture of the typeface: every character white on its black outline, clear
 /// elsewhere, one cell for each. `None` when egui has no such typeface.
 pub fn typeface_picture() -> Option<Mips> {

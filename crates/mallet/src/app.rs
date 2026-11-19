@@ -398,7 +398,7 @@ impl MalletApp {
                     Err(message) => mcp::ToolResult::error(message),
                 };
             }
-            let result = tools::run(&mut editor::lock(&shared), name, arguments);
+            let result = tools::call(&shared, name, arguments);
             ctx.request_repaint();
             // A map handed over by a second copy, opened from Explorer: come to the front.
             let focus = arguments.get("focus").and_then(serde_json::Value::as_bool) == Some(true);

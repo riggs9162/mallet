@@ -1,6 +1,7 @@
 //! The tools the MCP server exposes, run against the shared [`Editor`].
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use glam::{DVec2, DVec3};
 use mallet_content::{ClassKind, EntityClass};
@@ -29,12 +30,40 @@ use crate::prop_brushes::{PropBrushOptions, PropShape};
 use crate::scene::Owner;
 use mallet_vmf::texture::Justify;
 
+mod materials;
+
 /// How many entities `list_entities` returns when no limit is given.
 const DEFAULT_LIST_LIMIT: u64 = 200;
 const MAX_PITCH: f64 = 89.0;
 
+/// What a tool says when it needs the game's files and no game folder is set.
+const NO_GAME: &str = "choose a game folder first, with set_game_dir or in Mallet Options";
+
+/// The tools that read and draw the game's content, which takes a while. Each gathers
+/// what it needs from the editor and hands back a [`Job`] that does the rest.
+const CONTENT_TOOLS: [&str; 2] = ["preview_materials", "describe_material"];
+
+/// The slow part of a content tool, which runs without the editor: it has taken what it
+/// needs along. It hands what it found out and is worth keeping to its argument.
+pub type Job = Box<dyn FnOnce(&mut dyn FnMut(Learned)) -> ToolResult>;
+
+/// What a [`Job`] found out that the editor keeps for the next call.
+pub enum Learned {
+    /// Every material of the game in `game`.
+    Materials { game: PathBuf, list: Arc<Vec<String>> },
+}
+
 /// The `tools/list` entries for every tool [`run`] understands.
 pub fn definitions() -> Value {
+    let mut tools = editor_definitions();
+    if let Value::Array(list) = &mut tools {
+        list.extend(materials::definitions());
+    }
+    tools
+}
+
+/// The entries of the tools that work on the editor itself.
+fn editor_definitions() -> Value {
     let vec3 = json!({ "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 });
     let vec2 = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
     let id = json!({ "type": "integer", "minimum": 0, "description": "Entity id; the world is usually 1." });
@@ -662,7 +691,7 @@ pub fn definitions() -> Value {
             "List the game's materials, such as brick/brickwall001a, for the texture tool. Model, particle and \
              interface materials are left out unless all_folders is set.",
             json!({
-                "filter": { "type": "string", "description": "Words that must all appear in the name." },
+                "filter": { "type": "string", "description": "Words that must all appear in the name. A word starting with ! must not appear." },
                 "used_only": { "type": "boolean", "description": "Only materials the map's brushes use, with counts." },
                 "all_folders": { "type": "boolean" },
                 "limit": { "type": "integer", "minimum": 1, "description": "Default 200." }
@@ -1076,6 +1105,43 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     })
 }
 
+/// Runs one tool call for the MCP server, holding the editor only as long as the tool
+/// needs it. A content tool lets go of it before it reads and draws, so the window keeps
+/// drawing and the user keeps working meanwhile.
+pub fn call(shared: &Mutex<Editor>, name: &str, args: &Value) -> ToolResult {
+    if !CONTENT_TOOLS.contains(&name) {
+        return run(&mut crate::editor::lock(shared), name, args);
+    }
+    let job = {
+        let mut editor = crate::editor::lock(shared);
+        if editor.config.agents.own_view {
+            editor.with_agent_view(|editor| content_job(editor, name, args))
+        } else {
+            content_job(&mut editor, name, args)
+        }
+    };
+    match job {
+        Ok(job) => job(&mut |learned| keep(&mut crate::editor::lock(shared), learned)),
+        Err(message) => ToolResult::error(message),
+    }
+}
+
+/// The job of a content tool, with what it needs from the editor.
+fn content_job(editor: &mut Editor, name: &str, args: &Value) -> Result<Job, String> {
+    match name {
+        "preview_materials" => materials::preview(editor, args),
+        "describe_material" => materials::describe(editor, args),
+        _ => Err(format!("unknown tool \"{name}\"")),
+    }
+}
+
+/// Keeps what a job found out.
+fn keep(editor: &mut Editor, learned: Learned) {
+    match learned {
+        Learned::Materials { game, list } => editor.keep_material_list(game, list),
+    }
+}
+
 /// Runs one tool call. Failures come back as error results the agent can read.
 ///
 /// While Mallet Options keeps agents in their own view the call runs there, apart from
@@ -1425,15 +1491,8 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         }
         "list_materials" => {
             let limit = optional_number(args, "limit")?.unwrap_or(200.0).max(1.0) as usize;
-            let terms: Vec<String> = optional_string(args, "filter")?
-                .unwrap_or("")
-                .split_whitespace()
-                .map(str::to_ascii_lowercase)
-                .collect();
-            let matches = |name: &str| {
-                let name = name.to_ascii_lowercase();
-                terms.iter().all(|term| name.contains(term.as_str()))
-            };
+            let filter = Filter::parse(optional_string(args, "filter")?.unwrap_or(""));
+            let matches = |name: &str| filter.matches(name);
             if args.get("used_only").and_then(Value::as_bool).unwrap_or(false) {
                 let used: Vec<Value> = editor
                     .used_materials()
@@ -1626,18 +1685,8 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         }
         "list_models" => {
             let limit = optional_number(args, "limit")?.unwrap_or(200.0).max(1.0) as usize;
-            let words: Vec<String> = optional_string(args, "filter")?
-                .unwrap_or("")
-                .split_whitespace()
-                .map(str::to_ascii_lowercase)
-                .collect();
-            let matches = |path: &str| {
-                let path = path.replace('\\', "/").to_ascii_lowercase();
-                words.iter().all(|word| match word.strip_prefix('!') {
-                    Some(unwanted) => unwanted.is_empty() || !path.contains(unwanted),
-                    None => path.contains(word.as_str()),
-                })
-            };
+            let filter = Filter::parse(optional_string(args, "filter")?.unwrap_or(""));
+            let matches = |path: &str| filter.matches(path);
             if args.get("used_only").and_then(Value::as_bool).unwrap_or(false) {
                 let used: Vec<Value> = editor
                     .used_models()
@@ -2187,6 +2236,15 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 value["soundscapes"] = json!(editor.sound.soundscape_names(filter));
             }
             Ok(ToolResult::json(&value))
+        }
+        name if CONTENT_TOOLS.contains(&name) => {
+            let job = content_job(editor, name, args)?;
+            let mut learned = Vec::new();
+            let result = job(&mut |found| learned.push(found));
+            for found in learned {
+                keep(editor, found);
+            }
+            Ok(result)
         }
         "screenshot" => {
             let target = match optional_string(args, "viewport")?.unwrap_or("all") {
@@ -3369,6 +3427,64 @@ fn color_arg(args: &Value) -> Result<Option<[u8; 3]>, String> {
     Ok(Some(color.map(|part| part.round() as u8)))
 }
 
+/// The words of a filter: every plain word must be in a name, and no word that starts
+/// with `!` may be. Names are compared in lower case with forward slashes.
+struct Filter {
+    wanted: Vec<String>,
+    unwanted: Vec<String>,
+}
+
+impl Filter {
+    fn parse(text: &str) -> Self {
+        let mut filter = Self {
+            wanted: Vec::new(),
+            unwanted: Vec::new(),
+        };
+        for word in text.split_whitespace() {
+            let word = word.replace('\\', "/").to_ascii_lowercase();
+            match word.strip_prefix('!') {
+                Some("") => {}
+                Some(unwanted) => filter.unwanted.push(unwanted.to_owned()),
+                None => filter.wanted.push(word),
+            }
+        }
+        filter
+    }
+
+    fn matches(&self, name: &str) -> bool {
+        let name = name.replace('\\', "/").to_ascii_lowercase();
+        self.wanted.iter().all(|word| name.contains(word.as_str()))
+            && !self.unwanted.iter().any(|word| name.contains(word.as_str()))
+    }
+}
+
+/// The strings of an array argument, or `None` when it is not given.
+fn string_list(args: &Value, key: &str) -> Result<Option<Vec<String>>, String> {
+    let error = || format!("\"{key}\" must be an array of strings");
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned).ok_or_else(error))
+            .collect::<Result<Vec<String>, String>>()
+            .map(Some),
+        Some(_) => Err(error()),
+    }
+}
+
+/// A whole number argument of zero or more, or `None` when it is not given.
+fn whole_number(args: &Value, key: &str) -> Result<Option<u64>, String> {
+    let whole = |number: f64| (number >= 0.0 && number.fract() == 0.0).then_some(number as u64);
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .or_else(|| value.as_f64().and_then(whole))
+            .map(Some)
+            .ok_or_else(|| format!("\"{key}\" must be a whole number of 0 or more")),
+    }
+}
+
 fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -3450,4 +3566,118 @@ fn model_failures(editor: &Editor) -> Value {
         .take(10)
         .map(|(path, error)| json!({ "model": path, "error": error }))
         .collect()
+}
+
+#[cfg(test)]
+mod test_game {
+    //! A small game folder for the tests of the content tools: a `gameinfo.txt` that mounts
+    //! the folder itself, and whatever files a test writes into it.
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    use serde_json::Value;
+
+    use crate::editor::Editor;
+    use crate::mcp::{Content, ToolResult};
+
+    /// A game folder in the system's temporary folder, removed again when dropped.
+    pub struct TestGame {
+        pub dir: PathBuf,
+    }
+
+    impl TestGame {
+        /// Makes an empty game named after the test that uses it.
+        pub fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("mallet-tools-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            let game = Self { dir };
+            game.write(
+                "gameinfo.txt",
+                b"\"GameInfo\"\n{\n\tgame \"Test\"\n\tFileSystem\n\t{\n\t\tSearchPaths\n\t\t{\n\t\t\tgame \"|gameinfo_path|.\"\n\t\t}\n\t}\n}\n",
+            );
+            game
+        }
+
+        /// Writes a game file, such as `materials/test/wall.vmt`.
+        pub fn write(&self, path: &str, bytes: &[u8]) {
+            let file = self.dir.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, bytes).unwrap();
+        }
+
+        /// Writes a material and, with `pixels`, a texture of that size under the same name.
+        pub fn material(&self, name: &str, vmt: &str, pixels: Option<(u32, u32, [u8; 4])>) {
+            self.write(&format!("materials/{name}.vmt"), vmt.as_bytes());
+            if let Some((width, height, color)) = pixels {
+                self.write(&format!("materials/{name}.vtf"), &vtf(width, height, color));
+            }
+        }
+
+        /// An editor with a new map open and this game mounted.
+        pub fn editor(&self) -> Editor {
+            let mut editor = Editor::default();
+            editor.new_map();
+            editor.set_game_dir(&self.dir).unwrap();
+            editor
+        }
+    }
+
+    impl Drop for TestGame {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// A VTF file of one colour: version 7.1, RGBA8888, without smaller sizes.
+    pub fn vtf(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let mut file = vec![0_u8; 64];
+        file[0..4].copy_from_slice(b"VTF\0");
+        file[4..8].copy_from_slice(&7_u32.to_le_bytes());
+        file[8..12].copy_from_slice(&1_u32.to_le_bytes());
+        file[12..16].copy_from_slice(&64_u32.to_le_bytes());
+        file[16..18].copy_from_slice(&(width as u16).to_le_bytes());
+        file[18..20].copy_from_slice(&(height as u16).to_le_bytes());
+        file[24..26].copy_from_slice(&1_u16.to_le_bytes());
+        file[56] = 1;
+        file[57..61].copy_from_slice(&(-1_i32).to_le_bytes());
+        file.extend(color.iter().copied().cycle().take((width * height * 4) as usize));
+        file
+    }
+
+    /// The JSON a tool answered with.
+    pub fn json_of(result: &ToolResult) -> Value {
+        let text = result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                Content::Text(text) => Some(text.as_str()),
+                Content::Png(_) => None,
+            })
+            .expect("the tool answered with text");
+        assert!(!result.is_error, "the tool failed: {text}");
+        serde_json::from_str(text).unwrap_or_else(|_| panic!("the tool answered with JSON, not: {text}"))
+    }
+
+    /// What a tool that failed said.
+    pub fn error_of(result: &ToolResult) -> String {
+        assert!(result.is_error, "the tool should have failed");
+        match &result.content[0] {
+            Content::Text(text) => text.clone(),
+            Content::Png(_) => panic!("an error is text"),
+        }
+    }
+
+    /// The width and height of the picture a tool answered with, if it sent one.
+    pub fn picture_of(result: &ToolResult) -> Option<[u32; 2]> {
+        result.content.iter().find_map(|content| match content {
+            Content::Png(png) => {
+                assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+                let number = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]);
+                Some([number(16), number(20)])
+            }
+            Content::Text(_) => None,
+        })
+    }
 }

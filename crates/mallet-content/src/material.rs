@@ -271,6 +271,8 @@ struct Properties {
     /// The hotspot `.rect` file (`%rectanglemap`), relative to `materials/` and without
     /// its extension.
     rectangle_map: Option<String>,
+    /// What the surface is made of to the game (`$surfaceprop`), such as `concrete`.
+    surface_prop: Option<String>,
     sprite: SpriteKeys,
 }
 
@@ -386,6 +388,34 @@ fn leading_integer(text: &str) -> i64 {
     text[..digits].parse().unwrap_or(0)
 }
 
+/// What a material's VMT says about it, in the VMT's own terms, for describing the
+/// material to people and tools.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MaterialDetails {
+    /// The shader, lower case, such as `lightmappedgeneric`. A `patch` material has the
+    /// shader of the material it includes.
+    pub shader: Option<String>,
+    /// The texture the editor shows, without `materials/` or `.vtf`: `%tooltexture` when
+    /// set, otherwise `$basetexture`.
+    pub texture: Option<String>,
+    /// Whether that texture's file is among the game's files.
+    pub texture_found: bool,
+    /// Textures 2 to 4 of a blended material, as far as it names them.
+    pub blend_textures: Vec<String>,
+    /// The normal map (`$bumpmap`, or `$normalmap` on water).
+    pub bump_map: Option<String>,
+    /// What the surface is made of to the game (`$surfaceprop`), such as `concrete`.
+    pub surface_prop: Option<String>,
+    /// The VMT's `%keywords`.
+    pub keywords: String,
+    /// Has an `$envmap`, so it reflects.
+    pub envmap: bool,
+    /// The hotspot `.rect` file the material names, relative to `materials/`.
+    pub rectangle_map: Option<String>,
+    /// The VMT as it is written.
+    pub text: String,
+}
+
 /// What the texture browser's filters need to know about a material.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MaterialInfo {
@@ -443,6 +473,10 @@ impl Properties {
                 .get("%rectanglemap")
                 .map(|name| normalize(name).trim_end_matches(".rect").to_owned())
                 .filter(|name| !name.is_empty()),
+            surface_prop: block
+                .get("$surfaceprop")
+                .map(|name| name.trim().to_ascii_lowercase())
+                .filter(|name| !name.is_empty()),
             sprite: SpriteKeys::read(block),
         }
     }
@@ -490,6 +524,7 @@ impl Properties {
             surface: other.surface.or(self.surface),
             shader: other.shader.or(self.shader),
             rectangle_map: other.rectangle_map.or(self.rectangle_map),
+            surface_prop: other.surface_prop.or(self.surface_prop),
             sprite: self.sprite.overridden_by(other.sprite),
         }
     }
@@ -965,6 +1000,50 @@ impl MaterialLoader {
             keywords: properties.keywords.unwrap_or_default(),
             error: !texture_exists,
         }
+    }
+
+    /// Everything about a material short of its pixels: what the editor makes of it, as
+    /// [`MaterialLoader::measure`] gives it, and what its VMT says. `None` when the game
+    /// has no such material.
+    pub fn details(&self, material: &str) -> Option<(Material, MaterialDetails)> {
+        let key = material_key(material);
+        let properties = self.properties(&key, 0)?;
+        let file = properties.texture.as_ref().and_then(|name| self.texture_file(name));
+        let size = file
+            .as_ref()
+            .and_then(|file| vtf::size(|start, length| file.read(start, length)).ok());
+        let details = MaterialDetails {
+            shader: properties.shader.clone(),
+            texture: properties.texture.clone(),
+            texture_found: file.is_some(),
+            blend_textures: [
+                &properties.second_texture,
+                &properties.third_texture,
+                &properties.fourth_texture,
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
+            bump_map: properties.normal_map.clone(),
+            surface_prop: properties.surface_prop.clone(),
+            keywords: properties.keywords.clone().unwrap_or_default(),
+            envmap: properties.envmap.unwrap_or(false),
+            rectangle_map: properties.rectangle_map.clone(),
+            text: self.source_text(&key).unwrap_or_default(),
+        };
+        let material = Material {
+            size,
+            ..properties.material()
+        };
+        Some((material, details))
+    }
+
+    /// The source a material's VMT is read from, such as `hl2_textures` or an addon.
+    pub fn material_source(&self, material: &str) -> Option<crate::Source> {
+        self.filesystem
+            .source_of(&format!("materials/{}.vmt", material_key(material)))
+            .cloned()
     }
 
     /// Reads a material's properties. The texture is `%tooltexture` if set, as Hammer

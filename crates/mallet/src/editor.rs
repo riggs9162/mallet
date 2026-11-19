@@ -1090,16 +1090,26 @@ impl Editor {
 
     /// Every material of the game, listed on first use.
     pub fn material_list(&mut self) -> Result<Arc<Vec<String>>, String> {
+        if let Some(list) = self.listed_materials() {
+            return Ok(list);
+        }
         let materials = self.materials.as_ref().ok_or("choose a game folder first")?;
         let game = materials.filesystem().game_dir().to_owned();
-        if let Some((listed, list)) = &self.material_list {
-            if *listed == game {
-                return Ok(Arc::clone(list));
-            }
-        }
         let list = Arc::new(materials.loader().list());
         self.material_list = Some((game, Arc::clone(&list)));
         Ok(list)
+    }
+
+    /// The game's materials, when they have been listed for the mounted game already.
+    pub fn listed_materials(&self) -> Option<Arc<Vec<String>>> {
+        let (listed, list) = self.material_list.as_ref()?;
+        (Some(listed.as_path()) == self.game_dir()).then(|| Arc::clone(list))
+    }
+
+    /// Keeps a list of the materials of the game in `game`, made without holding the
+    /// editor up, so [`Editor::material_list`] need not list them again.
+    pub fn keep_material_list(&mut self, game: PathBuf, list: Arc<Vec<String>>) {
+        self.material_list = Some((game, list));
     }
 
     /// Every model the game mounts, such as `models/props_c17/oildrum001.mdl`, sorted.
