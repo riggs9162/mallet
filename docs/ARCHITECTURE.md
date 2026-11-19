@@ -192,6 +192,51 @@ so all other code only ever deals with one map; switching tabs parks that state 
 renderer are shared, so textures load once for every tab. GPU caches are keyed by the
 scene's generation numbers, which are unique across tabs, so a switch simply redraws.
 
+## Autosave and crash recovery
+
+`autosave.rs` keeps copies of maps with unsaved changes in the autosave folder, named
+`<map>_autosave_<number>` with the map's own extension. `write_copy` numbers a new copy
+after the map's newest, and `prune` removes the copies past the limits Mallet Options
+sets: all but the newest few of each map, then the oldest of any map until the rest fit
+the space allowed. Only files named that way are ever touched, so the folder may hold
+other things.
+
+A thread started with the window asks the editor every two seconds for an
+`Editor::autosave_pass` (`editor/autosave.rs`). Once the time between autosaves has
+passed, and no mouse button is held and mouselook is off (which puts it off for up to
+thirty seconds), the pass holds a `Snapshot` of every map whose `Document::needs_backup`
+says its unsaved changes are in no copy yet. `History::changes` counts every edit, undo
+and redo, and a document's `Backup` remembers the count its copy was made at, so an
+unchanged map is not copied twice. A snapshot is the map as `.mallet` bytes, which is
+quicker to make than a copy of the map in memory: 85 ms against 100 ms on a 38 MB VMF.
+The thread writes it after the editor is unlocked, turning it back into VMF text first
+for a VMF map, and has the file reach the disk before renaming it into place.
+`autosave_done` then records each copy on its document.
+
+Each running Mallet keeps a marker in `sessions` in its settings folder: a `.lock` file
+it holds locked with `File::try_lock`, and a `.json` list of the copies that hold unsaved
+changes now, written again whenever that set changes, as after an autosave, a save or a
+closed tab. The system lets go of the lock when the process ends, however it ends, so
+`autosave::unfinished` finds the markers of Mallets that crashed, were killed or lost
+power by taking their locks, without trusting process ids. A Mallet that shuts down
+correctly removes its marker in `on_exit`. While a marker's copies are being offered its
+lock stays taken, so two Mallets starting together do not both offer them, and a copy
+that any marker lists is never pruned.
+
+`app/recovery.rs` shows the offer. `Editor::restore_copy` loads a copy and gives the
+document the map's own path, unsaved changes and the copy as its `Backup`, so it is
+listed again at once and saving writes the map's own file.
+
+`crash.rs` handles errors on the main thread. The panic hook writes `crash.log` and keeps
+a one-line summary. `MalletApp::update` runs the frame inside `catch_unwind` while it
+holds the editor's lock, so an error in the frame reaches `crash::stop` with the editor
+in hand and nothing torn down yet. `Editor::rescue_maps` copies every map with unsaved
+changes straight from its document, each inside its own `catch_unwind`, a native message
+box names the error and the copies, and the process exits with code 101. `main` catches
+errors from outside the frame the same way once they have unwound out of
+`eframe::run_native`. The hook itself never ends Mallet: code that recovers from its own
+panics, as the model parser does, would set it off.
+
 ## Window layout
 
 The chrome around the viewports lives in `app/chrome.rs`, laid out like Hammer++: an icon
@@ -817,7 +862,7 @@ Tools:
 | `set_game_dir` | Mount a game's content for textures and remember it |
 | `new_map`, `open_map`, `save_map` | Start an empty map or load a VMF or `.mallet` map in a new tab (`focus` also brings the window to the front); save in place or to a new path, the extension picking the format |
 | `export_map` | Write a copy of the map in either format without switching to it |
-| `list_tabs`, `switch_tab`, `close_tab` | Work with the open map tabs; closing unsaved work needs `discard` |
+| `list_tabs`, `switch_tab`, `close_tab` | Work with the open map tabs; closing unsaved work needs `discard`, and `list_tabs` names the autosaved copy of a tab with unsaved changes |
 | `list_entities`, `get_entity` | Browse entities, filtered by classname (`trigger_*` prefix match) |
 | `set_entity_key`, `remove_entity_key` | Undoable key edits |
 | `get_selection`, `select`, `clear_selection` | Read or change the selection the window shows |
