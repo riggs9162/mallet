@@ -19,6 +19,7 @@ mod paint_select;
 mod paste_special;
 mod problems_window;
 mod properties;
+mod recovery;
 mod run_map;
 mod soundscape_browser;
 mod texture_browser;
@@ -297,6 +298,9 @@ pub struct MalletApp {
     entity_report: entity_report::EntityReport,
     /// What Discord shows about this Mallet.
     presence: Presence,
+    /// The autosaved copies an earlier Mallet left when it did not shut down correctly,
+    /// until the user has said which to restore.
+    recovery: Option<recovery::Recovery>,
 }
 
 impl MalletApp {
@@ -355,6 +359,7 @@ impl MalletApp {
             problems: problems_window::ProblemsDialog::default(),
             entity_report: entity_report::EntityReport::default(),
             presence: Presence::start(),
+            recovery: recovery::Recovery::find(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -363,6 +368,7 @@ impl MalletApp {
         let mut editor = editor::lock(&app.editor);
         load_game_content(&mut editor);
         open_or_new(&mut editor, path);
+        editor.begin_session();
         drop(editor);
         let ctx = cc.egui_ctx.clone();
         crate::autosave::start(Arc::clone(&app.editor), move || ctx.request_repaint());
@@ -2002,6 +2008,7 @@ impl eframe::App for MalletApp {
         self.tool_palette(ctx, &mut editor);
         self.side_panel(ctx, &mut editor);
         self.close_dialog(ctx, &mut editor);
+        self.recovery_window(ctx, &mut editor);
         self.tie_prompt_window(ctx, &mut editor);
         self.hollow_window(ctx, &mut editor);
         self.arch_window(ctx, &mut editor);
@@ -2035,6 +2042,12 @@ impl eframe::App for MalletApp {
         }
         editor.timings.update_ms = elapsed_ms(update_started);
         editor.frames_drawn += 1;
+    }
+
+    /// Mallet is shutting down correctly, so its marker goes and the next start has
+    /// nothing to offer back.
+    fn on_exit(&mut self) {
+        editor::lock(&self.editor).end_session();
     }
 
     /// Feeds one frame of queued synthetic input from the `send_input` tool.

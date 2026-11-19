@@ -1,10 +1,10 @@
-//! Autosave from the editor's side: which open maps are due a copy, and what became of
-//! the copies.
+//! Autosave from the editor's side: which open maps are due a copy, what became of the
+//! copies, and opening a copy again as the map it was made from.
 
 use std::time::{Duration, Instant};
 
 use super::Editor;
-use crate::autosave::{Job, Limits, Outcome, Pass};
+use crate::autosave::{Job, Limits, ListedMap, Outcome, Pass, Session};
 use crate::document::{Backup, Document, MapFormat};
 
 /// How long an autosave that is due waits for a drag or mouselook to end before it goes
@@ -17,6 +17,10 @@ pub struct AutosaveState {
     /// Whether a mouse button is held in the window, as during a drag. An autosave that
     /// is due waits for it to be let go, so the drag stays smooth.
     pub pointer_held: bool,
+    /// This Mallet's marker, which lists the copies that hold unsaved changes.
+    session: Option<Session>,
+    /// The copies the marker lists now.
+    listed: Vec<ListedMap>,
     /// When the open maps were last copied, or when the wait for the first copy began.
     last_pass: Option<Instant>,
 }
@@ -69,12 +73,26 @@ impl Editor {
         }
     }
 
+    /// Leaves the marker that lets a later Mallet tell whether this one shut down
+    /// correctly.
+    pub fn begin_session(&mut self) {
+        self.autosave.session = Session::start();
+    }
+
+    /// Removes the marker, as Mallet is shutting down correctly.
+    pub fn end_session(&mut self) {
+        if let Some(session) = self.autosave.session.take() {
+            session.end();
+        }
+    }
+
     /// The copies an autosave is due to make now, if any: one of every map with unsaved
     /// changes that its latest copy does not hold, once the time between autosaves has
     /// passed. A drag or mouselook puts it off for a while. The copies are snapshots, to
     /// be written with [`crate::autosave::run`] once the editor is unlocked and reported back
     /// with [`Editor::autosave_done`].
     pub fn autosave_pass(&mut self) -> Option<Pass> {
+        self.list_backups();
         let options = self.config.autosave.clone();
         if !options.enabled {
             self.autosave.last_pass = None;
@@ -111,8 +129,8 @@ impl Editor {
         })
     }
 
-    /// Records what became of an autosave's copies: each map remembers its copy, and the
-    /// status bar says what was copied or what went wrong.
+    /// Records what became of an autosave's copies: each map remembers its copy, the
+    /// marker lists it, and the status bar says what was copied or what went wrong.
     pub fn autosave_done(&mut self, outcomes: Vec<Outcome>) {
         let mut copied = Vec::new();
         let mut failure = None;
@@ -133,12 +151,68 @@ impl Editor {
                 Err(error) => failure = Some(format!("Could not autosave {}: {error}", outcome.title)),
             }
         }
+        self.list_backups();
         self.message = match (failure, copied.as_slice()) {
             (Some(failure), _) => failure,
             (None, []) => return,
             (None, [title]) => format!("Autosaved {title}"),
             (None, titles) => format!("Autosaved {} maps", titles.len()),
         };
+    }
+
+    /// Brings the marker's list up to the copies that hold unsaved changes now. Saving or
+    /// closing a map takes its copy off the list.
+    fn list_backups(&mut self) {
+        let maps: Vec<ListedMap> = self
+            .documents()
+            .filter(|document| document.dirty)
+            .filter_map(|document| {
+                Some(ListedMap {
+                    title: document.file_name(),
+                    original: document.path.clone(),
+                    copy: document.backup.as_ref()?.file.clone(),
+                })
+            })
+            .collect();
+        if maps == self.autosave.listed {
+            return;
+        }
+        let Some(session) = &self.autosave.session else {
+            return;
+        };
+        if session.list(&maps).is_ok() {
+            self.autosave.listed = maps;
+        }
+    }
+
+    /// Opens an autosaved copy as the map it was made from: under the map's own path, so
+    /// saving writes there, and with unsaved changes, as the map's file has not been
+    /// touched. A tab that shows the same map without changes of its own makes way for
+    /// it; otherwise it opens in a tab of its own.
+    pub fn restore_copy(&mut self, map: &ListedMap) -> Result<(), String> {
+        let mut document = match Document::load(&map.copy) {
+            Ok(document) => document,
+            Err(error) => {
+                self.message = format!("Could not restore {} from {}: {error}", map.title, map.copy.display());
+                return Err(self.message.clone());
+            }
+        };
+        document.path = map.original.clone();
+        document.dirty = true;
+        document.backup = Some(Backup {
+            file: map.copy.clone(),
+            changes: document.history.changes(),
+        });
+        let showing = map.original.as_deref().and_then(|original| self.tab_of_path(original));
+        match showing {
+            Some(index) if !self.tabs()[index].dirty => self.bring_to_front(index),
+            _ if self.tab_is_blank() => {}
+            _ => self.new_tab(),
+        }
+        self.show_document(document);
+        self.message = format!("Restored {} from its autosaved copy", map.title);
+        self.list_backups();
+        Ok(())
     }
 }
 
@@ -225,6 +299,48 @@ mod tests {
         make_due(&mut editor);
         assert!(editor.autosave_pass().is_none());
         assert!(copies(&folder).is_empty());
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_copy_comes_back_as_the_map_it_was_made_from() {
+        let (mut editor, folder) = editor_saving_to("restore");
+        let map = folder.join("city.vmf");
+        let document = editor.document.as_mut().unwrap();
+        document.path = Some(map.clone());
+        document.save().unwrap();
+        add_block(&mut editor);
+        let solids = editor.scene.solid_count;
+        make_due(&mut editor);
+        let pass = editor.autosave_pass().expect("the map has unsaved changes");
+        editor.autosave_done(autosave::run(pass));
+        let copy = folder.join("autosave").join("city_autosave_0001.vmf");
+        assert_eq!(editor.tabs()[0].backup.as_ref(), Some(&copy));
+
+        let mut editor = Editor::default();
+        editor.new_map();
+        let listed = ListedMap {
+            title: "city.vmf".to_owned(),
+            original: Some(map.clone()),
+            copy,
+        };
+        editor.restore_copy(&listed).unwrap();
+        assert_eq!(
+            editor.tabs().len(),
+            1,
+            "an untouched new map makes way for the restored one"
+        );
+        assert_eq!(editor.scene.solid_count, solids);
+        let document = editor.document.as_ref().unwrap();
+        assert_eq!(document.path.as_deref(), Some(map.as_path()));
+        assert!(document.dirty, "the map's own file does not have the changes yet");
+        assert!(!document.needs_backup());
+        let saved = Document::load(&map).unwrap();
+        assert_eq!(
+            saved.vmf.world().unwrap().solids().count(),
+            0,
+            "the map's own file is left alone"
+        );
         let _ = fs::remove_dir_all(&folder);
     }
 }

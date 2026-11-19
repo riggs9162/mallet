@@ -485,7 +485,7 @@ pub struct Editor {
     pub texture_lights: Arc<TextureLights>,
     /// The sound preview: the soundscape and ambient sounds heard at the 3D camera.
     pub sound: crate::sound::SoundPreview,
-    /// When maps were last autosaved, and whether an autosave has to wait.
+    /// When maps were last autosaved and which copies hold unsaved changes.
     pub autosave: AutosaveState,
     /// The vertex tool's brushes and selected vertices.
     pub vertex: crate::vertex_tool::VertexState,
@@ -733,11 +733,7 @@ impl Editor {
         if let Some(index) = self.tab_of_path(path) {
             return self.switch_tab(index);
         }
-        let reuse = self
-            .document
-            .as_ref()
-            .is_none_or(|document| document.path.is_none() && !document.dirty)
-            && self.scene.meshes.is_empty();
+        let reuse = self.tab_is_blank();
         if !reuse {
             self.new_tab();
         }
@@ -748,6 +744,15 @@ impl Editor {
             self.message = failure;
         }
         result
+    }
+
+    /// Whether the tab being edited holds an untouched empty map, which a map that is
+    /// opened takes the place of.
+    fn tab_is_blank(&self) -> bool {
+        self.document
+            .as_ref()
+            .is_none_or(|document| document.path.is_none() && !document.dirty)
+            && self.scene.meshes.is_empty()
     }
 
     /// The tab that has the map at `path` open, if any.
@@ -793,19 +798,9 @@ impl Editor {
     pub fn open(&mut self, path: &Path) -> Result<(), String> {
         match Document::load(path) {
             Ok(document) => {
-                let grid = document.vmf.grid_spacing();
-                let snap = document.vmf.view_flag("bSnapToGrid");
-                let show = document.vmf.view_flag("bShowGrid");
-                self.set_document(document);
+                self.show_document(document);
                 self.message = format!("Loaded {}", path.display());
                 self.remember_map(path);
-                if let Some(grid) = grid.filter(|grid| (MIN_GRID..=MAX_GRID).contains(grid)) {
-                    self.grid = grid;
-                }
-                self.snap_to_grid = snap.unwrap_or(true);
-                self.show_grid = show.unwrap_or(true);
-                self.frame_map();
-                self.refit_on_layout = true;
                 Ok(())
             }
             Err(error) => {
@@ -813,6 +808,22 @@ impl Editor {
                 Err(self.message.clone())
             }
         }
+    }
+
+    /// Makes a map that was just read the open one, with the grid it was saved with, and
+    /// frames it in every viewport.
+    fn show_document(&mut self, document: Document) {
+        let grid = document.vmf.grid_spacing();
+        let snap = document.vmf.view_flag("bSnapToGrid");
+        let show = document.vmf.view_flag("bShowGrid");
+        self.set_document(document);
+        if let Some(grid) = grid.filter(|grid| (MIN_GRID..=MAX_GRID).contains(grid)) {
+            self.grid = grid;
+        }
+        self.snap_to_grid = snap.unwrap_or(true);
+        self.show_grid = show.unwrap_or(true);
+        self.frame_map();
+        self.refit_on_layout = true;
     }
 
     /// Replaces the open map with a new, empty, unsaved one, viewed from the origin.

@@ -86,6 +86,12 @@ the folder passes 500 MB. The map's own file is only ever written when you save.
 autosave waits until you let go of the mouse and writes in the background, so it does not
 get in the way, and the status bar says when one was made.
 
+The next time Mallet starts after it did not shut down correctly, whether it crashed, was
+ended from the Task Manager or the computer lost power, it lists the maps that had
+unsaved changes and offers to restore them from their copies. A restored map opens under
+its own name with unsaved changes, and nothing is overwritten until you save it. Choosing
+not to restore leaves the copies in the folder.
+
 Edit > Mallet Options > Files turns autosave off, sets the time between autosaves, the
 number of copies and the space they may take, and picks the folder: `%APPDATA%\Mallet\autosave`
 on Windows and `~/.config/Mallet/autosave` on Linux unless you choose another.

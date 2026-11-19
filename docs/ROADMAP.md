@@ -184,7 +184,7 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 - [x] Map Information dialog: counts of solids, faces, entities and textures. Hammer
 - [x] Map Properties shortcut for worldspawn (skybox, detail material, map version). Hammer
 - [x] Autosave every few minutes into a backup folder, with a number of copies kept and a limit on the space they take. Hammer
-- [ ] An offer to restore the autosaved copies when Mallet starts after it did not shut down correctly. Hammer
+- [x] An offer to restore the autosaved copies when Mallet starts after it did not shut down correctly. Hammer
 - [ ] Crash recovery: an error message and autosaved maps when Mallet crashes. H++
 - [ ] Precise vertex data saved alongside planes so brushes never drift, with an option to turn it off. H++
 - [ ] Diff Map File against another VMF. Hammer
