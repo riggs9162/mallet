@@ -27,12 +27,12 @@ use crate::faces::{FaceChange, FaceInfo, FaceValues};
 use crate::input::{self, InputFrame};
 use crate::mcp::ToolResult;
 use crate::prop_brushes::{PropBrushOptions, PropShape};
-use crate::scene::Owner;
 use mallet_vmf::texture::Justify;
 
 mod batch;
 mod materials;
 mod models;
+mod objects;
 mod soundscapes;
 
 /// How many entities `list_entities` returns when no limit is given.
@@ -217,16 +217,32 @@ fn editor_definitions() -> Value {
         tool(
             "get_selection",
             "List what is selected and the selection's bounds. World brushes are selected one by one; \
-             entities are selected whole.",
+             entities are selected whole. Up to 100 ids of a kind come as solids and entities; more come as \
+             solid_ranges and entity_ranges, where a number is one id and [first, last] a run of ids, or are \
+             left out when even that would be long: list_entities and list_solids page through them with \
+             selected_only.",
             json!({}),
             &[],
         ),
         tool(
             "select",
-            "Change the selection, the same one the editor window shows. Unknown ids are ignored.",
+            "Change the selection: by ids, by what objects are and where they are, or all at once. Unknown \
+             ids are ignored. classname, material and box narrow each other down, so classname prop_static \
+             with a box selects the static props in that box; what they find is combined with the ids given \
+             and with the current selection as mode says. Answers like get_selection.",
             json!({
                 "solids": { "type": "array", "items": { "type": "integer" }, "description": "World brush ids." },
                 "entities": { "type": "array", "items": { "type": "integer" }, "description": "Entity ids." },
+                "all": { "type": "boolean", "description": "Everything that is not hidden, as Hammer's Select All." },
+                "classname": { "type": "string", "description": "Entities of this class; * stands for any text, as in prop_*." },
+                "material": { "type": "string", "description": "Brushes, and brush entities, with a face of this material; * stands for any text, as in tools/*." },
+                "box": {
+                    "type": "object",
+                    "properties": { "min": vec3, "max": vec3 },
+                    "required": ["min", "max"],
+                    "description": "Objects inside this box, or with touching, objects that reach into it."
+                },
+                "touching": { "type": "boolean" },
                 "mode": {
                     "type": "string",
                     "enum": ["replace", "add", "remove", "toggle"],
@@ -1859,19 +1875,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             key: string_arg(args, "key")?.to_owned(),
         })),
         "get_selection" => Ok(ToolResult::json(&selection_json(editor))),
-        "select" => {
-            let mode = match optional_string(args, "mode")?.unwrap_or("replace") {
-                "replace" => SelectMode::Replace,
-                "add" => SelectMode::Add,
-                "remove" => SelectMode::Remove,
-                "toggle" => SelectMode::Toggle,
-                other => return Err(format!("unknown mode \"{other}\"")),
-            };
-            let solids = id_list(args, "solids")?.into_iter().map(Owner::Solid);
-            let entities = id_list(args, "entities")?.into_iter().map(Owner::Entity);
-            editor.select(solids.chain(entities), mode);
-            Ok(ToolResult::json(&selection_json(editor)))
-        }
+        "select" => objects::select(editor, args),
         "clear_selection" => {
             editor.clear_selection();
             Ok(ToolResult::text("Selection cleared."))
@@ -2640,26 +2644,7 @@ fn axis_arg(args: &Value, key: &str) -> Result<usize, String> {
 }
 
 fn selection_json(editor: &Editor) -> Value {
-    let mut solids = Vec::new();
-    let mut entities = Vec::new();
-    for owner in &editor.selection {
-        match *owner {
-            Owner::Solid(id) => solids.push(id),
-            Owner::Entity(id) => entities.push(id),
-        }
-    }
-    let bounds = editor.scene.selection_bounds();
-    json!({
-        "solids": solids,
-        "entities": entities,
-        "bounds": (!bounds.is_empty()).then(|| json!({
-            "min": bounds.min.to_array(),
-            "max": bounds.max.to_array(),
-        })),
-        "pivot": (!bounds.is_empty()).then(|| editor.pivot().to_array()),
-        "pivot_placed": editor.overlay.pivot.is_some(),
-        "handles": editor.overlay.handle_mode.label().to_ascii_lowercase(),
-    })
+    objects::selection_json(editor)
 }
 
 fn list_entities(editor: &Editor, args: &Value) -> Result<Value, String> {
@@ -3811,6 +3796,7 @@ mod tests {
     use super::test_game::{error_of, json_of};
     use super::*;
     use crate::editor::MoveOptions;
+    use crate::scene::Owner;
     use mallet_vmf::visgroup;
 
     /// A file in the system's temporary folder, removed again when dropped.
