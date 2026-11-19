@@ -106,11 +106,11 @@ impl PropTraits {
             "prop_dynamic" | "prop_dynamic_ornament" if physics_data => Some(
                 "It has prop data, which makes it a physics prop, so the game removes it; prop_dynamic_override takes it.",
             ),
-            "prop_physics" if self.prop_data.is_none() => {
-                Some("It has no prop data, so the game removes it; prop_physics_override takes it.")
-            }
             name if (name.starts_with("prop_physics") || name == "prop_ragdoll") && !collision => {
                 Some("It has no collision model, so the game removes it as a physics prop.")
+            }
+            "prop_physics" if self.prop_data.is_none() => {
+                Some("It has no prop data, so the game removes it; prop_physics_override takes it.")
             }
             _ => None,
         }
@@ -513,6 +513,8 @@ mod tests {
         assert_eq!(plain.prop_class_problem("prop_dynamic", false), None);
         assert!(plain.prop_class_problem("prop_physics", true).unwrap().contains("no prop data"));
         assert_eq!(plain.prop_class_problem("prop_physics_override", true), None);
+        let neither = plain.prop_class_problem("prop_physics", false).unwrap();
+        assert!(neither.contains("no collision model"), "{neither}");
 
         let bench = details(true, physics.clone());
         assert!(bench.prop_class_problem("prop_static", true).unwrap().contains("VBSP"));
