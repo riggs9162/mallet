@@ -879,25 +879,58 @@ agent's `tab` and the window's `window_tab`; `list_tabs` reports `active` (the w
 and `agent`. A map handed over by a second copy of Mallet (`open_map` with `focus`) always
 opens in the window.
 
+How a call runs: `tools::call` takes the editor for the length of most calls. The content
+tools (`preview_materials`, `describe_material`, `preview_models`, `describe_model`,
+`list_soundscapes` and `describe_soundscape`) only gather what they need while they hold
+it, and hand back a `Job` that reads the game's files and draws without it, so the window
+keeps drawing while a sheet of thumbnails is made. A job gives lists that were slow to
+make, such as every material of the game, back to the editor to keep. The pictures are
+contact sheets put together on the CPU by `sheet.rs`: thumbnails in a grid with a caption
+under each, in egui's monospace typeface. Model thumbnails come from `model_render.rs`,
+the painter the model browser uses.
+
+`batch` (`tools/batch.rs`) runs several calls in one request, each through the same path
+as a call that comes alone, so the editor is let go of between them. `tools::call` notes
+where the undo history of the agent's map stood before and after every call (a
+`HistoryMark`). When nothing else changed the map in between, the steps the batch added
+are joined into one with `History::join_latest`, or undone when a call failed and the
+batch asked for that.
+
+Answers are JSON laid out by `mcp::json_text`: an array or object that fits on a line
+stays on it, and only longer ones are broken up, which takes a fraction of the text of
+pretty-printed JSON.
+
+Which prop classes a model works as comes from `ModelDetails::prop_class_problem` in
+`mallet-content`, which follows the Source SDK: VBSP's `IsStaticProp` (`$staticprop`, and
+no `prop_data` unless it has `allowstatic`) and the game's `CBaseProp::Spawn` (a
+`prop_physics` needs prop data, any other prop must not have it, and the `_override`
+classes skip the check).
+
 Tools:
 
 | Tool | What it does |
 | --- | --- |
 | `get_status` | Open map, counts, bounds, grid, camera, 2D views, undo/redo state, and what the lighting preview drew last |
 | `set_game_dir` | Mount a game's content for textures and remember it |
+| `batch` | Several tool calls in one request, in order; their edits become one undo step, and a failing call stops the batch, is passed over or has the batch undone |
 | `new_map`, `open_map`, `save_map` | Start an empty map or load a VMF or `.mallet` map in a new tab (`focus` also brings the window to the front); save in place or to a new path, the extension picking the format |
 | `export_map` | Write a copy of the map in either format without switching to it |
+| `reload_map` | Read the open map's file again in place, after another program wrote it; unsaved changes need `discard` |
+| `insert_map` | Paste every brush and entity of another map file into the open map as one undo step, with its VisGroups matched by name |
 | `list_tabs`, `switch_tab`, `close_tab` | Work with the open map tabs; closing unsaved work needs `discard`, and `list_tabs` names the autosaved copy of a tab with unsaved changes |
-| `list_entities`, `get_entity` | Browse entities, filtered by classname (`trigger_*` prefix match) |
+| `list_entities`, `get_entity` | Browse entities, filtered by classname, targetname, key values (`*` stands for any text), a box and the selection, with extra keys on request, or counted by class |
+| `list_solids` | Brushes with the box around each, their entity and their materials, filtered by entity, material, box and selection |
 | `set_entity_key`, `remove_entity_key` | Undoable key edits |
-| `get_selection`, `select`, `clear_selection` | Read or change the selection the window shows |
+| `set_entity_keys` | Set or remove several keys on several entities as one undo step |
+| `get_selection`, `select`, `clear_selection` | Read or change the selection: by ids, by class, material and box, or everything at once; a large selection comes back as ranges of ids |
+| `trace_line` | The first brush face each of some lines meets, passing through tool brushes: for finding floors and walls and checking lines of sight |
 | `move_selection`, `clone_selection`, `delete_selection` | Undoable selection edits; moves keep textures locked |
 | `copy_selection`, `cut_selection`, `paste` | Hammer's clipboard, shared by every tab; `paste` takes Paste Special's copies, offset, rotation, naming and grouping options |
 | `resize_selection` | Stretch the selection to a new bounding box, like dragging its handles |
 | `transform_selection` | Scale, rotate and move the selection in one step around its centre, the pivot, the origin or a point |
 | `flip_selection`, `snap_selection_to_grid`, `align_selection` | Hammer's Flip Objects, Snap Selected to Grid and Align Objects |
 | `set_pivot` | Place or reset the pivot rotations turn around |
-| `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, or an arch as the Arch Properties dialog makes it |
+| `create_block`, `create_arch` | Box brush or one of Hammer's primitives (wedge, cylinder, spike, sphere) between two corners, like the Block tool, with a material for each way its faces point if wanted, or an arch as the Arch Properties dialog makes it |
 | `tie_to_entity`, `move_to_world` | Hammer's Tie to Entity and Move to World: make the selected brushes a brush entity, or add them to one, and put brush entities' brushes back into the world |
 | `group_selection`, `ungroup_selection` | Hammer's Group and Ungroup |
 | `hide_selection`, `hide_unselected`, `show_all_hidden` | Hammer's QuickHide: hide the selection or everything else, and show what QuickHide hid again |
@@ -917,8 +950,10 @@ Tools:
 | `list_lights` | The map's lights as the lighting preview reads them, the sky light, fog, sky, texture lights in use, the latest frame's lighting numbers and, optionally, the lighting entity catalogue |
 | `sound_preview` | What the sound preview plays: the soundscape entity in charge, every voice with its volume, distance and the gain of each speaker, the scripts read and the mix's peak level; optionally the map's sound entities, the game's soundscape names and what one soundscape plays; turns the preview on or off, listens to a soundscape by name and reloads the scripts |
 | `show_soundscape_browser` | Open the soundscape browser with a search |
+| `list_soundscapes`, `describe_soundscape` | The game's soundscapes, read straight from its scripts on every call, and what one plays line by line, with the sound files the game lacks and the positions the map's entities are missing |
+| `soundscape_at` | Which soundscape a player hears at points of the map, with the nearest soundscape entities and whether each is in range and in sight |
 | `set_camera`, `set_view_2d` | Aim the 3D camera, pan and zoom the 2D views |
-| `screenshot` | PNG of one or all viewports, rendered offscreen, or of the whole window (`window`) |
+| `screenshot` | PNG of one or all viewports, rendered offscreen at full size or scaled down, or of the whole window (`window`) |
 | `set_entity_outputs` | Replace an entity's outputs |
 | `describe_entity_class`, `list_entity_classes` | Entity classes from the FGD files |
 | `set_fgds` | Read entity classes from chosen FGD files |
@@ -934,8 +969,10 @@ Tools:
 | `get_faces`, `select_faces`, `pick_face` | Brush faces: details, texture tool selection, and the face under a camera pixel, which `pick_face` can also put on an entity's side list |
 | `set_faces` | Material, scale, shift, rotation, lightmap scale, alignment and justify, as one undo step |
 | `replace_material` | Replace a material in the map or the selected faces |
+| `preview_materials`, `describe_material` | A picture of material thumbnails to choose from, and everything about one material: size, alpha, sky, nodraw or tool, surface property, texture light, source and VMT |
 | `show_texture_browser` | Open the texture browser with a search |
 | `list_models` | The game's models, filtered, or the ones the map's entities use with counts |
+| `preview_models`, `describe_model` | A picture of models to choose from, and everything about one model: its box around the origin, the prop classes it works as, skins, body groups and materials, with pictures from four sides |
 | `show_model_browser` | Open the model browser with a search |
 | `send_input` | Key presses, clicks and drags fed into the window as if a user made them, in a viewport or anywhere in the window (`window`, in screenshot pixels); refused while agents work in their own view |
 
@@ -947,8 +984,11 @@ so it fails if the window stays minimized. Use it to test tools and shortcuts en
 The repository's `.mcp.json` registers the server for MCP clients such as Claude Code.
 Mallet has to be running for the tools to connect.
 
-Adding a tool: describe it in `tools::definitions`, handle it in `tools::run_checked`, and
-make any map change through `Editor::apply_edit` so it stays undoable.
+Adding a tool: describe it in `tools::definitions`, or in the `definitions` of the module
+under `tools/` it belongs to, handle it in `tools::run_checked`, and make any map change
+through `Editor::apply_edit` so it stays undoable. A tool that reads or draws much of the
+game's content is a content tool instead: name it in `CONTENT_TOOLS` and have it return a
+`Job`.
 
 ## Roadmap
 

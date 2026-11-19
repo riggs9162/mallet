@@ -614,3 +614,11 @@ left them. A pink camera marker in your viewports shows where it is looking whil
 works on the map you have open. It cannot click or type into the window or open panels there. Turn off "Agents
 work in their own view" in Mallet Options > AI agents to let agents drive the window
 itself, for example to test tools with `send_input`.
+
+Agents can look before they choose, as you do in the browsers: they get a picture of
+material or model thumbnails to pick from, the size and prop classes of a model, and what
+a soundscape plays, read straight from the game's scripts. They can also find and change
+objects in bulk, by class, material or place, trace lines to find floors and walls, read a
+map again after a generator has rewritten its file, and paste another map file in. An
+agent may send many steps as one batch, and everything a batch changes undoes with a
+single Ctrl+Z.
