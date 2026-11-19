@@ -431,8 +431,9 @@ fn editor_definitions() -> Value {
             "check_for_problems",
             "Hammer's Check for Problems (Alt+P): a missing player start, entities with no class, brush entities \
              with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused \
-             keyvalues, lightmap scales of 0 and duplicate ids. With fix, also fixes the ones that can be fixed \
-             (as one undo step) and checks again.",
+             keyvalues, lightmap scales of 0 and duplicate ids. It also finds props whose class loses their \
+             model in the map compiler or in game, such as a model with prop data on a prop_static, and says \
+             why. With fix, also fixes the ones that can be fixed (as one undo step) and checks again.",
             json!({ "fix": { "type": "boolean", "description": "Fix what can be fixed first." } }),
             &[],
         ),
@@ -3780,9 +3781,9 @@ fn model_failures(editor: &Editor) -> Value {
 }
 
 #[cfg(test)]
-mod test_game {
-    //! A small game folder for the tests of the content tools: a `gameinfo.txt` that mounts
-    //! the folder itself, and whatever files a test writes into it.
+pub(crate) mod test_game {
+    //! A small game folder for the tests that need a game's files: a `gameinfo.txt` that
+    //! mounts the folder itself, and whatever files a test writes into it.
 
     use std::fs;
     use std::path::PathBuf;
@@ -3823,6 +3824,25 @@ mod test_game {
             self.write(&format!("materials/{name}.vmt"), vmt.as_bytes());
             if let Some((width, height, color)) = pixels {
                 self.write(&format!("materials/{name}.vtf"), &vtf(width, height, color));
+            }
+        }
+
+        /// Writes the start of a model's `.mdl`, which is all that tells which prop classes
+        /// keep the model: whether it was compiled as a static prop, and the entry its prop
+        /// data builds on when it has any. With `collision`, a `.phy` lies beside it.
+        pub fn model(&self, name: &str, static_prop: bool, prop_data: Option<&str>, collision: bool) {
+            let mut file = vec![0_u8; 320];
+            file[0..4].copy_from_slice(b"IDST");
+            file[152..156].copy_from_slice(&(u32::from(static_prop) * 0x10).to_le_bytes());
+            if let Some(base) = prop_data {
+                let key_values = format!("mdlkeyvalue\n{{\n\tprop_data\n\t{{\n\t\t\"base\" \"{base}\"\n\t}}\n}}\n\0");
+                file[312..316].copy_from_slice(&320_i32.to_le_bytes());
+                file[316..320].copy_from_slice(&(key_values.len() as i32).to_le_bytes());
+                file.extend(key_values.as_bytes());
+            }
+            self.write(&format!("models/{name}.mdl"), &file);
+            if collision {
+                self.write(&format!("models/{name}.phy"), b"");
             }
         }
 

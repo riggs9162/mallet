@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mallet_content::ClassKind;
+use mallet_content::{ClassKind, MaterialLoader, PropTraits};
 use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::solid_faces;
 use mallet_vmf::Entity;
@@ -44,6 +44,7 @@ pub enum ProblemKind {
     UnusedKeys,
     BadLightmapScale,
     DuplicateId,
+    WrongPropClass,
 }
 
 impl ProblemKind {
@@ -58,6 +59,7 @@ impl ProblemKind {
             Self::UnusedKeys => "Unused keyvalues",
             Self::BadLightmapScale => "Invalid lightmap scale",
             Self::DuplicateId => "Duplicate id",
+            Self::WrongPropClass => "Wrong prop class",
         }
     }
 
@@ -80,14 +82,63 @@ pub struct Problem {
     pub items: Vec<String>,
 }
 
+/// What decides which prop classes keep the models a check meets, read once for each
+/// model however many props use it.
+struct PropModels {
+    /// The game's loader, or `None` without a game to read models from.
+    loader: Option<MaterialLoader>,
+    /// Each model looked at so far, by its path in lower case with forward slashes: its
+    /// traits and whether it has a collision model, or `None` when it cannot be read.
+    known: HashMap<String, Option<(PropTraits, bool)>>,
+}
+
+impl PropModels {
+    fn new(loader: Option<MaterialLoader>) -> Self {
+        Self {
+            loader,
+            known: HashMap::new(),
+        }
+    }
+
+    /// The problem of a prop whose class the map compiler or the game takes its model
+    /// from, when `entity` is one. Only the `prop_` classes have such rules, so no other
+    /// entity's model is read. Nothing is said without a game, or about a model that
+    /// cannot be read.
+    fn wrong_class(&mut self, entity: &Entity, owner: Option<Owner>) -> Option<Problem> {
+        let classname = entity.classname();
+        if !classname.trim().to_ascii_lowercase().starts_with("prop_") {
+            return None;
+        }
+        let model = entity
+            .get("model")
+            .filter(|model| model.to_ascii_lowercase().ends_with(".mdl"))?;
+        let loader = self.loader.as_ref()?;
+        let (traits, collision) = self
+            .known
+            .entry(model.replace('\\', "/").to_ascii_lowercase())
+            .or_insert_with(|| Some((loader.model_prop_traits(model)?, loader.model_has_collision(model))))
+            .as_ref()?;
+        let reason = traits.class_problem(classname, *collision)?;
+        Some(Problem {
+            kind: ProblemKind::WrongPropClass,
+            object: owner,
+            detail: format!("{classname} {} uses {model}. {reason}", entity.id().unwrap_or(0)),
+            items: Vec::new(),
+        })
+    }
+}
+
 impl Editor {
-    /// Checks the open map the way Hammer's Check for Problems does.
+    /// Checks the open map the way Hammer's Check for Problems does, and for props whose
+    /// class loses their model, which Hammer leaves to the compile log and the game's
+    /// console.
     pub fn check_for_problems(&self) -> Vec<Problem> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
         let vmf = &document.vmf;
         let mut problems = Vec::new();
+        let mut models = PropModels::new(self.materials.as_ref().map(|materials| materials.loader()));
         let names: HashSet<String> = vmf
             .all_entities()
             .flat_map(|entity| [entity.get("targetname"), Some(entity.classname())])
@@ -144,7 +195,7 @@ impl Editor {
             if world {
                 continue;
             }
-            self.check_entity(entity, owner, &names, &mut problems);
+            self.check_entity(entity, owner, &names, &mut models, &mut problems);
         }
         for (ids, noun) in [(&solid_ids, "brushes"), (&entity_ids, "entities")] {
             let mut duplicates: Vec<(&u32, &usize)> = ids.iter().filter(|(_, count)| **count > 1).collect();
@@ -162,7 +213,14 @@ impl Editor {
     }
 
     /// The checks of one entity other than the world.
-    fn check_entity(&self, entity: &Entity, owner: Option<Owner>, names: &HashSet<String>, problems: &mut Vec<Problem>) {
+    fn check_entity(
+        &self,
+        entity: &Entity,
+        owner: Option<Owner>,
+        names: &HashSet<String>,
+        models: &mut PropModels,
+        problems: &mut Vec<Problem>,
+    ) {
         let classname = entity.classname();
         if classname.trim().is_empty() {
             problems.push(Problem {
@@ -182,6 +240,7 @@ impl Editor {
                 items: Vec::new(),
             });
         }
+        problems.extend(models.wrong_class(entity, owner));
         let exists = |target: &str| {
             target.is_empty()
                 || target.starts_with(SPECIAL_TARGETS_PREFIX)
@@ -290,6 +349,65 @@ mod tests {
     use glam::DVec3;
 
     use super::*;
+    use crate::tools::test_game::TestGame;
+
+    /// Adds an entity of a class with a model, and returns its id.
+    fn place(editor: &mut Editor, classname: &str, model: &str) -> u32 {
+        let keys = [("model".to_owned(), model.to_owned())];
+        editor.create_entity(classname, DVec3::ZERO, &keys).unwrap()
+    }
+
+    /// The props whose class loses their model, with what is said about each.
+    fn wrong_classes(editor: &Editor) -> Vec<Problem> {
+        let mut problems = editor.check_for_problems();
+        problems.retain(|problem| problem.kind == ProblemKind::WrongPropClass);
+        problems
+    }
+
+    #[test]
+    fn props_whose_class_loses_their_model_are_found() {
+        let game = TestGame::new("prop-classes");
+        game.model("test/drum", true, Some("Metal.Medium"), true);
+        game.model("test/lamp", true, None, true);
+        game.model("test/citizen", false, None, true);
+        let mut editor = game.editor();
+        let static_drum = place(&mut editor, "prop_static", "models/test/drum.mdl");
+        let dynamic_drum = place(&mut editor, "prop_dynamic", "Models\\Test\\Drum.MDL");
+        place(&mut editor, "prop_physics", "models/test/drum.mdl");
+        place(&mut editor, "prop_dynamic_override", "models/test/drum.mdl");
+        place(&mut editor, "prop_static", "models/test/lamp.mdl");
+        let physics_lamp = place(&mut editor, "prop_physics", "models/test/lamp.mdl");
+        let static_citizen = place(&mut editor, "prop_static", "models/test/citizen.mdl");
+        place(&mut editor, "npc_citizen", "models/test/citizen.mdl");
+        place(&mut editor, "prop_static", "models/test/missing.mdl");
+
+        let found = wrong_classes(&editor);
+        let props: Vec<Option<Owner>> = found.iter().map(|problem| problem.object).collect();
+        let expected = [static_drum, dynamic_drum, physics_lamp, static_citizen].map(|id| Some(Owner::Entity(id)));
+        assert_eq!(props, expected);
+        assert_eq!(
+            found[0].detail,
+            format!(
+                "prop_static {static_drum} uses models/test/drum.mdl. It has prop data, which makes it a physics \
+                 prop, so VBSP leaves it out of the map."
+            )
+        );
+        assert!(
+            found[1].detail.contains("prop_dynamic_override takes it"),
+            "{}",
+            found[1].detail
+        );
+        assert!(found[2].detail.contains("no prop data"), "{}", found[2].detail);
+        assert!(found[3].detail.contains("$staticprop"), "{}", found[3].detail);
+    }
+
+    #[test]
+    fn prop_classes_are_not_judged_without_a_game() {
+        let mut editor = Editor::default();
+        editor.new_map();
+        place(&mut editor, "prop_static", "models/test/drum.mdl");
+        assert!(wrong_classes(&editor).is_empty());
+    }
 
     #[test]
     fn an_empty_map_needs_a_player_start_and_missing_targets_are_found() {
