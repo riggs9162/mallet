@@ -1115,13 +1115,11 @@ impl Editor {
     /// Every model the game mounts, such as `models/props_c17/oildrum001.mdl`, sorted.
     /// Listed once per game.
     pub fn model_list(&mut self) -> Result<Arc<Vec<String>>, String> {
+        if let Some(list) = self.listed_models() {
+            return Ok(list);
+        }
         let materials = self.materials.as_ref().ok_or("choose a game folder first")?;
         let game = materials.filesystem().game_dir().to_owned();
-        if let Some((listed, list)) = &self.model_list {
-            if *listed == game {
-                return Ok(Arc::clone(list));
-            }
-        }
         let models: Vec<String> = materials
             .loader()
             .list_models()
@@ -1131,6 +1129,18 @@ impl Editor {
         let list = Arc::new(models);
         self.model_list = Some((game, Arc::clone(&list)));
         Ok(list)
+    }
+
+    /// The game's models, when they have been listed for the mounted game already.
+    pub fn listed_models(&self) -> Option<Arc<Vec<String>>> {
+        let (listed, list) = self.model_list.as_ref()?;
+        (Some(listed.as_path()) == self.game_dir()).then(|| Arc::clone(list))
+    }
+
+    /// Keeps a list of the models of the game in `game`, as
+    /// [`Editor::keep_material_list`] keeps its materials.
+    pub fn keep_model_list(&mut self, game: PathBuf, list: Arc<Vec<String>>) {
+        self.model_list = Some((game, list));
     }
 
     /// Whether entities of a class show a model of their own choosing: the class has a

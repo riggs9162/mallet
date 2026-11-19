@@ -1046,6 +1046,19 @@ impl MaterialLoader {
             .cloned()
     }
 
+    /// The source a model's `.mdl` is read from.
+    pub fn model_source(&self, path: &str) -> Option<crate::Source> {
+        self.filesystem.source_of(path).cloned()
+    }
+
+    /// Whether a model has a collision model, as physics props need: a `.phy` file
+    /// beside its `.mdl`.
+    pub fn model_has_collision(&self, path: &str) -> bool {
+        let path = normalize(path);
+        let stem = path.strip_suffix(".mdl").unwrap_or(&path);
+        self.filesystem.exists(&format!("{stem}.phy"))
+    }
+
     /// Reads a material's properties. The texture is `%tooltexture` if set, as Hammer
     /// shows for tool materials, otherwise `$basetexture`. A `patch` material takes the
     /// properties of the material it includes and applies its `insert` and `replace`

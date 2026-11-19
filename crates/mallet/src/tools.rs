@@ -31,6 +31,7 @@ use crate::scene::Owner;
 use mallet_vmf::texture::Justify;
 
 mod materials;
+mod models;
 
 /// How many entities `list_entities` returns when no limit is given.
 const DEFAULT_LIST_LIMIT: u64 = 200;
@@ -41,7 +42,12 @@ const NO_GAME: &str = "choose a game folder first, with set_game_dir or in Malle
 
 /// The tools that read and draw the game's content, which takes a while. Each gathers
 /// what it needs from the editor and hands back a [`Job`] that does the rest.
-const CONTENT_TOOLS: [&str; 2] = ["preview_materials", "describe_material"];
+const CONTENT_TOOLS: [&str; 4] = [
+    "preview_materials",
+    "describe_material",
+    "preview_models",
+    "describe_model",
+];
 
 /// The slow part of a content tool, which runs without the editor: it has taken what it
 /// needs along. It hands what it found out and is worth keeping to its argument.
@@ -51,6 +57,8 @@ pub type Job = Box<dyn FnOnce(&mut dyn FnMut(Learned)) -> ToolResult>;
 pub enum Learned {
     /// Every material of the game in `game`.
     Materials { game: PathBuf, list: Arc<Vec<String>> },
+    /// Every model of the game in `game`.
+    Models { game: PathBuf, list: Arc<Vec<String>> },
 }
 
 /// The `tools/list` entries for every tool [`run`] understands.
@@ -58,6 +66,7 @@ pub fn definitions() -> Value {
     let mut tools = editor_definitions();
     if let Value::Array(list) = &mut tools {
         list.extend(materials::definitions());
+        list.extend(models::definitions());
     }
     tools
 }
@@ -1131,6 +1140,8 @@ fn content_job(editor: &mut Editor, name: &str, args: &Value) -> Result<Job, Str
     match name {
         "preview_materials" => materials::preview(editor, args),
         "describe_material" => materials::describe(editor, args),
+        "preview_models" => models::preview(editor, args),
+        "describe_model" => models::describe(editor, args),
         _ => Err(format!("unknown tool \"{name}\"")),
     }
 }
@@ -1139,6 +1150,7 @@ fn content_job(editor: &mut Editor, name: &str, args: &Value) -> Result<Job, Str
 fn keep(editor: &mut Editor, learned: Learned) {
     match learned {
         Learned::Materials { game, list } => editor.keep_material_list(game, list),
+        Learned::Models { game, list } => editor.keep_model_list(game, list),
     }
 }
 
