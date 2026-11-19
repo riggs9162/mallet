@@ -3878,7 +3878,7 @@ mod tests {
         let inserted = json_of(&run(&mut editor, "insert_map", &args));
         assert_eq!(inserted["inserted"], 4);
         assert_eq!(inserted["solids"].as_array().unwrap().len(), 3, "the hidden brush comes in shown");
-        assert_eq!(inserted["bounds"]["min"], json!([0.0, 256.0, 0.0]));
+        assert_eq!(inserted["bounds"]["min"], json!([0, 256, 0]));
         assert_eq!((editor.scene.solid_count, editor.scene.entity_count), (4, 1));
 
         let vmf = &editor.document.as_ref().unwrap().vmf;

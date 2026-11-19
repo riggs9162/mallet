@@ -258,9 +258,7 @@ pub fn preview(editor: &mut Editor, args: &Value) -> Result<Job, String> {
         if offset + paths.len() < total {
             summary["next_offset"] = json!(offset + paths.len());
         }
-        let mut content = vec![Content::Text(
-            serde_json::to_string_pretty(&summary).unwrap_or_default(),
-        )];
+        let mut content = vec![Content::Text(crate::mcp::json_text(&summary))];
         if !paths.is_empty() {
             let tiles: Vec<Tile> = drawn.into_iter().map(|(tile, _)| tile).collect();
             match Sheet::of_tiles(&tiles, side, columns_for(side, tiles.len()), 2).png() {
@@ -343,9 +341,7 @@ pub fn describe(editor: &mut Editor, args: &Value) -> Result<Job, String> {
             }
         };
         let summary = description(&loader, &shown, model, variant, entities);
-        let mut content = vec![Content::Text(
-            serde_json::to_string_pretty(&summary).unwrap_or_default(),
-        )];
+        let mut content = vec![Content::Text(crate::mcp::json_text(&summary))];
         if with_picture {
             let draw = |orbit: Orbit| guarded(|| Ok(render(model, orbit, side, side, SAMPLES)));
             let tiles: Vec<Tile> = match orbit {

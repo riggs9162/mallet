@@ -21,6 +21,10 @@ use tiny_http::{Header, Method, Request, Response, Server};
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// Largest request body accepted.
 const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
+/// The longest line [`json_text`] puts an array or object on before it breaks it up.
+const JSON_LINE_WIDTH: usize = 180;
+/// How many decimal places [`json_text`] keeps of a number.
+const JSON_DECIMALS: i32 = 6;
 
 const INSTRUCTIONS: &str = "Mallet is a Hammer-style editor for Source engine VMF maps. \
 Use get_status first to see which map is open. Edits made through these tools are undoable \
@@ -50,9 +54,9 @@ impl ToolResult {
         }
     }
 
-    /// A successful result holding pretty-printed JSON.
+    /// A successful result holding JSON, laid out by [`json_text`].
     pub fn json(value: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(value).unwrap_or_default())
+        Self::text(json_text(value))
     }
 
     /// A failed tool call with a message the agent can act on.
@@ -85,6 +89,110 @@ impl ToolResult {
             })
             .collect();
         json!({ "content": content, "isError": self.is_error })
+    }
+}
+
+/// JSON laid out for an agent to read at little cost: an array or object that fits on
+/// one line stays on it, so a point is `[0, 64, 128]` and a short record one line of a
+/// list, and only what is longer is broken up, one item to a line, or as many as fit
+/// when the items are plain numbers or strings, such as a list of ids. Pretty-printing
+/// every number onto its own line takes several times the text for the same answer. Numbers
+/// are written as short as they can be: whole ones without a decimal point, and the
+/// others rounded to [`JSON_DECIMALS`] places, which drops the noise a 32-bit
+/// coordinate picks up on its way to 64 bits.
+pub fn json_text(value: &Value) -> String {
+    let mut text = String::new();
+    write_json(value, 0, 0, &mut text);
+    text
+}
+
+/// Writes `value` at nesting depth `depth`, where `column` characters of its first line
+/// are taken already.
+fn write_json(value: &Value, depth: usize, column: usize, text: &mut String) {
+    let items: Vec<(Option<&String>, &Value)> = match value {
+        Value::Array(items) => items.iter().map(|item| (None, item)).collect(),
+        Value::Object(entries) => entries.iter().map(|(key, item)| (Some(key), item)).collect(),
+        scalar => return text.push_str(&scalar_text(scalar)),
+    };
+    let (open, close) = if value.is_array() { ('[', ']') } else { ('{', '}') };
+    let line = one_line(value);
+    if items.is_empty() || column + line.len() <= JSON_LINE_WIDTH {
+        return text.push_str(&line);
+    }
+    text.push(open);
+    if value.is_array() && items.iter().all(|(_, item)| !item.is_array() && !item.is_object()) {
+        let mut taken = JSON_LINE_WIDTH;
+        for (index, (_, item)) in items.iter().enumerate() {
+            let mut item = scalar_text(item);
+            if index + 1 < items.len() {
+                item.push(',');
+            }
+            if taken + 1 + item.len() > JSON_LINE_WIDTH {
+                text.push('\n');
+                text.push_str(&" ".repeat(depth + 1));
+                taken = depth + 1;
+            } else {
+                text.push(' ');
+                taken += 1;
+            }
+            taken += item.len();
+            text.push_str(&item);
+        }
+        text.push('\n');
+        text.push_str(&" ".repeat(depth));
+        return text.push(close);
+    }
+    for (index, (key, item)) in items.iter().enumerate() {
+        text.push('\n');
+        text.push_str(&" ".repeat(depth + 1));
+        let mut taken = depth + 1;
+        if let Some(key) = key {
+            let key = Value::String((*key).clone()).to_string();
+            taken += key.len() + 2;
+            text.push_str(&key);
+            text.push_str(": ");
+        }
+        write_json(item, depth + 1, taken, text);
+        if index + 1 < items.len() {
+            text.push(',');
+        }
+    }
+    text.push('\n');
+    text.push_str(&" ".repeat(depth));
+    text.push(close);
+}
+
+/// `value` on one line, with a space after every comma and colon.
+fn one_line(value: &Value) -> String {
+    match value {
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(one_line).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(entries) => {
+            let entries: Vec<String> = entries
+                .iter()
+                .map(|(key, item)| format!("{}: {}", Value::String(key.clone()), one_line(item)))
+                .collect();
+            format!("{{{}}}", entries.join(", "))
+        }
+        scalar => scalar_text(scalar),
+    }
+}
+
+/// A value that is neither an array nor an object, as [`json_text`] writes it.
+fn scalar_text(value: &Value) -> String {
+    let Some(number) = value.as_f64().filter(|number| value.is_f64() && number.is_finite()) else {
+        return value.to_string();
+    };
+    let places = 10_f64.powi(JSON_DECIMALS);
+    let rounded = (number * places).round() / places;
+    if rounded.abs() >= 1e15 {
+        value.to_string()
+    } else if rounded.fract() == 0.0 {
+        format!("{}", rounded as i64)
+    } else {
+        format!("{rounded}")
     }
 }
 
@@ -222,4 +330,99 @@ fn origin_allowed(request: &Request) -> bool {
         host.split([':', '/']).next().unwrap_or("")
     };
     matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_arrays_and_records_stay_on_one_line() {
+        assert_eq!(json_text(&json!([0, 64.5, -128])), "[0, 64.5, -128]");
+        assert_eq!(
+            json_text(&json!({ "id": 7, "origin": [0, 0, 16] })),
+            "{\"id\": 7, \"origin\": [0, 0, 16]}"
+        );
+        assert_eq!(json_text(&json!({})), "{}");
+        assert_eq!(json_text(&json!("a \"quoted\" word")), "\"a \\\"quoted\\\" word\"");
+    }
+
+    #[test]
+    fn numbers_are_written_as_short_as_they_can_be() {
+        let numbers = json!([
+            256.0,
+            -0.0,
+            0.25,
+            141.26136207580566,
+            0.7071067811865476,
+            1e-9,
+            12345678901_u64,
+            -3
+        ]);
+        assert_eq!(
+            json_text(&numbers),
+            "[256, 0, 0.25, 141.261362, 0.707107, 0, 12345678901, -3]"
+        );
+        assert_eq!(
+            json_text(&json!({ "big": 1e20, "none": null, "on": true })),
+            "{\"big\": 1e+20, \"none\": null, \"on\": true}"
+        );
+    }
+
+    #[test]
+    fn long_answers_break_into_one_item_a_line() {
+        let entities: Vec<Value> = (0..4)
+            .map(|id| json!({ "id": id, "classname": "prop_static", "origin": [id * 64, 0, 16], "targetname": null }))
+            .collect();
+        let answer = json!({ "total": 4, "entities": entities });
+        let text = json_text(&answer);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 9, "each entity takes one line:\n{text}");
+        assert_eq!(lines[0], "{");
+        assert_eq!(lines[1], " \"entities\": [");
+        assert!(lines[2].starts_with("  {\"classname\": \"prop_static\", \"id\": 0, \"origin\": [0, 0, 16]"));
+        assert_eq!(lines[7], " \"total\": 4");
+        assert!(lines.iter().all(|line| line.len() <= JSON_LINE_WIDTH));
+        assert!(json_text(&answer["entities"][0]).lines().count() == 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            answer,
+            "it is still the same JSON"
+        );
+        let pretty_lines = serde_json::to_string_pretty(&answer).unwrap().lines().count();
+        assert!(
+            pretty_lines > 4 * lines.len(),
+            "pretty-printing takes {pretty_lines} lines"
+        );
+    }
+
+    #[test]
+    fn long_lists_of_numbers_and_names_fill_their_lines() {
+        let ids: Vec<u32> = (1000..1200).collect();
+        let text = json_text(&json!({ "solids": ids }));
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() < 12, "200 ids take a few lines, not 200:\n{text}");
+        assert_eq!(lines[1], " \"solids\": [");
+        assert!(lines[2].starts_with("  1000, 1001, 1002,"));
+        assert!(lines.iter().all(|line| line.len() <= JSON_LINE_WIDTH));
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["solids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            200
+        );
+        let names: Vec<String> = (0..40).map(|number| format!("brick/brickwall{number:03}a")).collect();
+        let text = json_text(&json!(names));
+        assert!(text.lines().count() < 10);
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!(names));
+    }
+
+    #[test]
+    fn a_long_string_is_not_broken() {
+        let word = "x".repeat(300);
+        let text = json_text(&json!({ "vmt": word, "size": [64, 64] }));
+        assert_eq!(text.lines().count(), 4);
+        assert!(text.contains("\"size\": [64, 64],"));
+    }
 }

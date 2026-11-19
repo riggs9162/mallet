@@ -798,7 +798,7 @@ mod tests {
         let all = json_of(&run(&mut editor, "list_solids", &json!({})));
         assert_eq!(all["total"], 2);
         assert_eq!(all["solids"][0]["solid"], floor);
-        assert_eq!(all["solids"][0]["min"], json!([-256.0, -256.0, -16.0]));
+        assert_eq!(all["solids"][0]["min"], json!([-256, -256, -16]));
         assert_eq!(all["solids"][0]["faces"], 6);
         assert_eq!(all["solids"][0]["materials"], json!(["CONCRETE/FLOOR"]));
 
@@ -865,15 +865,15 @@ mod tests {
         let hits = traced["hits"].as_array().unwrap();
         assert_eq!(
             hits[0]["point"],
-            json!([0.0, 0.0, 0.0]),
+            json!([0, 0, 0]),
             "the trigger brush is passed through"
         );
         assert_eq!(hits[0]["distance"], 512.0);
-        assert_eq!(hits[0]["normal"], json!([0.0, 0.0, 1.0]));
+        assert_eq!(hits[0]["normal"], json!([0, 0, 1]));
         assert_eq!(hits[0]["solid"], floor);
         assert_eq!(hits[0]["material"], "CONCRETE/FLOOR");
         assert_eq!(hits[1]["solid"], wall);
-        assert_eq!(hits[1]["point"], json!([240.0, 0.0, 64.0]));
+        assert_eq!(hits[1]["point"], json!([240, 0, 64]));
         assert!(hits[2].is_null(), "the wall lies beyond the line's end");
         assert!(hits[3].is_null(), "nothing is above");
         let wrong = run(&mut editor, "trace_line", &json!({ "rays": [{ "from": [0, 0, 0] }] }));

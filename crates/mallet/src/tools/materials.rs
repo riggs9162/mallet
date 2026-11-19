@@ -256,9 +256,7 @@ pub fn preview(editor: &mut Editor, args: &Value) -> Result<Job, String> {
         if offset + shown.len() < total {
             summary["next_offset"] = json!(offset + shown.len());
         }
-        let mut content = vec![Content::Text(
-            serde_json::to_string_pretty(&summary).unwrap_or_default(),
-        )];
+        let mut content = vec![Content::Text(crate::mcp::json_text(&summary))];
         if !shown.is_empty() {
             let tiles: Vec<Tile> = shown
                 .iter()
@@ -309,9 +307,7 @@ pub fn describe(editor: &mut Editor, args: &Value) -> Result<Job, String> {
             ));
         };
         let summary = description(&loader, &name, &material, &details, &lights, faces);
-        let mut content = vec![Content::Text(
-            serde_json::to_string_pretty(&summary).unwrap_or_default(),
-        )];
+        let mut content = vec![Content::Text(crate::mcp::json_text(&summary))];
         if with_picture {
             let mut tiles = vec![Shown::load(&loader, &name, side).tile(1)];
             if let Some(size) = material.size {
@@ -437,8 +433,8 @@ mod tests {
     use glam::DVec3;
     use serde_json::json;
 
-    use super::super::test_game::{call, error_of, json_of, picture_of, TestGame};
     use super::super::run;
+    use super::super::test_game::{call, error_of, json_of, picture_of, TestGame};
 
     fn game(name: &str) -> TestGame {
         let game = TestGame::new(name);
@@ -556,7 +552,7 @@ mod tests {
         assert_eq!(summary["texture"], "test/wall");
         assert_eq!(summary["texture_found"], true);
         assert_eq!(summary["size"], json!([64, 32]));
-        assert_eq!(summary["size_in_units"], json!([16.0, 8.0]));
+        assert_eq!(summary["size_in_units"], json!([16, 8]));
         assert_eq!(summary["alpha"], "opaque");
         assert_eq!(summary["kind"], "normal");
         assert_eq!(summary["surface_prop"], "brick");

@@ -289,9 +289,7 @@ fn run_calls(
     if let Some(note) = note {
         summary["note"] = json!(note);
     }
-    let mut content = vec![Content::Text(
-        serde_json::to_string_pretty(&summary).unwrap_or_default(),
-    )];
+    let mut content = vec![Content::Text(crate::mcp::json_text(&summary))];
     content.extend(pictures.into_iter().map(Content::Png));
     Ok(ToolResult {
         content,
