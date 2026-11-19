@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use egui_phosphor::regular as icon;
-use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, Source, SourceKind};
+use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, PropTraits, Source, SourceKind};
 
 use super::texture_browser::{checkerboard, elide, thousands};
 use super::MalletApp;
@@ -66,8 +66,8 @@ struct Loaders {
     threads: usize,
     side: u32,
     requests: Arc<Mutex<Vec<String>>>,
-    /// Each finished picture, with whether its model is a static prop.
-    results: Receiver<(String, Result<(Picture, bool), String>)>,
+    /// Each finished picture, with what decides which prop classes take its model.
+    results: Receiver<(String, Result<(Picture, PropTraits), String>)>,
     stop: Arc<AtomicBool>,
 }
 
@@ -77,27 +77,29 @@ impl Drop for Loaders {
     }
 }
 
-/// A background check of which models can be static props, for the "Static props"
-/// filter. It reads only the models the other filters let through, one after another, so
-/// narrowing the list first keeps it short and it never hammers a slow disk.
-struct StaticCheck {
+/// A background check of which prop classes models work as, for the "Static props" and
+/// "Physics props" filters. It reads the start of only the models the other filters let
+/// through, one after another, so narrowing the list first keeps it short and it never
+/// hammers a slow disk.
+struct TraitsCheck {
     /// The filters the checked models passed; the check is dropped when they change.
     filters: CheckFilters,
-    results: Receiver<(String, bool)>,
+    results: Receiver<(String, PropTraits)>,
     /// How many models are still to check.
     left: usize,
     stop: Arc<AtomicBool>,
 }
 
-impl Drop for StaticCheck {
+impl Drop for TraitsCheck {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
     }
 }
 
-/// The filters that decide which models a [`StaticCheck`] reads.
+/// The filters that decide which models a [`TraitsCheck`] reads.
 #[derive(Clone, PartialEq, Eq)]
 struct CheckFilters {
+    kinds: ModelKinds,
     filter: String,
     folder: Option<String>,
     used_only: bool,
@@ -338,10 +340,10 @@ pub(super) struct ModelBrowserState {
     hidden_sources: HashSet<usize>,
     loaders: Option<Loaders>,
     thumbnails: HashMap<String, Thumbnail>,
-    /// Whether each model looked at so far can be a static prop: those drawn as a
-    /// thumbnail or in the preview, and those checked for the "Static props" filter.
-    static_props: HashMap<String, bool>,
-    static_check: Option<StaticCheck>,
+    /// What decides which prop classes take each model looked at so far: those drawn
+    /// as a thumbnail or in the preview, and those checked for the kind filters.
+    prop_traits: HashMap<String, PropTraits>,
+    traits_check: Option<TraitsCheck>,
     /// The game's loader, for looking at models once they are listed.
     loader: Option<MaterialLoader>,
     /// The model clicked last, shown in the preview.
@@ -471,7 +473,8 @@ impl MalletApp {
                         .listing
                         .as_ref()
                         .is_some_and(|listing| listing.collision.contains(&model));
-                    let is_static = self.model_browser.static_props.get(&model).copied();
+                    let traits = self.model_browser.prop_traits.get(&model);
+                    let is_static = traits.map(|traits| traits.static_prop);
                     let result = use_model(editor, &pick, &model, variant, look_chosen, is_static, collision);
                     if let Err(error) = result {
                         editor.message = error;
@@ -588,9 +591,9 @@ impl ModelBrowserState {
             });
             self.list_receiver = Some((game.clone(), receiver));
             self.listing = None;
-            self.static_check = None;
+            self.traits_check = None;
             self.thumbnails.clear();
-            self.static_props.clear();
+            self.prop_traits.clear();
         }
         let threads = options.thread_count();
         let side = options.thumbnail_side().min(MAX_THUMBNAIL_SIDE);
@@ -612,7 +615,7 @@ impl ModelBrowserState {
                                     let model =
                                         LoadedModel::load(&loader, &path, THUMBNAIL_VARIANT, THUMBNAIL_TEXTURE_SIDE)?;
                                     let picture = model_render::render(&model, Orbit::default(), side, side, 2);
-                                    Ok((picture, model.details.static_prop))
+                                    Ok((picture, model.details.prop_traits()))
                                 });
                                 if sender.send((path, picture)).is_err() {
                                     return;
@@ -639,7 +642,7 @@ impl ModelBrowserState {
     /// listing stays, so opening the browser again is instant.
     fn close(&mut self) {
         self.loaders = None;
-        self.static_check = None;
+        self.traits_check = None;
         self.thumbnails.clear();
         self.preview.worker = None;
         self.preview.texture = None;
@@ -713,12 +716,12 @@ impl ModelBrowserState {
                 Err(_) => ctx.request_repaint_after(Duration::from_millis(50)),
             }
         }
-        if let Some(check) = &mut self.static_check {
+        if let Some(check) = &mut self.traits_check {
             let mut finished = false;
             loop {
                 match check.results.try_recv() {
-                    Ok((path, is_static)) => {
-                        self.static_props.insert(path, is_static);
+                    Ok((path, traits)) => {
+                        self.prop_traits.insert(path, traits);
                         check.left = check.left.saturating_sub(1);
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -729,7 +732,7 @@ impl ModelBrowserState {
                 }
             }
             if finished {
-                self.static_check = None;
+                self.traits_check = None;
             } else {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
@@ -739,8 +742,8 @@ impl ModelBrowserState {
             while let Ok((path, picture)) = loaders.results.try_recv() {
                 received = true;
                 let thumbnail = match picture {
-                    Ok((picture, is_static)) => {
-                        self.static_props.insert(path.clone(), is_static);
+                    Ok((picture, traits)) => {
+                        self.prop_traits.insert(path.clone(), traits);
                         let options = egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
                         let texture = ctx.load_texture(format!("model:{path}"), color_image(&picture), options);
                         Thumbnail::Ready(texture)
@@ -776,7 +779,7 @@ impl ModelBrowserState {
                 continue;
             }
             if let Some(info) = result.info {
-                self.static_props.insert(path.clone(), info.details.static_prop);
+                self.prop_traits.insert(path.clone(), info.details.prop_traits());
                 preview.body.resize(info.details.body_groups.len(), 0);
                 preview.info = Some((path.clone(), info));
             }
@@ -803,37 +806,42 @@ impl ModelBrowserState {
         }
     }
 
-    /// While the "Static props" filter is on, finds out in the background which of the
-    /// models the other filters let through are static props, when that is not known yet.
-    /// A check for other filters than the ones set now is dropped.
-    fn check_static_props(&mut self, used: &BTreeSet<String>) {
-        if self.view.kinds != ModelKinds::Static {
-            self.static_check = None;
+    /// While the "Static props" or "Physics props" filter is on, finds out in the
+    /// background which prop classes the models the other filters let through work as,
+    /// when that is not known yet. A physics prop needs a collision model, which the
+    /// listing knows already, so only models that have one are read for that filter. A
+    /// check for other filters than the ones set now is dropped.
+    fn check_prop_traits(&mut self, used: &BTreeSet<String>) {
+        if self.view.kinds == ModelKinds::All {
+            self.traits_check = None;
             return;
         }
         let mut hidden_sources: Vec<usize> = self.hidden_sources.iter().copied().collect();
         hidden_sources.sort_unstable();
         let filters = CheckFilters {
+            kinds: self.view.kinds,
             filter: self.view.filter.clone(),
             folder: self.view.folder.clone(),
             used_only: self.view.used_only,
             hidden_sources,
         };
-        if let Some(check) = &self.static_check {
+        if let Some(check) = &self.traits_check {
             if check.filters == filters {
                 return;
             }
         }
-        self.static_check = None;
+        self.traits_check = None;
         let (Some(loader), Some(listing)) = (self.loader.clone(), &self.listing) else {
             return;
         };
         let search = Search::parse(&self.view.filter);
+        let physics = self.view.kinds == ModelKinds::Physics;
         let unknown: Vec<String> = listing
             .models
             .iter()
             .filter(|(path, sources)| self.passes(&search, used, path, sources))
-            .filter(|(path, _)| !self.static_props.contains_key(path))
+            .filter(|(path, _)| !physics || listing.collision.contains(path))
+            .filter(|(path, _)| !self.prop_traits.contains_key(path))
             .map(|(path, _)| path.clone())
             .collect();
         if unknown.is_empty() {
@@ -847,18 +855,32 @@ impl ModelBrowserState {
                 if thread_stop.load(Ordering::Relaxed) {
                     return;
                 }
-                let is_static = loader.model_is_static(&path).unwrap_or(false);
-                if sender.send((path, is_static)).is_err() {
+                let traits = loader.model_prop_traits(&path).unwrap_or_default();
+                if sender.send((path, traits)).is_err() {
                     return;
                 }
             }
         });
-        self.static_check = Some(StaticCheck {
+        self.traits_check = Some(TraitsCheck {
             filters,
             results,
             left,
             stop,
         });
+    }
+
+    /// Whether a model is of the kind the kind filter shows. A model that has not been
+    /// looked at yet is of neither kind until it has been.
+    fn is_of_kind(&self, listing: &Listing, path: &str) -> bool {
+        let class = match self.view.kinds {
+            ModelKinds::All => return true,
+            ModelKinds::Static => "prop_static",
+            ModelKinds::Physics => "prop_physics",
+        };
+        let collision = listing.collision.contains(path);
+        self.prop_traits
+            .get(path)
+            .is_some_and(|traits| traits.works_as(class, collision))
     }
 
     /// Whether a model passes the source, folder, "only used" and search filters: every
@@ -999,11 +1021,7 @@ impl ModelBrowserState {
             .models
             .iter()
             .enumerate()
-            .filter(|(_, (path, _))| match self.view.kinds {
-                ModelKinds::All => true,
-                ModelKinds::Static => self.static_props.get(path.as_str()).copied().unwrap_or(false),
-                ModelKinds::Physics => listing.collision.contains(path.as_str()),
-            })
+            .filter(|(_, (path, _))| self.is_of_kind(listing, path))
             .filter(|(_, (path, sources))| self.passes(&search, used, path, sources))
             .map(|(index, _)| index)
             .collect()
@@ -1027,14 +1045,17 @@ impl ModelBrowserState {
             });
             return;
         }
-        self.check_static_props(used);
+        self.check_prop_traits(used);
         let shown = self.filtered(used);
         if shown.is_empty() {
             ui.add_space(20.0);
-            if self.static_check.is_some() {
+            if self.traits_check.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Looking for static props...");
+                    ui.label(match self.view.kinds {
+                        ModelKinds::Physics => "Looking for physics props...",
+                        _ => "Looking for static props...",
+                    });
                 });
             } else {
                 ui.label(
@@ -1217,7 +1238,7 @@ impl ModelBrowserState {
             }
         }
         let mut traits = Vec::new();
-        match self.static_props.get(path) {
+        match self.prop_traits.get(path).map(|prop| prop.static_prop) {
             Some(true) => traits.push("static prop"),
             Some(false) => traits.push("not a static prop"),
             None => {}
@@ -1255,7 +1276,7 @@ impl ModelBrowserState {
             .listing
             .as_ref()
             .is_some_and(|listing| listing.collision.contains(&path));
-        let is_static = self.static_props.get(&path).copied();
+        let is_static = self.prop_traits.get(&path).map(|traits| traits.static_prop);
         let preview = &mut self.preview;
         if preview.worker.as_ref().is_none_or(|worker| &worker.game != game) {
             preview.worker = Some(PreviewWorker::start(game, loader));
@@ -1523,9 +1544,10 @@ impl ModelBrowserState {
                 })
                 .response
                 .on_hover_text(
-                    "Static props are models prop_static can show. Physics props have a collision model, which \
-                     prop_physics needs. Finding static props reads every listed model's file, so choose a \
-                     folder or search first to keep it quick.",
+                    "Static props are models prop_static can show: compiled as static props, with no prop \
+                     data. Physics props are models prop_physics takes: with prop data and a collision model. \
+                     Finding either reads the start of every listed model's file, so choose a folder or search \
+                     first to keep it quick.",
                 );
             ui.checkbox(&mut self.view.used_only, "Only used models")
                 .on_hover_text("Show only the models the map's entities use");
@@ -1538,15 +1560,15 @@ impl ModelBrowserState {
                 self.listing = None;
                 self.list_receiver = None;
                 self.loaders = None;
-                self.static_check = None;
+                self.traits_check = None;
                 self.preview.worker = None;
                 self.preview.asked = None;
             }
         });
         ui.horizontal(|ui| {
-            let status = match (&self.listing, &self.static_check) {
+            let status = match (&self.listing, &self.traits_check) {
                 (Some(listing), Some(check)) => format!(
-                    "{} models; checking {} of them for static props",
+                    "{} models; checking what kind of prop {} of them are",
                     thousands(listing.models.len()),
                     thousands(check.left)
                 ),
@@ -1808,4 +1830,80 @@ fn reveal(loader: &MaterialLoader, model: &str) {
         command
     };
     let _ = command.spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use mallet_content::PropData;
+
+    use super::*;
+
+    /// A model compiled as a static prop, without prop data: a lamp post.
+    fn lamp() -> PropTraits {
+        PropTraits {
+            static_prop: true,
+            prop_data: None,
+        }
+    }
+
+    /// A model compiled as a static prop that has prop data all the same: an oil drum.
+    fn drum() -> PropTraits {
+        PropTraits {
+            static_prop: true,
+            prop_data: Some(PropData {
+                base: Some("Metal.Medium".to_owned()),
+                allow_static: false,
+            }),
+        }
+    }
+
+    /// A browser that has listed these models, each with whether it has a collision
+    /// model, and has looked at those given with their traits.
+    fn browser(models: &[(&str, bool, Option<PropTraits>)]) -> ModelBrowserState {
+        let mut state = ModelBrowserState::default();
+        let mut listing = Listing {
+            game: PathBuf::new(),
+            models: Vec::new(),
+            sources: Vec::new(),
+            per_source: HashMap::new(),
+            folders: Folder::default(),
+            collision: HashSet::new(),
+        };
+        for (path, collision, traits) in models {
+            listing.models.push(((*path).to_owned(), vec![0]));
+            if *collision {
+                listing.collision.insert((*path).to_owned());
+            }
+            if let Some(traits) = traits {
+                state.prop_traits.insert((*path).to_owned(), traits.clone());
+            }
+        }
+        state.listing = Some(listing);
+        state
+    }
+
+    #[test]
+    fn the_kind_filters_show_the_models_each_class_takes() {
+        let mut state = browser(&[
+            ("models/a_lamp.mdl", false, Some(lamp())),
+            ("models/b_drum.mdl", true, Some(drum())),
+            ("models/c_drum_without_collision.mdl", false, Some(drum())),
+            ("models/d_citizen.mdl", true, Some(PropTraits::default())),
+            ("models/e_not_looked_at.mdl", true, None),
+        ]);
+        let used = BTreeSet::new();
+        assert_eq!(state.filtered(&used), [0, 1, 2, 3, 4]);
+        state.view.kinds = ModelKinds::Static;
+        assert_eq!(
+            state.filtered(&used),
+            [0],
+            "prop data keeps a model from being a static prop"
+        );
+        state.view.kinds = ModelKinds::Physics;
+        assert_eq!(
+            state.filtered(&used),
+            [1],
+            "a physics prop needs prop data and a collision model"
+        );
+    }
 }

@@ -766,10 +766,10 @@ impl MaterialLoader {
         (models, collision)
     }
 
-    /// Whether a model was compiled with `$staticprop`, as `prop_static` needs. `None`
-    /// when its file cannot be read.
-    pub fn model_is_static(&self, path: &str) -> Option<bool> {
-        crate::model::is_static_prop(&self.filesystem, path)
+    /// What decides which prop classes take a model, read from the start of its file
+    /// alone. `None` when the file cannot be read.
+    pub fn model_prop_traits(&self, path: &str) -> Option<crate::model::PropTraits> {
+        crate::model::prop_traits(&self.filesystem, path)
     }
 
     /// Where a model's `.mdl` lies on disk, when it is a loose file.

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use mallet_content::{parallel_map, MaterialLoader, ModelDetails, ModelVariant, SourceKind};
+use mallet_content::{parallel_map, MaterialLoader, ModelDetails, ModelVariant, SourceKind, PROP_CLASSES};
 use serde_json::{json, Value};
 
 use super::materials::side_arg;
@@ -34,8 +34,6 @@ const MAX_SEQUENCES: usize = 40;
 /// The look thumbnails show: the first skin, and the first choice of every body group,
 /// as an entity without `skin` and `body` keys shows.
 const DEFAULT_VARIANT: ModelVariant = ModelVariant { skin: 0, body: Some(0) };
-/// The prop classes a map usually places a model with.
-const PROP_CLASSES: [&str; 3] = ["prop_static", "prop_dynamic", "prop_physics"];
 /// The classes that take a model the game would remove from the class they stand in for.
 const OVERRIDE_CLASSES: [&str; 2] = ["prop_dynamic_override", "prop_physics_override"];
 

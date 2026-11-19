@@ -72,30 +72,28 @@ pub struct PropData {
     pub allow_static: bool,
 }
 
-/// What a model is, beyond its geometry, for the model browser.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ModelDetails {
-    /// How many skin families the model has; at least one.
-    pub skins: usize,
-    pub body_groups: Vec<BodyGroup>,
+/// What decides which prop classes take a model: whether it was compiled as a static
+/// prop, and its prop data. Both are read from the start of a model's file and its
+/// keyvalues, without the rest of the model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PropTraits {
     /// Compiled with `$staticprop`, as `prop_static` needs.
     pub static_prop: bool,
     /// The model's prop data, when it has any.
     pub prop_data: Option<PropData>,
-    /// The surface property the model was compiled with, such as `metal`.
-    pub surface_prop: String,
-    pub bones: usize,
-    /// The names of the model's animation sequences.
-    pub sequences: Vec<String>,
-    pub vertices: usize,
 }
 
-impl ModelDetails {
-    /// Why entities of a prop class lose this model, by the rules of the Source SDK:
-    /// VBSP's `IsStaticProp` for `prop_static`, and the game's `CBaseProp::Spawn` for the
-    /// classes it spawns. `None` when the class takes the model. `collision` says
-    /// whether the model has a collision model.
-    pub fn prop_class_problem(&self, classname: &str, collision: bool) -> Option<&'static str> {
+/// The prop classes a map usually places a model with, in the order a class is picked
+/// for a model: a static prop where the compiler takes it, then a physics prop, then a
+/// dynamic one.
+pub const PROP_CLASSES: [&str; 3] = ["prop_static", "prop_physics", "prop_dynamic"];
+
+impl PropTraits {
+    /// Why entities of a prop class lose a model with these traits, by the rules of the
+    /// Source SDK: VBSP's `IsStaticProp` for `prop_static`, and the game's
+    /// `CBaseProp::Spawn` for the classes it spawns. `None` when the class takes the
+    /// model. `collision` says whether the model has a collision model.
+    pub fn class_problem(&self, classname: &str, collision: bool) -> Option<&'static str> {
         let classname = classname.trim().to_ascii_lowercase();
         let physics_data = self.prop_data.as_ref().is_some_and(|data| !data.allow_static);
         match classname.as_str() {
@@ -116,6 +114,54 @@ impl ModelDetails {
             }
             _ => None,
         }
+    }
+
+    /// Whether entities of a prop class keep a model with these traits.
+    pub fn works_as(&self, classname: &str, collision: bool) -> bool {
+        self.class_problem(classname, collision).is_none()
+    }
+
+    /// The class to place a model with these traits as: the first of [`PROP_CLASSES`]
+    /// that takes it, or `prop_dynamic_override`, which takes any model.
+    pub fn default_class(&self, collision: bool) -> &'static str {
+        PROP_CLASSES
+            .into_iter()
+            .find(|class| self.works_as(class, collision))
+            .unwrap_or("prop_dynamic_override")
+    }
+}
+
+/// What a model is, beyond its geometry, for the model browser.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelDetails {
+    /// How many skin families the model has; at least one.
+    pub skins: usize,
+    pub body_groups: Vec<BodyGroup>,
+    /// Compiled with `$staticprop`, as `prop_static` needs.
+    pub static_prop: bool,
+    /// The model's prop data, when it has any.
+    pub prop_data: Option<PropData>,
+    /// The surface property the model was compiled with, such as `metal`.
+    pub surface_prop: String,
+    pub bones: usize,
+    /// The names of the model's animation sequences.
+    pub sequences: Vec<String>,
+    pub vertices: usize,
+}
+
+impl ModelDetails {
+    /// What decides which prop classes take this model.
+    pub fn prop_traits(&self) -> PropTraits {
+        PropTraits {
+            static_prop: self.static_prop,
+            prop_data: self.prop_data.clone(),
+        }
+    }
+
+    /// Why entities of a prop class lose this model, as [`PropTraits::class_problem`]
+    /// tells it; `None` when the class takes the model.
+    pub fn prop_class_problem(&self, classname: &str, collision: bool) -> Option<&'static str> {
+        self.prop_traits().class_problem(classname, collision)
     }
 
     /// The `body` value that shows the given choice of each body group.
@@ -145,17 +191,39 @@ fn body_choices(counts: &[usize], body: u32) -> Vec<usize> {
         .collect()
 }
 
+/// The four bytes every compiled model's `.mdl` file starts with.
+const MODEL_MAGIC: &[u8; 4] = b"IDST";
+/// How much of a `.mdl` file's start holds everything [`prop_traits`] reads from it.
+const TRAITS_HEADER_BYTES: usize = 320;
 /// Where the flags of a compiled model lie in its `.mdl` file.
-const FLAGS_OFFSET: u64 = 152;
+const FLAGS_OFFSET: usize = 152;
+/// Where a `.mdl` file says where its keyvalues start, and after it how long they are.
+const KEY_VALUES_OFFSET: usize = 312;
 /// The flag `$staticprop` sets.
 const STATIC_PROP_FLAG: u32 = 0x10;
+/// The longest keyvalues [`prop_traits`] reads. Real ones are a few hundred bytes.
+const MAX_KEY_VALUES_BYTES: u64 = 1024 * 1024;
 
-/// Whether a model was compiled with `$staticprop`, read from the start of its `.mdl`
-/// alone. `None` when the file is missing or cut short.
-pub fn is_static_prop(filesystem: &GameFs, path: &str) -> Option<bool> {
+/// What decides which prop classes take a model, read from the start of its `.mdl` and
+/// its keyvalues alone: two short reads, where loading the model reads all of it and
+/// its vertex files. `None` when the file is missing, cut short or not a model.
+pub fn prop_traits(filesystem: &GameFs, path: &str) -> Option<PropTraits> {
     let file = filesystem.open(&normalize(path))?;
-    let bytes: [u8; 4] = file.read(FLAGS_OFFSET, 4)?.try_into().ok()?;
-    Some(u32::from_le_bytes(bytes) & STATIC_PROP_FLAG != 0)
+    let header = file.read(0, TRAITS_HEADER_BYTES as u64)?;
+    if header.len() < TRAITS_HEADER_BYTES || !header.starts_with(MODEL_MAGIC) {
+        return None;
+    }
+    let number = |at: usize| i32::from_le_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
+    let (start, length) = (number(KEY_VALUES_OFFSET), number(KEY_VALUES_OFFSET + 4));
+    let key_values = (start > 0 && length > 0)
+        .then(|| file.read(start as u64, (length as u64).min(MAX_KEY_VALUES_BYTES)))
+        .flatten()
+        .unwrap_or_default();
+    let text = key_values.split(|byte| *byte == 0).next().unwrap_or_default();
+    Some(PropTraits {
+        static_prop: number(FLAGS_OFFSET) as u32 & STATIC_PROP_FLAG != 0,
+        prop_data: prop_data(&String::from_utf8_lossy(text)),
+    })
 }
 
 /// Loads a model such as `models/props_c17/oildrum001.mdl` from the game's files.
@@ -463,5 +531,95 @@ mod tests {
         assert!(animated.prop_class_problem("prop_static", true).unwrap().contains("$staticprop"));
         assert_eq!(animated.prop_class_problem("prop_dynamic", true), None);
         assert_eq!(animated.prop_class_problem("npc_citizen", false), None);
+    }
+
+    #[test]
+    fn a_model_is_placed_as_the_first_class_that_takes_it() {
+        let data = |allow_static: bool| {
+            Some(PropData {
+                base: Some("Wooden.Large".to_owned()),
+                allow_static,
+            })
+        };
+        let traits = |static_prop: bool, prop_data: Option<PropData>| PropTraits { static_prop, prop_data };
+        assert_eq!(traits(true, None).default_class(true), "prop_static");
+        assert_eq!(traits(true, data(false)).default_class(true), "prop_physics");
+        assert_eq!(traits(true, data(false)).default_class(false), "prop_dynamic_override");
+        assert_eq!(traits(true, data(true)).default_class(true), "prop_static");
+        assert_eq!(traits(false, data(true)).default_class(true), "prop_physics");
+        assert_eq!(traits(false, None).default_class(true), "prop_dynamic");
+        assert!(traits(true, None).works_as("prop_static", false));
+        assert!(!traits(true, data(false)).works_as("prop_static", true));
+    }
+
+    /// The start of a `.mdl` file with these flags, followed by its keyvalues.
+    fn model_file(flags: u32, key_values: &str) -> Vec<u8> {
+        let mut file = vec![0_u8; TRAITS_HEADER_BYTES];
+        file[..4].copy_from_slice(MODEL_MAGIC);
+        file[FLAGS_OFFSET..FLAGS_OFFSET + 4].copy_from_slice(&flags.to_le_bytes());
+        if !key_values.is_empty() {
+            let start = (TRAITS_HEADER_BYTES as i32 + 16).to_le_bytes();
+            let length = (key_values.len() as i32 + 1).to_le_bytes();
+            file[KEY_VALUES_OFFSET..KEY_VALUES_OFFSET + 4].copy_from_slice(&start);
+            file[KEY_VALUES_OFFSET + 4..KEY_VALUES_OFFSET + 8].copy_from_slice(&length);
+            file.extend([0xAA; 16]);
+            file.extend(key_values.as_bytes());
+            file.push(0);
+            file.extend(b"what follows the keyvalues");
+        }
+        file
+    }
+
+    #[test]
+    fn prop_traits_are_read_from_the_start_of_a_model_file() {
+        let dir = std::env::temp_dir().join(format!("mallet-prop-traits-{}", std::process::id()));
+        let models = dir.join("models").join("test");
+        std::fs::create_dir_all(&models).unwrap();
+        let gameinfo = "\"GameInfo\"\n{\n\tFileSystem\n\t{\n\t\tSearchPaths\n\t\t{\n\t\t\tgame \"|gameinfo_path|.\"\n\t\t}\n\t}\n}\n";
+        std::fs::write(dir.join("gameinfo.txt"), gameinfo).unwrap();
+        let bench = "mdlkeyvalue\n{\n\tprop_data\n\t{\n\t\t\"base\" \"Wooden.Large\"\n\t}\n}\n";
+        std::fs::write(models.join("bench.mdl"), model_file(STATIC_PROP_FLAG | 0x4000, bench)).unwrap();
+        std::fs::write(models.join("lamp.mdl"), model_file(STATIC_PROP_FLAG, "")).unwrap();
+        std::fs::write(models.join("citizen.mdl"), model_file(0x4000, "mdlkeyvalue { }")).unwrap();
+        std::fs::write(models.join("short.mdl"), &model_file(STATIC_PROP_FLAG, "")[..200]).unwrap();
+        std::fs::write(models.join("other.mdl"), vec![b'x'; TRAITS_HEADER_BYTES]).unwrap();
+        let filesystem = GameFs::from_gameinfo(&dir).unwrap();
+        let read = |name: &str| prop_traits(&filesystem, &format!("Models\\Test\\{name}.mdl"));
+
+        let bench = read("bench").unwrap();
+        assert!(bench.static_prop);
+        assert_eq!(bench.prop_data.unwrap().base.as_deref(), Some("Wooden.Large"));
+        assert_eq!(
+            read("lamp"),
+            Some(PropTraits {
+                static_prop: true,
+                prop_data: None,
+            })
+        );
+        assert_eq!(read("citizen"), Some(PropTraits::default()));
+        assert_eq!(read("short"), None, "a file cut short is not read");
+        assert_eq!(read("other"), None, "a file that is not a model is not read");
+        assert_eq!(read("missing"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_quick_read_agrees_with_loading_the_whole_model() {
+        let Some(dir) = std::env::var_os("MALLET_GAME_DIR") else {
+            return;
+        };
+        let filesystem = GameFs::with_mounts(std::path::Path::new(&dir), &|_| false).unwrap();
+        for model in [
+            "models/props_c17/oildrum001.mdl",
+            "models/props_c17/bench01a.mdl",
+            "models/props_c17/lamppost03a_on.mdl",
+            "models/props_c17/lamppost03a_off_dynamic.mdl",
+            "models/humans/group01/male_07.mdl",
+        ] {
+            let (_, details) = load_model_variant(&filesystem, model, ModelVariant::default()).unwrap();
+            assert_eq!(prop_traits(&filesystem, model), Some(details.prop_traits()), "{model}");
+        }
+        let bench = prop_traits(&filesystem, "models/props_c17/bench01a.mdl").unwrap();
+        assert_eq!(bench.default_class(true), "prop_physics");
     }
 }

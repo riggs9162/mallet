@@ -564,9 +564,9 @@ impl Default for TextureBrowserView {
 pub enum ModelKinds {
     #[default]
     All,
-    /// Models compiled as static props, which `prop_static` needs.
+    /// Models `prop_static` can show: compiled as static props, without prop data.
     Static,
-    /// Models with a collision model, which physics props need.
+    /// Models `prop_physics` takes: with prop data and a collision model.
     Physics,
 }
 
