@@ -1,5 +1,6 @@
 //! Studio models (`.mdl` with its `.vvd` and `.vtx`), as placed by prop entities.
 
+use mallet_kv::{Block, Item};
 use vmdl::{Mdl, Vtx, Vvd};
 
 use crate::vpk::normalize;
@@ -61,6 +62,16 @@ pub struct BodyGroup {
     pub choices: Vec<String>,
 }
 
+/// The prop data a model was compiled with: the `prop_data` section of its `$keyvalues`,
+/// which makes it a physics prop to the game and the compilers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PropData {
+    /// The entry of the game's `scripts/propdata.txt` it builds on, such as `Wooden.Large`.
+    pub base: Option<String>,
+    /// `allowstatic`: the model may be a static prop all the same.
+    pub allow_static: bool,
+}
+
 /// What a model is, beyond its geometry, for the model browser.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelDetails {
@@ -69,6 +80,8 @@ pub struct ModelDetails {
     pub body_groups: Vec<BodyGroup>,
     /// Compiled with `$staticprop`, as `prop_static` needs.
     pub static_prop: bool,
+    /// The model's prop data, when it has any.
+    pub prop_data: Option<PropData>,
     /// The surface property the model was compiled with, such as `metal`.
     pub surface_prop: String,
     pub bones: usize,
@@ -78,6 +91,33 @@ pub struct ModelDetails {
 }
 
 impl ModelDetails {
+    /// Why entities of a prop class lose this model, by the rules of the Source SDK:
+    /// VBSP's `IsStaticProp` for `prop_static`, and the game's `CBaseProp::Spawn` for the
+    /// classes it spawns. `None` when the class takes the model. `collision` says
+    /// whether the model has a collision model.
+    pub fn prop_class_problem(&self, classname: &str, collision: bool) -> Option<&'static str> {
+        let classname = classname.trim().to_ascii_lowercase();
+        let physics_data = self.prop_data.as_ref().is_some_and(|data| !data.allow_static);
+        match classname.as_str() {
+            "prop_static" if !self.static_prop => {
+                Some("It was not compiled with $staticprop, so VBSP leaves it out of the map.")
+            }
+            "prop_static" if physics_data => {
+                Some("It has prop data, which makes it a physics prop, so VBSP leaves it out of the map.")
+            }
+            "prop_dynamic" | "prop_dynamic_ornament" if physics_data => Some(
+                "It has prop data, which makes it a physics prop, so the game removes it; prop_dynamic_override takes it.",
+            ),
+            "prop_physics" if self.prop_data.is_none() => {
+                Some("It has no prop data, so the game removes it; prop_physics_override takes it.")
+            }
+            name if (name.starts_with("prop_physics") || name == "prop_ragdoll") && !collision => {
+                Some("It has no collision model, so the game removes it as a physics prop.")
+            }
+            _ => None,
+        }
+    }
+
     /// The `body` value that shows the given choice of each body group.
     pub fn body_value(&self, choices: &[usize]) -> u32 {
         let mut value = 0_u32;
@@ -176,6 +216,7 @@ fn read_model(filesystem: &GameFs, path: &str, variant: ModelVariant) -> Result<
         skins: 1,
         body_groups,
         static_prop: mdl.header.flags.contains(vmdl::mdl::ModelFlags::STATIC_PROP),
+        prop_data: mdl.key_values.as_deref().and_then(prop_data),
         surface_prop: mdl.surface_prop.clone(),
         bones: mdl.bones.len(),
         sequences: mdl
@@ -270,6 +311,45 @@ fn read_model(filesystem: &GameFs, path: &str, variant: ModelVariant) -> Result<
     ))
 }
 
+/// The `prop_data` section of a model's keyvalues, which lies at their top or inside
+/// the block that wraps them. Text that cannot be read as keyvalues counts as having
+/// the section when it names it.
+fn prop_data(key_values: &str) -> Option<PropData> {
+    let named = |block: &&Block| block.name.eq_ignore_ascii_case("prop_data");
+    let Ok(items) = mallet_kv::parse(key_values) else {
+        let text = key_values.to_ascii_lowercase();
+        return text.contains("prop_data").then(|| PropData {
+            base: None,
+            allow_static: text.contains("allowstatic"),
+        });
+    };
+    let top: Vec<&Block> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Block(block) => Some(block),
+            Item::Pair(_) => None,
+        })
+        .collect();
+    let section = top
+        .iter()
+        .copied()
+        .find(|block| named(block))
+        .or_else(|| top.iter().flat_map(|block| block.blocks()).find(named))?;
+    let set = |key: &str| {
+        section
+            .get(key)
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .is_some_and(|value| value != 0.0)
+    };
+    Some(PropData {
+        base: section
+            .get("base")
+            .map(|base| base.trim().to_owned())
+            .filter(|base| !base.is_empty()),
+        allow_static: set("allowstatic"),
+    })
+}
+
 /// Where the stored X, Y and Z axes of a model's vertices point in the model's own space.
 ///
 /// A static prop stores its vertices as they are shown. Any other model stores them a
@@ -319,4 +399,69 @@ fn resolve_material(filesystem: &GameFs, directories: &[String], texture: &str) 
         .find(|candidate| filesystem.exists(&format!("materials/{candidate}.vmt")))
         .cloned()
         .unwrap_or_else(|| candidates[0].clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn details(static_prop: bool, prop_data: Option<PropData>) -> ModelDetails {
+        ModelDetails {
+            static_prop,
+            prop_data,
+            ..ModelDetails::default()
+        }
+    }
+
+    #[test]
+    fn prop_data_is_found_in_a_models_keyvalues() {
+        let wrapped = "mdlkeyvalue\n{\n\tprop_data\n\t{\n\t\t\"base\" \"Wooden.Large\"\n\t}\n}\n";
+        assert_eq!(
+            prop_data(wrapped),
+            Some(PropData {
+                base: Some("Wooden.Large".to_owned()),
+                allow_static: false,
+            })
+        );
+        let bare = "\"Prop_Data\" { \"base\" \"Metal.Medium\" \"allowstatic\" \"1\" }";
+        assert!(prop_data(bare).unwrap().allow_static);
+        assert_eq!(prop_data("mdlkeyvalue { \"qc_path\" { \"value\" \"a.qc\" } }"), None);
+        assert_eq!(prop_data(""), None);
+        assert!(prop_data("prop_data { \"base\" \"unclosed").is_some());
+    }
+
+    #[test]
+    fn prop_classes_follow_the_rules_of_the_compiler_and_the_game() {
+        let physics = Some(PropData {
+            base: Some("Wooden.Large".to_owned()),
+            allow_static: false,
+        });
+        let either = Some(PropData {
+            base: None,
+            allow_static: true,
+        });
+        let plain = details(true, None);
+        assert_eq!(plain.prop_class_problem("prop_static", false), None);
+        assert_eq!(plain.prop_class_problem("prop_dynamic", false), None);
+        assert!(plain.prop_class_problem("prop_physics", true).unwrap().contains("no prop data"));
+        assert_eq!(plain.prop_class_problem("prop_physics_override", true), None);
+
+        let bench = details(true, physics.clone());
+        assert!(bench.prop_class_problem("prop_static", true).unwrap().contains("VBSP"));
+        assert!(bench.prop_class_problem("PROP_DYNAMIC", true).unwrap().contains("prop_dynamic_override"));
+        assert_eq!(bench.prop_class_problem("prop_dynamic_override", true), None);
+        assert_eq!(bench.prop_class_problem("prop_physics", true), None);
+        assert!(bench.prop_class_problem("prop_physics", false).unwrap().contains("collision"));
+        assert!(bench.prop_class_problem("prop_physics_multiplayer", false).is_some());
+
+        let allowed = details(true, either);
+        assert_eq!(allowed.prop_class_problem("prop_static", true), None);
+        assert_eq!(allowed.prop_class_problem("prop_dynamic", true), None);
+        assert_eq!(allowed.prop_class_problem("prop_physics", true), None);
+
+        let animated = details(false, None);
+        assert!(animated.prop_class_problem("prop_static", true).unwrap().contains("$staticprop"));
+        assert_eq!(animated.prop_class_problem("prop_dynamic", true), None);
+        assert_eq!(animated.prop_class_problem("npc_citizen", false), None);
+    }
 }

@@ -24,7 +24,7 @@ pub use material::{
 };
 pub use model::{
     is_static_prop, load_model, load_model_variant, BodyGroup, Model, ModelDetails, ModelMesh, ModelVariant,
-    ModelVertex,
+    ModelVertex, PropData,
 };
 pub use physics::{load_collision, parse_collision, CollisionModel, CollisionSolid};
 pub use sound::{decode_sound, load_sound, SoundData};
