@@ -358,8 +358,8 @@ mod tests {
     use glam::DVec3;
     use serde_json::json;
 
-    use super::super::test_game::{error_of, json_of, TestGame};
-    use super::super::{call, run};
+    use super::super::test_game::{call, error_of, json_of, TestGame};
+    use super::super::run;
     use crate::editor::Editor;
 
     const SCRIPT: &str = r#"

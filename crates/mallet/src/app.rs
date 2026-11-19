@@ -392,38 +392,12 @@ impl MalletApp {
         let shared = Arc::clone(&self.editor);
         let ctx = ctx.clone();
         let handler = move |name: &str, arguments: &serde_json::Value| {
-            if name == "screenshot" && arguments.get("viewport").and_then(serde_json::Value::as_str) == Some("window") {
-                return match window_screenshot(&shared, &ctx) {
-                    Ok(png) => mcp::ToolResult::png(png),
-                    Err(message) => mcp::ToolResult::error(message),
-                };
+            if name == "batch" {
+                return tools::batch(&shared, arguments, &mut |name, arguments| {
+                    call_tool(&shared, &ctx, name, arguments)
+                });
             }
-            let result = tools::call(&shared, name, arguments);
-            ctx.request_repaint();
-            // A map handed over by a second copy, opened from Explorer: come to the front.
-            let focus = arguments.get("focus").and_then(serde_json::Value::as_bool) == Some(true);
-            if name == "open_map" && focus {
-                ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(ViewportCommand::Focus);
-            }
-            if name == "compile_map" && !result.is_error {
-                let wait = arguments
-                    .get("wait_seconds")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0);
-                if wait > 0.0 {
-                    wait_for_compile(&shared, Duration::from_secs_f64(wait.min(3600.0)));
-                    let mut editor = editor::lock(&shared);
-                    editor.poll_compile();
-                    return mcp::ToolResult::json(&tools::compile_status_json(&editor, 40));
-                }
-            }
-            if name == "send_input" && !result.is_error {
-                if let Err(message) = wait_for_input(&shared, &ctx) {
-                    return mcp::ToolResult::error(message);
-                }
-            }
-            result
+            call_tool(&shared, &ctx, name, arguments).result
         };
         match mcp::start(port, tools::definitions(), handler) {
             Ok(url) => self.mcp_url = Some(url),
@@ -2265,6 +2239,45 @@ fn compile_status(ui: &mut egui::Ui, editor: &Editor) {
         Some(crate::compile::Outcome::Cancelled) => "Compile cancelled".to_owned(),
     };
     ui.label(text);
+}
+
+/// Runs one MCP tool call, with the parts of it only the window can do: taking a
+/// screenshot of itself, coming to the front for a map handed over by a second copy,
+/// as when one is opened from Explorer, and handling input fed to it. The waits run
+/// without holding the editor.
+fn call_tool(shared: &Mutex<Editor>, ctx: &egui::Context, name: &str, arguments: &serde_json::Value) -> tools::Called {
+    let answer = |result: mcp::ToolResult| tools::Called { result, history: None };
+    if name == "screenshot" && arguments.get("viewport").and_then(serde_json::Value::as_str) == Some("window") {
+        return answer(match window_screenshot(shared, ctx) {
+            Ok(png) => mcp::ToolResult::png(png),
+            Err(message) => mcp::ToolResult::error(message),
+        });
+    }
+    let mut outcome = tools::call(shared, name, arguments);
+    ctx.request_repaint();
+    let focus = arguments.get("focus").and_then(serde_json::Value::as_bool) == Some(true);
+    if name == "open_map" && focus {
+        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+    }
+    if name == "compile_map" && !outcome.result.is_error {
+        let wait = arguments
+            .get("wait_seconds")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        if wait > 0.0 {
+            wait_for_compile(shared, Duration::from_secs_f64(wait.min(3600.0)));
+            let mut editor = editor::lock(shared);
+            editor.poll_compile();
+            outcome.result = mcp::ToolResult::json(&tools::compile_status_json(&editor, 40));
+        }
+    }
+    if name == "send_input" && !outcome.result.is_error {
+        if let Err(message) = wait_for_input(shared, ctx) {
+            outcome.result = mcp::ToolResult::error(message);
+        }
+    }
+    outcome
 }
 
 /// Waits, without holding the editor, until the compile ends or the time is up.

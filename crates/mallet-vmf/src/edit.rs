@@ -1007,6 +1007,12 @@ impl History {
         self.changes
     }
 
+    /// How many steps can be undone. Together with [`History::changes`] it tells what
+    /// an operation added: plain new edits raise both by the same number.
+    pub fn undo_steps(&self) -> usize {
+        self.undo.len()
+    }
+
     /// The edit the next undo applies, if there is one.
     pub fn next_undo(&self) -> Option<&Edit> {
         self.undo.last()

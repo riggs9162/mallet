@@ -20,6 +20,7 @@ use mallet_vmf::geometry::Bounds;
 
 use super::clipboard::{Clipboard, PasteCursor};
 use super::{Editor, Tool, ViewMode, DEFAULT_BLOCK};
+use crate::document::Document;
 use crate::clipper::Clipper;
 use crate::faces::TextureMode;
 use crate::scene::{camera_marker_edges, Overlay, Owner};
@@ -49,6 +50,18 @@ struct AgentTools {
     lifted: Option<mallet_vmf::Side>,
     clipboard: Clipboard,
     paste_cursor: Option<PasteCursor>,
+}
+
+/// Where the undo history of a map stood at one moment, to tell afterwards what was
+/// added to it since.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryMark {
+    /// The map, by its document's serial number.
+    pub map: u64,
+    /// How many steps could be undone.
+    pub steps: usize,
+    /// How many edits, undos and redos the map had seen.
+    pub changes: u64,
 }
 
 /// Everything an agent working in its own view has apart from the window.
@@ -100,6 +113,53 @@ impl Editor {
 
     fn tab_index(&self, id: u64) -> Option<usize> {
         self.tab_ids.iter().position(|tab| *tab == id)
+    }
+
+    /// The map MCP tools work on: the agent's while agents work in their own view, and
+    /// otherwise the one the window shows. It is found without switching to it.
+    fn tool_document(&self) -> Option<&Document> {
+        let index = if self.config.agents.own_view {
+            self.agent_tab()
+        } else {
+            self.active_tab
+        };
+        match self.tabs.get(index) {
+            Some(Some(parked)) if index != self.active_tab => parked.document.as_ref(),
+            _ => self.document.as_ref(),
+        }
+    }
+
+    fn tool_document_mut(&mut self) -> Option<&mut Document> {
+        let index = if self.config.agents.own_view {
+            self.agent_tab()
+        } else {
+            self.active_tab
+        };
+        if index == self.active_tab {
+            return self.document.as_mut();
+        }
+        self.tabs.get_mut(index)?.as_mut()?.document.as_mut()
+    }
+
+    /// Where the undo history of the map MCP tools work on stands now.
+    pub fn tool_history_mark(&self) -> Option<HistoryMark> {
+        self.tool_document().map(|document| HistoryMark {
+            map: document.serial(),
+            steps: document.history.undo_steps(),
+            changes: document.history.changes(),
+        })
+    }
+
+    /// Joins the latest `steps` undo steps of the map MCP tools work on into one, when
+    /// its history still stands at `mark`. Returns whether they were joined.
+    pub fn join_tool_history(&mut self, mark: HistoryMark, steps: usize) -> bool {
+        if self.tool_history_mark() != Some(mark) {
+            return false;
+        }
+        if let Some(document) = self.tool_document_mut() {
+            document.history.join_latest(steps);
+        }
+        true
     }
 
     /// Runs `run` with the agent's tab, camera, views, selection and tools in place of

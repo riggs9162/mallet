@@ -20,7 +20,7 @@ use eframe::egui::Pos2;
 use crate::compile::{self, Outcome, Preset, Severity};
 use crate::config::{self, Config, ToolKind};
 use crate::editor::{
-    Editor, GroupState, MoveOptions, SelectMode, ShotTarget, Tool, ViewMode, MAX_GRID, MIN_GRID,
+    Editor, GroupState, HistoryMark, MoveOptions, SelectMode, ShotTarget, Tool, ViewMode, MAX_GRID, MIN_GRID,
 };
 use crate::face_pick::PickMode;
 use crate::faces::{FaceChange, FaceInfo, FaceValues};
@@ -30,6 +30,7 @@ use crate::prop_brushes::{PropBrushOptions, PropShape};
 use crate::scene::Owner;
 use mallet_vmf::texture::Justify;
 
+mod batch;
 mod materials;
 mod models;
 mod soundscapes;
@@ -68,6 +69,7 @@ pub enum Learned {
 pub fn definitions() -> Value {
     let mut tools = editor_definitions();
     if let Value::Array(list) = &mut tools {
+        list.push(batch::definition());
         list.extend(materials::definitions());
         list.extend(models::definitions());
         list.extend(soundscapes::definitions());
@@ -1119,24 +1121,52 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     })
 }
 
+/// What a tool call answered, and what it did to the undo history of the map it worked
+/// on: where the history stood before the call and after it. `None` for calls that
+/// cannot change a map.
+pub struct Called {
+    pub result: ToolResult,
+    pub history: Option<(HistoryMark, HistoryMark)>,
+}
+
 /// Runs one tool call for the MCP server, holding the editor only as long as the tool
 /// needs it. A content tool lets go of it before it reads and draws, so the window keeps
 /// drawing and the user keeps working meanwhile.
-pub fn call(shared: &Mutex<Editor>, name: &str, args: &Value) -> ToolResult {
+pub fn call(shared: &Mutex<Editor>, name: &str, args: &Value) -> Called {
     if !CONTENT_TOOLS.contains(&name) {
-        return run(&mut crate::editor::lock(shared), name, args);
+        let mut editor = crate::editor::lock(shared);
+        let before = editor.tool_history_mark();
+        let result = run(&mut editor, name, args);
+        let after = editor.tool_history_mark();
+        return Called {
+            result,
+            history: before.zip(after),
+        };
     }
     let job = {
         let mut editor = crate::editor::lock(shared);
-        if editor.config.agents.own_view {
-            editor.with_agent_view(|editor| content_job(editor, name, args))
-        } else {
-            content_job(&mut editor, name, args)
-        }
+        in_view(&mut editor, |editor| content_job(editor, name, args))
     };
-    match job {
+    let result = match job {
         Ok(job) => job(&mut |learned| keep(&mut crate::editor::lock(shared), learned)),
         Err(message) => ToolResult::error(message),
+    };
+    Called { result, history: None }
+}
+
+/// Runs the `batch` tool: several calls in one request. `call` runs one of them the way
+/// the server runs a call that comes alone.
+pub fn batch(shared: &Mutex<Editor>, args: &Value, call: &mut dyn FnMut(&str, &Value) -> Called) -> ToolResult {
+    batch::run(shared, args, call)
+}
+
+/// Runs `work` where MCP tools work: in the agent's own view while Mallet Options keeps
+/// agents there, and otherwise in the window's.
+fn in_view<R>(editor: &mut Editor, work: impl FnOnce(&mut Editor) -> R) -> R {
+    if editor.config.agents.own_view {
+        editor.with_agent_view(work)
+    } else {
+        work(editor)
     }
 }
 
@@ -1301,6 +1331,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             editor.export_copy(&path)?;
             Ok(ToolResult::text(format!("Exported a copy to {}", path.display())))
         }
+        "batch" => Err("batch is run by the MCP server itself, and a batch cannot hold another batch".to_owned()),
         "list_entities" => Ok(ToolResult::json(&list_entities(editor, args)?)),
         "get_entity" => {
             let id = id_arg(args)?;
@@ -2494,9 +2525,23 @@ fn transform_selection(editor: &mut Editor, args: &Value) -> Result<(), String> 
     Ok(())
 }
 
-/// A world axis named `x`, `y` or `z`, as an index.
-/// The `paste` tool: where to paste and the Paste Special options.
+/// The `paste` tool: pastes the clipboard where and how the arguments say.
 fn paste(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let (at, options) = paste_options(editor, args)?;
+    if options.around_pivot && editor.clipboard.pivot.is_none() {
+        return Err(
+            "no pivot was placed when the objects were copied; set one with set_pivot and copy again".to_owned(),
+        );
+    }
+    editor.paste(at, &options)?;
+    Ok(())
+}
+
+/// Where to paste and the Paste Special options, as `paste` and `insert_map` take them.
+fn paste_options(
+    editor: &Editor,
+    args: &Value,
+) -> Result<(crate::editor::PasteAt, crate::editor::PasteOptions), String> {
     use crate::editor::{PasteAt, PasteOptions};
     let at = match args.get("at") {
         None | Some(Value::Null) => PasteAt::Original,
@@ -2527,15 +2572,10 @@ fn paste(editor: &mut Editor, args: &Value) -> Result<(), String> {
         unique_names: flag("unique_names"),
         group: flag("group"),
     };
-    if options.around_pivot && editor.clipboard.pivot.is_none() {
-        return Err(
-            "no pivot was placed when the objects were copied; set one with set_pivot and copy again".to_owned(),
-        );
-    }
-    editor.paste(at, &options)?;
-    Ok(())
+    Ok((at, options))
 }
 
+/// A world axis named `x`, `y` or `z`, as an index.
 fn axis_arg(args: &Value, key: &str) -> Result<usize, String> {
     match string_arg(args, key)?.to_ascii_lowercase().as_str() {
         "x" => Ok(0),
@@ -3664,6 +3704,11 @@ mod test_game {
         file[57..61].copy_from_slice(&(-1_i32).to_le_bytes());
         file.extend(color.iter().copied().cycle().take((width * height * 4) as usize));
         file
+    }
+
+    /// Runs a tool call the way the server does and gives its answer.
+    pub fn call(shared: &std::sync::Mutex<Editor>, name: &str, args: &Value) -> ToolResult {
+        super::call(shared, name, args).result
     }
 
     /// The JSON a tool answered with.

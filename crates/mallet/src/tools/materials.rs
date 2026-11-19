@@ -437,8 +437,8 @@ mod tests {
     use glam::DVec3;
     use serde_json::json;
 
-    use super::super::test_game::{error_of, json_of, picture_of, TestGame};
-    use super::super::{call, run};
+    use super::super::test_game::{call, error_of, json_of, picture_of, TestGame};
+    use super::super::run;
 
     fn game(name: &str) -> TestGame {
         let game = TestGame::new(name);

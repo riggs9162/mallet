@@ -47,7 +47,7 @@ mod sculpt;
 mod views;
 mod visgroups;
 
-pub use agent::AgentView;
+pub use agent::{AgentView, HistoryMark};
 pub use autosave::{AutosaveState, Rescued};
 pub use brush_entities::DEFAULT_SOLID_ENTITY;
 pub use displacements::{
