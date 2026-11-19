@@ -5,16 +5,19 @@
 //! another Mallet window can paste them too.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::Path;
 
 use glam::{DMat4, DVec2, DVec3};
-use mallet_vmf::edit::Edit;
+use mallet_vmf::edit::{hidden_ids, Edit};
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds};
 use mallet_vmf::kv::{self, Block, Item};
 use mallet_vmf::sides::{CopiedSides, OtherFaces};
 use mallet_vmf::transform::{self, around, clean_vec3, TextureLock};
+use mallet_vmf::visgroup::{self, VisGroup};
 use mallet_vmf::{format_vec3, parse_vec3, Entity, EntityItem, IdAllocator, Solid, SolidItem, Vmf};
 
 use super::{find_entity, Editor, SelectMode};
+use crate::document::Document;
 use crate::scene::{Owner, Remap};
 use crate::transform::rotation_xyz;
 use crate::view2d::Axis2D;
@@ -447,6 +450,149 @@ impl Editor {
         };
         Ok(count)
     }
+}
+
+impl Editor {
+    /// Pastes every brush and entity of another map file into the open map and selects
+    /// them, as one undo step, the way copying everything in that map and pasting it here
+    /// would. Objects the file hides come in shown. The file's VisGroups come along:
+    /// each is matched to a group of the open map with the same name, or added, and the
+    /// pasted objects stay members. Returns how many objects were added.
+    pub fn insert_map(&mut self, path: &Path, at: PasteAt, options: &PasteOptions) -> Result<usize, String> {
+        let target = &self.document.as_ref().ok_or("no map is open")?.vmf;
+        let mut source = Document::load(path)
+            .map_err(|error| format!("Could not open {}: {error}", path.display()))?
+            .vmf;
+        let (solids, entities) = hidden_ids(&source);
+        if !solids.is_empty() || !entities.is_empty() {
+            let show = Edit::SetHidden {
+                solids,
+                entities,
+                hidden: false,
+            };
+            show.apply(&mut source).map_err(|error| error.to_string())?;
+        }
+        let mut inserted = Clipboard {
+            solids: source
+                .world()
+                .map(|world| world.solids().cloned().collect())
+                .unwrap_or_default(),
+            entities: source.entities().cloned().collect(),
+            pivot: None,
+        };
+        if inserted.is_empty() {
+            return Err(format!("{} has no brushes or entities to insert", path.display()));
+        }
+        let mut groups = visgroup::groups(target);
+        let before = groups.clone();
+        let renumbered = merge_groups(&mut groups, &visgroup::groups(&source));
+        for solid in &mut inserted.solids {
+            regroup(solid_editor(solid), &renumbered);
+        }
+        for entity in &mut inserted.entities {
+            regroup(entity_editor(entity), &renumbered);
+        }
+        let grouped = groups != before;
+        if grouped {
+            self.apply_edit(&visgroup::set_groups(&groups))?;
+        }
+        let own = std::mem::replace(&mut self.clipboard, inserted);
+        let pasted = self.paste(at, options);
+        self.clipboard = own;
+        match pasted {
+            Ok(count) => {
+                if grouped {
+                    if let Some(document) = self.document.as_mut() {
+                        document.history.join_latest(2);
+                    }
+                }
+                self.message = format!("Inserted {} from {}", objects(count), path.display());
+                Ok(count)
+            }
+            Err(error) => {
+                if grouped {
+                    self.step_history(false)?;
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Adds the VisGroups of an inserted map to those of the map it goes into. A group whose
+/// name one of `groups` has already becomes that group, at any depth; the others are
+/// added with new ids, nested as they were. Returns the id each inserted group has now.
+fn merge_groups(groups: &mut Vec<VisGroup>, inserted: &[VisGroup]) -> HashMap<u32, u32> {
+    fn named(groups: &[VisGroup], name: &str) -> Option<u32> {
+        groups.iter().find_map(|group| {
+            if group.name.eq_ignore_ascii_case(name) {
+                Some(group.id)
+            } else {
+                named(&group.children, name)
+            }
+        })
+    }
+    fn place(all: &mut Vec<VisGroup>, under: Option<u32>, group: VisGroup) {
+        fn children_of(groups: &mut [VisGroup], id: u32) -> Option<&mut Vec<VisGroup>> {
+            for group in groups {
+                if group.id == id {
+                    return Some(&mut group.children);
+                }
+                if let Some(found) = children_of(&mut group.children, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        match under.and_then(|id| children_of(all, id)) {
+            Some(children) => children.push(group),
+            None => all.push(group),
+        }
+    }
+    fn merge(all: &mut Vec<VisGroup>, under: Option<u32>, inserted: &[VisGroup], ids: &mut HashMap<u32, u32>) {
+        for group in inserted {
+            let id = match named(all, &group.name) {
+                Some(id) => id,
+                None => {
+                    let id = visgroup::free_id(all);
+                    let added = VisGroup {
+                        id,
+                        name: group.name.clone(),
+                        color: group.color,
+                        children: Vec::new(),
+                    };
+                    place(all, under, added);
+                    id
+                }
+            };
+            ids.insert(group.id, id);
+            merge(all, Some(id), &group.children, ids);
+        }
+    }
+    let mut ids = HashMap::new();
+    merge(groups, None, inserted, &mut ids);
+    ids
+}
+
+/// Points an inserted object's `editor` block at the VisGroups its own became, and has
+/// every group show it.
+fn regroup(editor: &mut Block, renumbered: &HashMap<u32, u32>) {
+    let mut kept: Vec<u32> = Vec::new();
+    for id in visgroup::group_ids(editor) {
+        if let Some(id) = renumbered.get(&id).filter(|id| !kept.contains(id)) {
+            kept.push(*id);
+        }
+    }
+    let state = ["visgroupid", "visgroupshown", "visgroupautoshown"];
+    editor.items.retain(|item| match item {
+        Item::Pair(pair) => !state.iter().any(|key| pair.key.eq_ignore_ascii_case(key)),
+        Item::Block(_) => true,
+    });
+    for id in kept {
+        editor.push_pair("visgroupid", id.to_string());
+    }
+    editor.push_pair("visgroupshown", "1");
+    editor.push_pair("visgroupautoshown", "1");
 }
 
 impl PastePlacing {

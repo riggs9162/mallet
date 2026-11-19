@@ -163,6 +163,28 @@ fn editor_definitions() -> Value {
             &[],
         ),
         tool(
+            "insert_map",
+            "Paste every brush and entity of another map file, a .vmf or a .mallet, into the open map and \
+             select them, as one undo step: the way to bring a generated piece or a prefab into a map without \
+             opening it in a tab. The objects get fresh ids, overlays keep to the faces that come with them, \
+             objects the file hides come in shown, and the file's VisGroups come along, each joining the open \
+             map's group of the same name or added to it. They land where the file has them, or with at \
+             centred on a point; copies, offset, rotation, prefix, suffix, unique_names and group work as in \
+             paste.",
+            json!({
+                "path": { "type": "string", "description": "Absolute path to the .vmf or .mallet file to insert." },
+                "at": { "description": "\"original\" (default): where the file has the objects; or [x, y, z] to centre them there." },
+                "copies": { "type": "integer", "minimum": 1, "maximum": crate::editor::MAX_COPIES },
+                "offset": vec3,
+                "rotation": vec3,
+                "prefix": { "type": "string" },
+                "suffix": { "type": "string" },
+                "unique_names": { "type": "boolean" },
+                "group": { "type": "boolean" }
+            }),
+            &["path"],
+        ),
+        tool(
             "list_entities",
             "List entities with their id, classname, targetname, origin and brush count. Includes the world.",
             json!({
@@ -1351,6 +1373,17 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             }
             editor.reload()?;
             Ok(ToolResult::json(&status_json(editor)))
+        }
+        "insert_map" => {
+            let path = PathBuf::from(string_arg(args, "path")?);
+            let (at, options) = paste_options(editor, args)?;
+            if options.around_pivot {
+                return Err("a map file has no pivot to turn its objects around; leave around_pivot out".to_owned());
+            }
+            let count = editor.insert_map(&path, at, &options)?;
+            let mut selection = selection_json(editor);
+            selection["inserted"] = json!(count);
+            Ok(ToolResult::json(&selection))
         }
         "batch" => Err("batch is run by the MCP server itself, and a batch cannot hold another batch".to_owned()),
         "list_entities" => Ok(ToolResult::json(&list_entities(editor, args)?)),
@@ -3777,6 +3810,8 @@ mod tests {
 
     use super::test_game::{error_of, json_of};
     use super::*;
+    use crate::editor::MoveOptions;
+    use mallet_vmf::visgroup;
 
     /// A file in the system's temporary folder, removed again when dropped.
     struct TempMap(PathBuf);
@@ -3784,6 +3819,10 @@ mod tests {
     impl TempMap {
         fn new(name: &str) -> Self {
             Self(std::env::temp_dir().join(format!("mallet-tools-{name}-{}.vmf", std::process::id())))
+        }
+
+        fn path(&self) -> String {
+            self.0.display().to_string()
         }
 
         /// Writes the editor's map to the file without making it the editor's file.
@@ -3841,5 +3880,57 @@ mod tests {
 
         let mut unsaved = self::editor();
         assert!(error_of(&run(&mut unsaved, "reload_map", &json!({}))).contains("never been saved"));
+    }
+
+    #[test]
+    fn another_map_is_inserted_with_its_visgroups() {
+        let file = TempMap::new("insert");
+        let mut piece = editor();
+        block(&mut piece, 0.0);
+        block(&mut piece, 64.0);
+        piece.select_all();
+        piece.selection_to_new_visgroup("Walls", MoveOptions::default()).unwrap();
+        let hidden = block(&mut piece, 128.0);
+        piece.select([Owner::Solid(hidden)], SelectMode::Replace);
+        piece.selection_to_new_visgroup("Props", MoveOptions::default()).unwrap();
+        piece.hide_selection().unwrap();
+        piece.create_entity("info_target", DVec3::new(16.0, 16.0, 64.0), &[]).unwrap();
+        file.write(&mut piece);
+
+        let mut editor = editor();
+        block(&mut editor, -512.0);
+        let walls = editor.create_visgroup("walls", None).unwrap();
+        editor.clear_selection();
+        let steps = editor.document.as_ref().unwrap().history.undo_steps();
+
+        let args = json!({ "path": file.path(), "offset": [0, 256, 0] });
+        let inserted = json_of(&run(&mut editor, "insert_map", &args));
+        assert_eq!(inserted["inserted"], 4);
+        assert_eq!(inserted["solids"].as_array().unwrap().len(), 3, "the hidden brush comes in shown");
+        assert_eq!(inserted["bounds"]["min"], json!([0.0, 256.0, 0.0]));
+        assert_eq!((editor.scene.solid_count, editor.scene.entity_count), (4, 1));
+
+        let vmf = &editor.document.as_ref().unwrap().vmf;
+        let groups = visgroup::groups(vmf);
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, ["walls", "Props"], "a group of the same name is joined, another is added");
+        let members = |id: u32| {
+            visgroup::objects(vmf)
+                .iter()
+                .filter(|object| object.groups.contains(&id))
+                .count()
+        };
+        assert_eq!(members(walls), 2);
+        assert_eq!(members(groups[1].id), 1);
+        assert!(visgroup::objects(vmf).iter().all(|object| !object.hidden));
+
+        assert_eq!(editor.document.as_ref().unwrap().history.undo_steps(), steps + 1);
+        assert!(editor.step_history(false).unwrap());
+        assert_eq!((editor.scene.solid_count, editor.scene.entity_count), (1, 0));
+        let groups = visgroup::groups(&editor.document.as_ref().unwrap().vmf);
+        assert_eq!(groups.len(), 1, "undo takes the added group back too");
+
+        let missing = run(&mut editor, "insert_map", &json!({ "path": "Z:/no/such/map.vmf" }));
+        assert!(error_of(&missing).contains("Could not open"));
     }
 }
