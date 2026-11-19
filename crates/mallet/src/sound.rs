@@ -170,12 +170,12 @@ impl SoundFiles {
     }
 }
 
-/// What a worker thread read of the game's scripts.
-struct LoadedScripts {
-    soundscapes: SoundscapeLibrary,
-    soundscape_files: usize,
-    game_sounds: Option<SoundScripts>,
-    errors: Vec<String>,
+/// What was read of the game's scripts.
+pub(crate) struct LoadedScripts {
+    pub soundscapes: SoundscapeLibrary,
+    pub soundscape_files: usize,
+    pub game_sounds: Option<SoundScripts>,
+    pub errors: Vec<String>,
 }
 
 /// The soundscape scripts and game sound scripts of the game, for one map.
@@ -250,7 +250,7 @@ impl Scripts {
 /// Reads the soundscape scripts the way the client does: every file the manifest lists,
 /// then the map's own `scripts/soundscapes_<map>.txt` unless the manifest listed it.
 /// With `game_sounds`, also the game sound scripts and the map's `_level_sounds` file.
-fn load_scripts(filesystem: &GameFs, map_name: &str, game_sounds: bool) -> LoadedScripts {
+pub(crate) fn load_scripts(filesystem: &GameFs, map_name: &str, game_sounds: bool) -> LoadedScripts {
     let mut scripts = LoadedScripts {
         soundscapes: SoundscapeLibrary::default(),
         soundscape_files: 0,
@@ -774,15 +774,7 @@ impl SoundPreview {
         let scene = frame.scene;
         let stops =
             |name: Option<&str>| name.is_none_or(|name| solid.get(&name.to_ascii_lowercase()).copied().unwrap_or(true));
-        let brush_blocked = |from: DVec3, to: DVec3| {
-            scene.brush_line_blocked(from, to, |mesh, face| {
-                let entity_solid = match mesh.owner {
-                    Some(Owner::Entity(entity)) => !map.non_solid.contains(&entity),
-                    _ => true,
-                };
-                entity_solid && stops(face.material.as_deref())
-            })
-        };
+        let brush_blocked = |from: DVec3, to: DVec3| sight_blocked(scene, &solid, from, to);
         let world_blocked = |from: DVec3, to: DVec3| {
             scene.brush_line_blocked(from, to, |mesh, face| {
                 let world = match mesh.owner {
@@ -971,37 +963,9 @@ impl SoundPreview {
         self.player.stop(&mut channels);
     }
 
-    /// Looks up which of the scene's brush materials stop traces: everything but the
-    /// tool materials the compilers remove, such as triggers, clips and hints.
+    /// Looks up which of the scene's brush materials stop traces.
     fn learn_materials(&mut self, scene: &Scene, materials: Option<&mut Materials>) {
-        let names: BTreeSet<String> = scene
-            .meshes
-            .iter()
-            .flat_map(|mesh| &mesh.faces)
-            .filter(|face| face.side.is_some())
-            .filter_map(|face| face.material.as_deref())
-            .map(str::to_ascii_lowercase)
-            .filter(|name| !self.solid_materials.contains_key(name))
-            .collect();
-        if names.is_empty() {
-            return;
-        }
-        match materials {
-            Some(materials) => {
-                let list: Vec<&str> = names.iter().map(String::as_str).collect();
-                let found = materials.materials(&list);
-                for (name, material) in names.iter().zip(found) {
-                    self.solid_materials
-                        .insert(name.clone(), material.surface != Surface::Tool);
-                }
-            }
-            None => {
-                for name in names {
-                    let solid = !UNSOLID_TOOL_NAMES.iter().any(|tool| name.ends_with(tool));
-                    self.solid_materials.insert(name, solid);
-                }
-            }
-        }
+        learn_solid_materials(&mut self.solid_materials, scene, materials);
     }
 
     /// Starts the `ambient_generic`s that play from the start, follows edits to them,
@@ -1262,6 +1226,61 @@ impl SoundPreview {
             ambient_generics,
         }
     }
+}
+
+/// Looks up which of a scene's brush materials stop traces, by lower-case name, for the
+/// ones `solid` does not know yet: everything but the tool materials the compilers
+/// remove, such as triggers, clips and hints.
+pub(crate) fn learn_solid_materials(
+    solid: &mut HashMap<String, bool>,
+    scene: &Scene,
+    materials: Option<&mut Materials>,
+) {
+    let names: BTreeSet<String> = scene
+        .meshes
+        .iter()
+        .flat_map(|mesh| &mesh.faces)
+        .filter(|face| face.side.is_some())
+        .filter_map(|face| face.material.as_deref())
+        .map(str::to_ascii_lowercase)
+        .filter(|name| !solid.contains_key(name))
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    match materials {
+        Some(materials) => {
+            let list: Vec<&str> = names.iter().map(String::as_str).collect();
+            let found = materials.materials(&list);
+            for (name, material) in names.iter().zip(found) {
+                solid.insert(name.clone(), material.surface != Surface::Tool);
+            }
+        }
+        None => {
+            for name in names {
+                let stops = !UNSOLID_TOOL_NAMES.iter().any(|tool| name.ends_with(tool));
+                solid.insert(name, stops);
+            }
+        }
+    }
+}
+
+/// Whether a solid brush stands between two points, as the trace the game runs between
+/// a soundscape entity and the player sees it: brush entities that are not solid and
+/// tool materials let it through. `solid` is what [`learn_solid_materials`] found out.
+pub(crate) fn sight_blocked(scene: &Scene, solid: &HashMap<String, bool>, from: DVec3, to: DVec3) -> bool {
+    let map = &scene.sounds;
+    scene.brush_line_blocked(from, to, |mesh, face| {
+        let entity_solid = match mesh.owner {
+            Some(Owner::Entity(entity)) => !map.non_solid.contains(&entity),
+            _ => true,
+        };
+        let stops = face
+            .material
+            .as_deref()
+            .is_none_or(|name| solid.get(&name.to_ascii_lowercase()).copied().unwrap_or(true));
+        entity_solid && stops
+    })
 }
 
 /// How a voice should sound from where the listener is, as the engine spreads a

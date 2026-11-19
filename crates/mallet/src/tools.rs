@@ -32,6 +32,7 @@ use mallet_vmf::texture::Justify;
 
 mod materials;
 mod models;
+mod soundscapes;
 
 /// How many entities `list_entities` returns when no limit is given.
 const DEFAULT_LIST_LIMIT: u64 = 200;
@@ -42,11 +43,13 @@ const NO_GAME: &str = "choose a game folder first, with set_game_dir or in Malle
 
 /// The tools that read and draw the game's content, which takes a while. Each gathers
 /// what it needs from the editor and hands back a [`Job`] that does the rest.
-const CONTENT_TOOLS: [&str; 4] = [
+const CONTENT_TOOLS: [&str; 6] = [
     "preview_materials",
     "describe_material",
     "preview_models",
     "describe_model",
+    "list_soundscapes",
+    "describe_soundscape",
 ];
 
 /// The slow part of a content tool, which runs without the editor: it has taken what it
@@ -67,6 +70,7 @@ pub fn definitions() -> Value {
     if let Value::Array(list) = &mut tools {
         list.extend(materials::definitions());
         list.extend(models::definitions());
+        list.extend(soundscapes::definitions());
     }
     tools
 }
@@ -1069,7 +1073,8 @@ fn editor_definitions() -> Value {
              ambient_generics as the game sets them up. With soundscapes, also the names of the game's \
              soundscapes that contain that text, and with describe what one soundscape plays, line by line with \
              the sound positions it needs; both need the preview on, the soundscape browser open or a soundscape \
-             being listened to, so the scripts are read. listen plays a soundscape by name around the camera in \
+             being listened to, so the scripts are read, which list_soundscapes and describe_soundscape do \
+             not. listen plays a soundscape by name around the camera in \
              place of the map's, as the game's playsoundscape command does, and an empty name goes back to the \
              map's. enabled turns the preview on or off; reload reads the game's soundscape and sound scripts \
              again. Settings are under \"sound\" in get_settings and \
@@ -1142,6 +1147,8 @@ fn content_job(editor: &mut Editor, name: &str, args: &Value) -> Result<Job, Str
         "describe_material" => materials::describe(editor, args),
         "preview_models" => models::preview(editor, args),
         "describe_model" => models::describe(editor, args),
+        "list_soundscapes" => soundscapes::list(editor, args),
+        "describe_soundscape" => soundscapes::describe(editor, args),
         _ => Err(format!("unknown tool \"{name}\"")),
     }
 }
@@ -2202,6 +2209,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         }
         "set_view_2d" => set_view_2d(editor, args),
         "list_lights" => Ok(ToolResult::json(&lights_json(editor, args)?)),
+        "soundscape_at" => soundscapes::at_points(editor, args),
         "sound_preview" => {
             if let Some(enabled) = optional_flag(args, "enabled")? {
                 editor.config.sound.preview = enabled;
