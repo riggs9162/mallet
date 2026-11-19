@@ -9,7 +9,7 @@ use egui_phosphor::regular as icon;
 use mallet_vmf::light::{LightingGroup, CATALOGUE};
 use mallet_vmf::primitive::Shape;
 
-use super::{run, save_as_dialog, MalletApp};
+use super::{run, save_map, MalletApp};
 use crate::editor::{Editor, PickMode, Tool};
 use crate::keymap::Action;
 use crate::transform::{GizmoMode, HandleMode};
@@ -689,11 +689,7 @@ impl MalletApp {
                 if editor.switch_tab(index).is_err() {
                     return;
                 }
-                if editor.is_untitled() {
-                    save_as_dialog(editor);
-                } else {
-                    let _ = editor.save(None);
-                }
+                save_map(editor);
                 if !editor.tabs()[editor.active_tab()].dirty {
                     let _ = editor.close_tab(editor.active_tab());
                 }

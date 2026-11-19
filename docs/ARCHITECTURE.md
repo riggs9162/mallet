@@ -192,6 +192,16 @@ so all other code only ever deals with one map; switching tabs parks that state 
 renderer are shared, so textures load once for every tab. GPU caches are keyed by the
 scene's generation numbers, which are unique across tabs, so a switch simply redraws.
 
+Closing a tab with unsaved changes asks first (`MalletApp::close_dialog`), and closing
+the window asks about every such tab (`app/quit.rs`). The frame that sees the close
+request answers it with `ViewportCommand::CancelClose` and starts asking, one tab at a
+time, each brought to the front for its question. A tab the user chooses not to save is
+only remembered by its lasting id, so nothing is thrown away before the window really
+closes and Cancel leaves every map as it was. Once no tab is left to ask about,
+`ViewportCommand::Close` is sent and that close request is let through. Mallet then shuts
+down correctly and removes its autosave marker, so maps given up this way are not offered
+back at the next start.
+
 ## Autosave and crash recovery
 
 `autosave.rs` keeps copies of maps with unsaved changes in the autosave folder, named

@@ -323,6 +323,8 @@ pub struct MapState {
 
 /// What a tab shows in the tab strip.
 pub struct TabInfo {
+    /// The tab's lasting id, which stays its own while tabs before it open or close.
+    pub id: u64,
     pub title: String,
     /// Full path, or `untitled`.
     pub path: String,
@@ -623,8 +625,9 @@ pub fn lock(editor: &Mutex<Editor>) -> MutexGuard<'_, Editor> {
 impl Editor {
     /// The open tabs, in order.
     pub fn tabs(&self) -> Vec<TabInfo> {
-        let describe = |document: Option<&Document>| match document {
+        let describe = |id: u64, document: Option<&Document>| match document {
             Some(document) => TabInfo {
+                id,
                 title: document.file_name(),
                 path: document.display_path(),
                 dirty: document.dirty,
@@ -635,6 +638,7 @@ impl Editor {
                     .map(|backup| backup.file.clone()),
             },
             None => TabInfo {
+                id,
                 title: "empty".to_owned(),
                 path: String::new(),
                 dirty: false,
@@ -643,11 +647,12 @@ impl Editor {
         };
         self.tabs
             .iter()
+            .zip(&self.tab_ids)
             .enumerate()
-            .map(|(index, parked)| match parked {
-                _ if index == self.active_tab => describe(self.document.as_ref()),
-                Some(map) => describe(map.document.as_ref()),
-                None => describe(None),
+            .map(|(index, (parked, id))| match parked {
+                _ if index == self.active_tab => describe(*id, self.document.as_ref()),
+                Some(map) => describe(*id, map.document.as_ref()),
+                None => describe(*id, None),
             })
             .collect()
     }

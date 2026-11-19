@@ -19,6 +19,7 @@ mod paint_select;
 mod paste_special;
 mod problems_window;
 mod properties;
+mod quit;
 mod recovery;
 mod run_map;
 mod soundscape_browser;
@@ -302,6 +303,8 @@ pub struct MalletApp {
     /// The autosaved copies an earlier Mallet left when it did not shut down correctly,
     /// until the user has said which to restore.
     recovery: Option<recovery::Recovery>,
+    /// The questions about maps with unsaved changes, while Mallet is closing.
+    quit: quit::Quit,
 }
 
 impl MalletApp {
@@ -361,6 +364,7 @@ impl MalletApp {
             entity_report: entity_report::EntityReport::default(),
             presence: Presence::start(),
             recovery: recovery::Recovery::find(),
+            quit: quit::Quit::default(),
         };
         let mut fonts = egui::FontDefinitions::default();
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -540,6 +544,7 @@ impl MalletApp {
                     ui.separator();
                     if ui.button("Exit").clicked() {
                         ctx.send_viewport_cmd(ViewportCommand::Close);
+                        ui.close_menu();
                     }
                 });
                 ui.menu_button("Edit", |ui| {
@@ -2007,6 +2012,7 @@ impl MalletApp {
         self.key_hints(ctx, editor);
         self.tool_palette(ctx, editor);
         self.side_panel(ctx, editor);
+        self.quit_dialog(ctx, editor);
         self.close_dialog(ctx, editor);
         self.recovery_window(ctx, editor);
         self.tie_prompt_window(ctx, editor);
@@ -2740,13 +2746,7 @@ fn run(action: Action, editor: &mut Editor) {
             }
         }
         Action::NewFile => editor.new_tab(),
-        Action::SaveFile => {
-            if editor.is_untitled() {
-                save_as_dialog(editor);
-            } else {
-                let _ = editor.save(None);
-            }
-        }
+        Action::SaveFile => save_map(editor),
         Action::Undo => {
             let _ = editor.step_history(false);
         }
@@ -3054,6 +3054,16 @@ fn on_off(on: bool) -> &'static str {
         "on"
     } else {
         "off"
+    }
+}
+
+/// File > Save: saves the open map, asking where to when it has never been saved. The map
+/// keeps its unsaved changes when that question is cancelled or the file cannot be written.
+fn save_map(editor: &mut Editor) {
+    if editor.is_untitled() {
+        save_as_dialog(editor);
+    } else {
+        let _ = editor.save(None);
     }
 }
 

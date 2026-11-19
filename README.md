@@ -129,6 +129,7 @@ These follow Hammer++'s default keybindings.
 | Ctrl+N / Ctrl+O / Ctrl+S | New map tab / open in a tab / save (a new map asks where to save) |
 | File > Recent Maps | The maps opened or saved last, the latest first (20 unless Mallet Options > Files says otherwise) |
 | Ctrl+F4 / Ctrl+Tab / Ctrl+Shift+Tab | Close tab (asks about unsaved changes) / next tab / previous tab |
+| Alt+F4, File > Exit or the window's close button | Close Mallet. Each map with unsaved changes is asked about first, as in Hammer: save it, close without saving it, or cancel and keep working. Nothing is thrown away until Mallet really closes |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste the selection; Shift+Delete, Ctrl+Insert and Shift+Insert work too. Paste centres the objects under the cursor in a 2D view, snapped to the grid. In a 3D view it sets them down on the brush face under the cursor: on a floor, against a wall or under a ceiling. They then follow the mouse from face to face until a click drops them; Escape takes the paste back. With the cursor over neither, they go to the middle of the 2D view used last |
 | Ctrl+Shift+V | Paste Special: several copies, each moved and turned from the one before, renamed or grouped |
