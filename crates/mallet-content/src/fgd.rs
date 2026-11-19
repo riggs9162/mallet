@@ -82,6 +82,9 @@ pub struct EntityClass {
     /// Whether the model comes from `lightprop()`, which Hammer turns to point where the
     /// light shines, taking the pitch from the `pitch` key as the compiler does.
     pub light_prop: bool,
+    /// Whether `worldtext()` shows the entity's `message` as text standing in the map,
+    /// as for Hammer++'s editor_text and the game's point_worldtext.
+    pub world_text: bool,
 }
 
 impl EntityClass {
@@ -92,6 +95,24 @@ impl EntityClass {
             .find(|property| property.name.eq_ignore_ascii_case(name))
     }
 }
+
+/// The class name of the text Hammer++ and Mallet show standing in the map. No game has
+/// such an entity, so the text is only ever seen in the editor.
+pub const EDITOR_TEXT_CLASS: &str = "editor_text";
+
+/// Classes that belong to the editor and not to a game, which every game gets: no
+/// game's FGD lists them. Hammer++ reads them from its own `hammerplusplus_fgd.fgd`.
+pub const EDITOR_CLASSES: &str = r#"
+@PointClass color(255 255 255) worldtext() = editor_text :
+	"Text standing in the map, for notes and labels. Only the editor shows it: the game has no such entity."
+[
+	targetname(target_source) : "Name" : : "The name that other entities refer to this entity by."
+	angles(angle) : "Pitch Yaw Roll (Y Z X)" : "0 0 0" : "How the text is turned. It reads the right way round when you look the way the angles point."
+	message(string) : "Entity Message" : "Text" : "The text to show. Write a backslash and an n to start a new line."
+	textsize(float) : "Text Size" : "10" : "How tall a line of text is, in units."
+	color(color255) : "Color" : "255 255 255" : "The colour of the text."
+]
+"#;
 
 /// Every entity class from a set of FGD files.
 #[derive(Debug, Clone, Default)]
@@ -104,9 +125,11 @@ pub struct GameData {
 
 impl GameData {
     /// Reads FGD files in order, following `@include`. Later files override classes of
-    /// the same name, as in Hammer.
+    /// the same name, as in Hammer. Mallet's own classes ([`EDITOR_CLASSES`]) come first,
+    /// so a file that has one of them replaces it.
     pub fn load(paths: &[PathBuf]) -> Result<Self, String> {
         let mut raw = RawData::default();
+        raw.parse(EDITOR_CLASSES, None)?;
         for path in paths {
             raw.read_file(path)?;
         }
@@ -290,6 +313,7 @@ fn merge_bases(written: &Written, class: &mut EntityClass, visiting: &mut Vec<St
             class.icon = base.icon;
         }
         class.sprite_from_model |= base.sprite_from_model;
+        class.world_text |= base.world_text;
     }
     properties.append(&mut class.properties);
     inputs.append(&mut class.inputs);
@@ -523,6 +547,7 @@ impl Parser {
             icon: None,
             sprite_from_model: false,
             light_prop: false,
+            world_text: false,
         };
         // Helpers up to '='.
         while !self.is_punct('=') {
@@ -572,6 +597,7 @@ impl Parser {
                     Some(path) => class.icon = Some(path.clone()),
                     None => class.sprite_from_model = true,
                 },
+                "worldtext" => class.world_text = true,
                 _ => {}
             }
         }
@@ -744,6 +770,31 @@ mod tests {
         assert_eq!(start.inputs[0].name, "Kill");
         assert_eq!(start.outputs[0].name, "OnUser1");
         assert_eq!(data.class_names(ClassKind::Solid), ["func_detail_blocker"]);
+    }
+
+    #[test]
+    fn every_game_has_the_editor_classes() {
+        let data = GameData::load(&[]).unwrap();
+        let text = data.class(EDITOR_TEXT_CLASS).unwrap();
+        assert_eq!(text.kind, ClassKind::Point);
+        assert!(text.world_text);
+        let keys: Vec<(&str, &str)> = text
+            .properties
+            .iter()
+            .map(|property| (property.name.as_str(), property.default.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("targetname", ""),
+                ("angles", "0 0 0"),
+                ("message", "Text"),
+                ("textsize", "10"),
+                ("color", "255 255 255"),
+            ]
+        );
+        let game = "@PointClass worldtext() = point_worldtext : \"Game text.\" []";
+        assert!(GameData::parse(game).unwrap().class("point_worldtext").unwrap().world_text);
     }
 
     #[test]
