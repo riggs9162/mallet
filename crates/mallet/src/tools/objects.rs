@@ -1,6 +1,6 @@
 //! The tools that find a map's objects in bulk, so an agent asks one question instead of
-//! reading every object: selecting by what objects are and where they are,
-//! and listing entities and brushes with filters.
+//! reading every object: selecting by what objects are and where they are, listing
+//! entities and brushes with filters, and setting many keys at once.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,6 +44,21 @@ pub fn definitions() -> Vec<Value> {
                 "offset": { "type": "integer", "minimum": 0, "description": "How many matching brushes to skip; default 0." }
             }),
             &[],
+        ),
+        tool(
+            "set_entity_keys",
+            "Set several keys on several entities as one undo step: on the entities with the given ids, or on \
+             the selected entities when none are given. A key with a string value is set, added if missing; a \
+             key with null is removed. Returns how many keyvalues changed.",
+            json!({
+                "ids": { "type": "array", "items": { "type": "integer" }, "description": "Entity ids; default the selected entities." },
+                "keys": {
+                    "type": "object",
+                    "additionalProperties": { "type": ["string", "null"] },
+                    "description": "The keyvalues to set, such as {\"skin\": \"2\", \"targetname\": null}."
+                }
+            }),
+            &["keys"],
         ),
     ]
 }
@@ -435,13 +450,53 @@ pub(super) fn list_solids(editor: &Editor, args: &Value) -> Result<Value, String
     Ok(listed)
 }
 
+/// The `set_entity_keys` tool.
+pub(super) fn set_entity_keys(editor: &mut Editor, args: &Value) -> Result<ToolResult, String> {
+    let pairs = args
+        .get("keys")
+        .and_then(Value::as_object)
+        .filter(|keys| !keys.is_empty())
+        .ok_or("\"keys\" must be an object of keys and their values, or null to remove a key")?;
+    let mut keys: Vec<(String, Option<String>)> = Vec::new();
+    for (key, value) in pairs {
+        let value = match value {
+            Value::Null => None,
+            Value::String(text) => Some(text.clone()),
+            _ => {
+                return Err(format!(
+                    "the value of \"{key}\" must be a string, or null to remove the key"
+                ))
+            }
+        };
+        keys.push((key.clone(), value));
+    }
+    let mut ids = id_list(args, "ids")?;
+    if args.get("ids").is_none_or(Value::is_null) {
+        ids = editor
+            .selection
+            .iter()
+            .filter_map(|owner| match owner {
+                Owner::Entity(id) => Some(*id),
+                Owner::Solid(_) => None,
+            })
+            .collect();
+    }
+    if ids.is_empty() {
+        return Err("give the entities' \"ids\", or select entities first".to_owned());
+    }
+    let changed = editor.set_keys_on(&ids, &keys)?;
+    Ok(ToolResult::json(
+        &json!({ "entities": ids.len(), "keyvalues_changed": changed }),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
     use serde_json::json;
 
     use super::super::run;
-    use super::super::test_game::json_of;
+    use super::super::test_game::{error_of, json_of};
     use super::*;
 
     /// A map with a floor, a wall of another material, two props and a light.
@@ -631,6 +686,38 @@ mod tests {
         assert_eq!(tied["solids"][0]["entity"], detail);
         let selected = json_of(&run(&mut editor, "list_solids", &json!({ "selected_only": true })));
         assert_eq!(selected["solids"][0]["solid"], wall);
+    }
+
+    #[test]
+    fn several_keys_are_set_on_several_entities_in_one_step() {
+        let (mut editor, _, [near, far, _]) = editor();
+        let steps = editor.document.as_ref().unwrap().history.undo_steps();
+        let args = json!({ "ids": [near, far], "keys": { "skin": "2", "model": null, "angles": "0 0 0" } });
+        let changed = json_of(&run(&mut editor, "set_entity_keys", &args));
+        assert_eq!(changed["entities"], 2);
+        assert_eq!(changed["keyvalues_changed"], 4, "the angles were zero already");
+        let entity = editor.entity(far).unwrap();
+        assert_eq!((entity.get("skin"), entity.get("model")), (Some("2"), None));
+        assert_eq!(editor.document.as_ref().unwrap().history.undo_steps(), steps + 1);
+
+        run(&mut editor, "select", &json!({ "entities": [near] }));
+        let selected = json_of(&run(
+            &mut editor,
+            "set_entity_keys",
+            &json!({ "keys": { "skin": "3" } }),
+        ));
+        assert_eq!(selected["entities"], 1);
+        assert_eq!(editor.entity(far).unwrap().get("skin"), Some("2"));
+
+        run(&mut editor, "clear_selection", &json!({}));
+        let nothing = run(&mut editor, "set_entity_keys", &json!({ "keys": { "skin": "3" } }));
+        assert!(error_of(&nothing).contains("select entities first"));
+        let unknown = run(
+            &mut editor,
+            "set_entity_keys",
+            &json!({ "ids": [9999], "keys": { "skin": "3" } }),
+        );
+        assert!(error_of(&unknown).contains("no entity has id 9999"));
     }
 
 }

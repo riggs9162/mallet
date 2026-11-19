@@ -1425,6 +1425,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         "batch" => Err("batch is run by the MCP server itself, and a batch cannot hold another batch".to_owned()),
         "list_entities" => Ok(ToolResult::json(&objects::list_entities(editor, args)?)),
         "list_solids" => Ok(ToolResult::json(&objects::list_solids(editor, args)?)),
+        "set_entity_keys" => objects::set_entity_keys(editor, args),
         "get_entity" => {
             let id = id_arg(args)?;
             let entity = editor

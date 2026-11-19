@@ -86,6 +86,34 @@ impl Editor {
         self.apply_edits(edits)
     }
 
+    /// Sets and removes several keys on several entities as one undoable step: a key
+    /// with a value is set, and one without is removed. Entities that have a value
+    /// already, or lack a key that is to go, are left alone. Returns how many keyvalues
+    /// changed.
+    pub fn set_keys_on(&mut self, ids: &[u32], keys: &[(String, Option<String>)]) -> Result<usize, String> {
+        let mut edits = Vec::new();
+        for id in ids {
+            let entity = self.entity(*id).ok_or_else(|| format!("no entity has id {id}"))?;
+            for (key, value) in keys {
+                match value {
+                    Some(value) if entity.get(key) != Some(value.as_str()) => edits.push(Edit::SetKey {
+                        entity: *id,
+                        key: key.clone(),
+                        value: value.clone(),
+                    }),
+                    None if entity.get(key).is_some() => edits.push(Edit::RemoveKey {
+                        entity: *id,
+                        key: key.clone(),
+                    }),
+                    _ => {}
+                }
+            }
+        }
+        let count = edits.len();
+        self.apply_edits(edits)?;
+        Ok(count)
+    }
+
     /// Changes the class of several entities as one undoable step. Like Hammer, each
     /// gains the new class's default keyvalues for the keys it does not have yet, so a
     /// brush tied as `func_detail` and turned into a `func_door` gets the door's speed.
