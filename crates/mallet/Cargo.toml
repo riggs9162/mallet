@@ -18,6 +18,7 @@ base64 = "0.22"
 mallet-content.workspace = true
 mallet-format.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
+ab_glyph = "0.2"
 egui-phosphor = "0.9"
 discord-rich-presence = "1.1.0"
 

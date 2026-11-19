@@ -36,6 +36,7 @@ use crate::scene::{
 use crate::style::{self as view_style, ViewStyle};
 use crate::view2d::View2D;
 use crate::view3d::Camera3D;
+use crate::world_text;
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -762,7 +763,8 @@ impl Renderer3D {
     /// Forgets every uploaded texture, for example after the game folder changed, and the
     /// lighting preview's skybox, projected textures and shadow maps with them.
     pub fn clear_textures(&mut self) {
-        self.textures.retain(|key, _| key == WHITE_KEY);
+        self.textures
+            .retain(|key, _| key == WHITE_KEY || key == world_text::TEXTURE_KEY);
         self.lit = None;
         self.gpu_models.clear();
         self.loading.clear();
@@ -1009,6 +1011,7 @@ impl Renderer3D {
                 let changed = changed_meshes(scene, self.textures_checked).map(|(meshes, _)| meshes);
                 self.upload_models(scene, models);
                 self.load_textures(scene, materials, models, changed.as_deref());
+                self.load_typeface(scene);
                 self.textures_checked = scene.geometry_generation;
             }
             self.load_sprite_frames(scene, loader.as_ref());
@@ -1064,7 +1067,9 @@ impl Renderer3D {
         let planes = frustum_planes(matrix);
         let helpers = !lit || lighting.options.entity_boxes;
         let sprites = if textured && helpers {
-            self.sprite_faces(scene, overlay, camera)
+            let mut faces = self.sprite_faces(scene, overlay, camera);
+            faces.extend(self.text_faces(scene, overlay));
+            faces
         } else {
             Vec::new()
         };
@@ -1920,6 +1925,63 @@ impl Renderer3D {
                     vec![quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]],
                     mesh.owner,
                 ))
+            })
+            .collect()
+    }
+
+    /// Draws the typeface's picture and sends it to the graphics card, the first time a
+    /// map shows text. A picture the graphics card refuses is not asked for again, and
+    /// the text keeps the rectangle around it alone.
+    fn load_typeface(&mut self, scene: &Scene) {
+        if self.textures.contains_key(world_text::TEXTURE_KEY) || scene.meshes.iter().all(|mesh| mesh.text.is_none()) {
+            return;
+        }
+        let facts = MaterialFacts {
+            alpha: AlphaMode::Blend(1.0),
+            unlit: true,
+            ..MaterialFacts::opaque()
+        };
+        let texture = world_text::typeface_picture().and_then(|mips| self.upload_guarded(&mips, facts, None));
+        self.textures.insert(world_text::TEXTURE_KEY.to_owned(), texture);
+    }
+
+    /// Builds the letters of entities that show text, such as editor_text: one quad for
+    /// each character, standing where the entity's angles put it, in the text's colour at
+    /// full brightness. The quads are drawn from both sides, so text seen from behind
+    /// shows mirrored instead of vanishing. Selected text is tinted and follows a drag.
+    fn text_faces(&self, scene: &Scene, overlay: &Overlay) -> Vec<TranslucentFace> {
+        if !matches!(self.textures.get(world_text::TEXTURE_KEY), Some(Some(_))) {
+            return Vec::new();
+        }
+        let normal = Vec3::new(0.3, 0.5, 1.0).normalize().to_array();
+        scene
+            .meshes
+            .iter()
+            .filter_map(|mesh| {
+                let text = mesh.text.as_ref()?;
+                let (_, remap) = mesh.appearance(overlay);
+                let highlight = if mesh.selected { SELECTION_TINT } else { 0.0 };
+                let [red, green, blue] = text.color.map(|channel| (f32::from(channel) / 255.0).powf(2.2));
+                let mut vertices = Vec::new();
+                for glyph in text.glyphs() {
+                    let corner = |at: usize| FaceVertex {
+                        position: remap
+                            .map_or(glyph.corners[at], |remap| remap.apply(glyph.corners[at]))
+                            .as_vec3()
+                            .to_array(),
+                        normal,
+                        uv: glyph.uv[at],
+                        color: [red, green, blue, 1.0],
+                        highlight,
+                        alpha: [0.0, 1.0],
+                        water: [0.0; 4],
+                        face: NO_FACE,
+                    };
+                    vertices.extend([0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2].map(corner));
+                }
+                let center = mesh.mapped_bounds(remap.as_ref()).center().as_vec3();
+                (!vertices.is_empty())
+                    .then(|| TranslucentFace::new(center, world_text::TEXTURE_KEY.to_owned(), vertices, mesh.owner))
             })
             .collect()
     }

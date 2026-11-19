@@ -297,6 +297,7 @@ impl Editor {
             selected: false,
             model: None,
             sprite: None,
+            text: None,
             origin: None,
             first_face: None,
             decal: false,

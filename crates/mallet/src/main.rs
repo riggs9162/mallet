@@ -48,6 +48,7 @@ mod transform;
 mod vertex_tool;
 mod view2d;
 mod view3d;
+mod world_text;
 
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;

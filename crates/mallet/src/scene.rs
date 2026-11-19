@@ -17,6 +17,7 @@ use mallet_vmf::sound::MapSounds;
 use mallet_vmf::{parse_vec3, Entity, Side, Solid, TexAxis, Vmf};
 
 use crate::view2d::Axis2D;
+use crate::world_text::WorldText;
 
 /// Colour used when a brush or entity has no editor colour.
 const DEFAULT_COLOR: Color32 = Color32::from_rgb(220, 220, 220);
@@ -199,6 +200,9 @@ const EDGE_QUANTIZE: f64 = 100.0;
 
 /// How far in front of and behind its faces a click still picks an overlay or decal.
 const DECAL_PICK_DEPTH: f64 = 1.0;
+/// How far in front of and behind its letters a click still picks text standing in the
+/// map.
+const TEXT_PICK_DEPTH: f64 = 1.0;
 /// The size of an `infodecal` whose texture is not known, in world units.
 const DEFAULT_DECAL_SIZE: f64 = 64.0;
 /// How many units nearer a face that squarely faces a point counts than one seen
@@ -442,6 +446,7 @@ impl WireMesh {
             selected: false,
             model: None,
             sprite: None,
+            text: None,
             origin: None,
             first_face: None,
             decal: false,
@@ -589,6 +594,9 @@ pub struct WireMesh {
     /// sprite replaces the entity's flat box, the way Hammer shows lights, sounds and cube
     /// maps.
     pub sprite: Option<Sprite>,
+    /// The text this entity shows standing in the map. The mesh is the rectangle around
+    /// it, and the 3D view draws the letters in place of a box.
+    pub text: Option<WorldText>,
     /// The origin of a point entity, which moves snap to the grid instead of the
     /// corner of its box, as in Hammer.
     pub origin: Option<DVec3>,
@@ -1348,7 +1356,7 @@ impl Scene {
                 let mut edges: Vec<String> = mesh.edges.iter().map(|edge| format!("{edge:?}")).collect();
                 edges.sort();
                 format!(
-                    "{:?} {:?} decal={} {:?} {:?} {:?} {:?} {:?} {:?} {edges:?} {faces:?}",
+                    "{:?} {:?} decal={} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {edges:?} {faces:?}",
                     mesh.owner,
                     mesh.solid,
                     mesh.decal,
@@ -1358,6 +1366,7 @@ impl Scene {
                     mesh.origin,
                     mesh.model.as_ref().map(|model| (&model.key, model.transform)),
                     mesh.sprite,
+                    mesh.text,
                 )
             })
             .collect();
@@ -1627,6 +1636,9 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
     let origin = entity.origin()?;
     let color = to_color(entity.editor_color().or_else(|| class.and_then(|class| class.color)));
     let owner = entity.id().map(Owner::Entity);
+    if let Some(text) = WorldText::read(entity, class, origin) {
+        return Some(text_mesh(text, color, owner));
+    }
     let loaded = entity_model(entity, class)
         .map(model_key)
         .and_then(|key| Some((models.get(&key)?.clone()?, key)));
@@ -1651,6 +1663,7 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
             selected: false,
             model: None,
             sprite: entity_sprite(entity, class),
+            text: None,
             origin: Some(origin),
             first_face: None,
             decal: false,
@@ -1707,10 +1720,54 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
             helper: !own_model,
         }),
         sprite: None,
+        text: None,
         origin: Some(origin),
         first_face: None,
         decal: false,
     })
+}
+
+/// The mesh of an entity that shows text: the rectangle around the text, which is what is
+/// outlined, clicked and measured. The 3D view draws the letters themselves.
+fn text_mesh(text: WorldText, color: Color32, owner: Option<Owner>) -> WireMesh {
+    let corners = text.corners();
+    let normal = text.normal();
+    let depth = normal * TEXT_PICK_DEPTH;
+    let mut bounds = Bounds::EMPTY;
+    for corner in corners {
+        bounds.add_point(corner + depth);
+        bounds.add_point(corner - depth);
+    }
+    let across = (corners[1] - corners[0]).normalize_or_zero();
+    let along = (corners[3] - corners[0]).normalize_or_zero();
+    let facing = |normal: DVec3, point: DVec3| Plane {
+        normal,
+        dist: normal.dot(point),
+    };
+    WireMesh {
+        color,
+        edges: (0..4).map(|at| [corners[at], corners[(at + 1) % 4]]).collect(),
+        faces: Vec::new(),
+        planes: vec![
+            facing(normal, corners[0] + depth),
+            facing(-normal, corners[0] - depth),
+            facing(-across, corners[0]),
+            facing(across, corners[1]),
+            facing(-along, corners[0]),
+            facing(along, corners[3]),
+        ],
+        bounds,
+        geometry_bounds: bounds,
+        owner,
+        solid: None,
+        selected: false,
+        model: None,
+        sprite: None,
+        origin: Some(text.origin),
+        text: Some(text),
+        first_face: None,
+        decal: false,
+    }
 }
 
 /// Where each brush face is among `meshes`, by side id: the mesh's index and the face's
@@ -1911,6 +1968,7 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
         selected: false,
         model: None,
         sprite: None,
+        text: None,
         origin: None,
         first_face: None,
         decal: false,
@@ -2042,6 +2100,7 @@ fn decal_mesh(
         selected: false,
         model: None,
         sprite: None,
+        text: None,
         origin: entity.origin(),
         first_face: None,
         decal: true,
@@ -2184,6 +2243,7 @@ mod tests {
             selected: false,
             model: None,
             sprite: None,
+            text: None,
             origin: None,
             first_face: None,
             decal: false,
