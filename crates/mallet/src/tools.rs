@@ -558,11 +558,18 @@ fn editor_definitions() -> Value {
             "create_block",
             "Create a brush in the world filling the box between two corners, like the Block tool, and select \
              it: a box, or one of Hammer's primitives (a wedge rising to the north, or an upright cylinder, \
-             spike or sphere with faces sides around). Undoable. Returns the new brush id.",
+             spike or sphere with faces sides around). side_materials gives faces their own material by the \
+             way they face, so a floor is one call: material tools/toolsnodraw with side_materials \
+             {\"top\": ...}. Undoable as one step. Returns the new brush id.",
             json!({
                 "min": vec3,
                 "max": vec3,
                 "material": { "type": "string", "description": "Material for every face; default is the editor's current material." },
+                "side_materials": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Materials for the faces that face a way: top (+Z), bottom (-Z), north (+Y), south (-Y), east (+X), west (-X), or sides for all four of the last. A slanted face counts by the way it faces most."
+                },
                 "shape": { "type": "string", "enum": ["block", "wedge", "cylinder", "spike", "sphere"], "description": "Default block." },
                 "faces": { "type": "integer", "minimum": 3, "maximum": 100, "description": "Sides around a cylinder, spike or sphere; default the Block tool's." }
             }),
@@ -2159,6 +2166,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 None => mallet_vmf::primitive::Shape::Block,
             };
             let faces = args.get("faces").and_then(Value::as_u64).map(|faces| faces.clamp(3, 100) as u32);
+            let side_materials = side_materials_arg(args)?;
             let previous = optional_string(args, "material")?
                 .map(|material| std::mem::replace(&mut editor.material, material.to_owned()));
             let previous_faces = faces.map(|faces| std::mem::replace(&mut editor.block_faces, faces));
@@ -2169,7 +2177,11 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             if let Some(previous) = previous_faces {
                 editor.block_faces = previous;
             }
-            Ok(ToolResult::json(&json!({ "solid": result? })))
+            let solid = result?;
+            if !side_materials.is_empty() {
+                paint_sides(editor, solid, &side_materials)?;
+            }
+            Ok(ToolResult::json(&json!({ "solid": solid })))
         }
         "create_arch" => {
             let min = required_vec3(args, "min")?;
@@ -2604,6 +2616,111 @@ fn transform_selection(editor: &mut Editor, args: &Value) -> Result<(), String> 
     editor.config.transform = saved;
     result?;
     editor.message = "Transformed selection".to_owned();
+    Ok(())
+}
+
+/// A way a brush face can face, as `create_block` names them for `side_materials`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Facing {
+    Top,
+    Bottom,
+    North,
+    South,
+    East,
+    West,
+}
+
+impl Facing {
+    /// The way a face with this outward normal faces most.
+    fn of(normal: DVec3) -> Self {
+        let size = normal.abs();
+        if size.z >= size.x && size.z >= size.y {
+            if normal.z >= 0.0 {
+                Self::Top
+            } else {
+                Self::Bottom
+            }
+        } else if size.y >= size.x {
+            if normal.y >= 0.0 {
+                Self::North
+            } else {
+                Self::South
+            }
+        } else if normal.x >= 0.0 {
+            Self::East
+        } else {
+            Self::West
+        }
+    }
+}
+
+/// The `side_materials` argument: the material for each way of facing it names. `sides`
+/// stands for the four ways a wall faces, and a way named on its own wins over it.
+fn side_materials_arg(args: &Value) -> Result<Vec<(Facing, String)>, String> {
+    let named = match args.get("side_materials") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Object(named)) => named,
+        Some(_) => return Err("\"side_materials\" must be an object of ways to face and their materials".to_owned()),
+    };
+    let walls = [Facing::North, Facing::South, Facing::East, Facing::West];
+    let mut materials: Vec<(Facing, String)> = Vec::new();
+    let set = |facing: Facing, material: &str, materials: &mut Vec<(Facing, String)>| {
+        materials.retain(|(other, _)| *other != facing);
+        materials.push((facing, material.to_owned()));
+    };
+    let mut entries: Vec<(&String, &Value)> = named.iter().collect();
+    entries.sort_by_key(|(way, _)| !way.eq_ignore_ascii_case("sides"));
+    for (way, material) in entries {
+        let material = material
+            .as_str()
+            .map(str::trim)
+            .filter(|material| !material.is_empty())
+            .ok_or_else(|| format!("the material for \"{way}\" must be a material's name"))?;
+        let facings: &[Facing] = match way.to_ascii_lowercase().as_str() {
+            "top" => &[Facing::Top],
+            "bottom" => &[Facing::Bottom],
+            "north" => &[Facing::North],
+            "south" => &[Facing::South],
+            "east" => &[Facing::East],
+            "west" => &[Facing::West],
+            "sides" => &walls,
+            _ => {
+                return Err(format!(
+                    "\"{way}\" is not a way a face can face; use top, bottom, north, south, east, west or sides"
+                ))
+            }
+        };
+        for facing in facings {
+            set(*facing, material, &mut materials);
+        }
+    }
+    Ok(materials)
+}
+
+/// Gives the faces of a brush that was just made the materials `side_materials` names
+/// for the way each faces, and joins that to the step that made the brush.
+fn paint_sides(editor: &mut Editor, solid: u32, side_materials: &[(Facing, String)]) -> Result<(), String> {
+    let chosen: std::collections::HashMap<u32, &String> = editor
+        .brush_faces(&[solid])
+        .iter()
+        .filter_map(|face| {
+            let facing = Facing::of(face.normal());
+            let (_, material) = side_materials.iter().find(|(wanted, _)| *wanted == facing)?;
+            Some((face.side.id, material))
+        })
+        .collect();
+    if chosen.is_empty() {
+        return Ok(());
+    }
+    let sides: std::collections::BTreeSet<u32> = chosen.keys().copied().collect();
+    editor.edit_sides(&sides, None, |side, _| {
+        if let Some(material) = chosen.get(&side.id) {
+            side.material.clone_from(material);
+        }
+    })?;
+    if let Some(document) = editor.document.as_mut() {
+        document.history.join_latest(2);
+    }
     Ok(())
 }
 
@@ -3818,6 +3935,36 @@ mod tests {
         editor
             .create_block(DVec3::new(x, 0.0, 0.0), DVec3::new(x + 32.0, 32.0, 32.0))
             .unwrap()
+    }
+
+    #[test]
+    fn a_block_takes_materials_by_the_way_its_faces_face() {
+        let mut editor = editor();
+        let args = json!({
+            "min": [0, 0, 0],
+            "max": [64, 64, 16],
+            "material": "tools/toolsnodraw",
+            "side_materials": { "top": "concrete/floor", "sides": "brick/wall", "north": "glass/window" }
+        });
+        let solid = json_of(&run(&mut editor, "create_block", &args))["solid"].as_u64().unwrap() as u32;
+        let faces = editor.brush_faces(&[solid]);
+        let of = |way: DVec3| {
+            let face = faces.iter().find(|face| face.normal().dot(way) > 0.9).unwrap();
+            face.side.material.clone()
+        };
+        assert_eq!(of(DVec3::Z), "concrete/floor");
+        assert_eq!(of(DVec3::NEG_Z), "tools/toolsnodraw");
+        assert_eq!(of(DVec3::Y), "glass/window", "a way named on its own wins over sides");
+        assert_eq!(of(DVec3::NEG_Y), "brick/wall");
+        assert_eq!(of(DVec3::X), "brick/wall");
+        assert_eq!(of(DVec3::NEG_X), "brick/wall");
+        assert_eq!(editor.material, crate::editor::DEFAULT_MATERIAL, "the current material is left alone");
+        assert!(editor.step_history(false).unwrap());
+        assert_eq!(editor.scene.solid_count, 0, "the brush and its materials undo together");
+
+        let wrong = json!({ "min": [0, 0, 0], "max": [8, 8, 8], "side_materials": { "upward": "a" } });
+        assert!(error_of(&run(&mut editor, "create_block", &wrong)).contains("is not a way a face can face"));
+        assert_eq!(editor.scene.solid_count, 0, "nothing is made when the arguments are wrong");
     }
 
     #[test]
