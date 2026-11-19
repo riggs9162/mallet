@@ -2064,26 +2064,30 @@ impl Editor {
     /// Uses the GPU renderer the window uses once it exists, so screenshots match the
     /// window, and the CPU drawing code before that. Neither needs the window to be
     /// visible. Viewport labels are left out.
-    pub fn render_png(&mut self, target: ShotTarget) -> Result<Vec<u8>, String> {
+    ///
+    /// The picture is `share` of the viewports' on-screen size across, from a tenth to
+    /// the whole.
+    pub fn render_png(&mut self, target: ShotTarget, share: f32) -> Result<Vec<u8>, String> {
+        let share = share.clamp(0.1, 1.0);
         if target != ShotTarget::All {
             let slot = self.slot_for(target)?;
             let (canvas, scale) = self.render_any(slot)?;
-            if scale == 1.0 {
+            if scale * share == 1.0 {
                 return canvas.encode_png();
             }
-            let size = self.viewport_rects[slot].size();
+            let size = self.viewport_rects[slot].size() * share;
             let mut scaled = canvas_for(size)?;
-            scaled.draw_canvas_scaled(&canvas, 0.0, 0.0, scale);
+            scaled.draw_canvas_scaled(&canvas, 0.0, 0.0, scale * share);
             return scaled.encode_png();
         }
         let rects = self.viewport_rects;
         let area = rects[0].union(rects[3]);
-        let mut canvas = canvas_for(area.size())?;
+        let mut canvas = canvas_for(area.size() * share)?;
         canvas.fill_all(GAP_COLOR);
         for (index, rect) in rects.iter().enumerate() {
-            let offset = rect.min - area.min;
+            let offset = (rect.min - area.min) * share;
             let (image, scale) = self.render_any(index)?;
-            canvas.draw_canvas_scaled(&image, offset.x.round(), offset.y.round(), scale);
+            canvas.draw_canvas_scaled(&image, offset.x.round(), offset.y.round(), scale * share);
         }
         canvas.encode_png()
     }

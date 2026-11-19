@@ -1170,14 +1170,20 @@ fn editor_definitions() -> Value {
         ),
         tool(
             "screenshot",
-            "Render viewports to a PNG at their on-screen size. Works while the window is covered or minimized. \
-             With viewport all, the layout is camera top-left, top top-right, front bottom-left, side bottom-right; \
-             viewport labels are not drawn.",
+            "Render viewports to a PNG at their on-screen size, or smaller with scale. Works while the window \
+             is covered or minimized. With viewport all, the layout is camera top-left, top top-right, front \
+             bottom-left, side bottom-right; viewport labels are not drawn.",
             json!({
                 "viewport": {
                     "type": "string",
                     "enum": ["all", "camera", "top", "front", "side", "window"],
                     "description": "Which viewport to render; default all four. \"window\" captures the whole editor window with its menus, panels and dialogs such as Object Properties; it needs the window to be visible."
+                },
+                "scale": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 1,
+                    "description": "The picture's size as a share of the viewports' own; default 1. A smaller picture is quicker to take in when detail does not matter. The pixel positions other tools take stay those of the full size, and a window capture is never scaled."
                 }
             }),
             &[],
@@ -2401,7 +2407,11 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 "window" => return Err("window screenshots are taken by the window itself".to_owned()),
                 other => return Err(format!("unknown viewport \"{other}\"")),
             };
-            Ok(ToolResult::png(editor.render_png(target)?))
+            let share = optional_number(args, "scale")?.unwrap_or(1.0);
+            if !(0.1..=1.0).contains(&share) {
+                return Err("\"scale\" must be from 0.1 to 1".to_owned());
+            }
+            Ok(ToolResult::png(editor.render_png(target, share as f32)?))
         }
         _ => Err(format!("unknown tool \"{name}\"")),
     }
@@ -3965,6 +3975,25 @@ mod tests {
         let wrong = json!({ "min": [0, 0, 0], "max": [8, 8, 8], "side_materials": { "upward": "a" } });
         assert!(error_of(&run(&mut editor, "create_block", &wrong)).contains("is not a way a face can face"));
         assert_eq!(editor.scene.solid_count, 0, "nothing is made when the arguments are wrong");
+    }
+
+    #[test]
+    fn a_screenshot_can_be_made_smaller() {
+        let mut editor = editor();
+        block(&mut editor, 0.0);
+        let size = |editor: &mut Editor, args: Value| {
+            super::test_game::picture_of(&run(editor, "screenshot", &args)).expect("a screenshot is a picture")
+        };
+        let part = |side: u32, share: f32| (side as f32 * share).round() as u32;
+        let [width, height] = size(&mut editor, json!({ "viewport": "top" }));
+        let half = size(&mut editor, json!({ "viewport": "top", "scale": 0.5 }));
+        assert_eq!(half, [part(width, 0.5), part(height, 0.5)]);
+        let [all_width, _] = size(&mut editor, json!({}));
+        let [small_width, _] = size(&mut editor, json!({ "scale": 0.25 }));
+        assert_eq!(small_width, part(all_width, 0.25));
+        assert!(small_width < width, "all four viewports at a quarter are smaller than one at full size");
+        let wrong = run(&mut editor, "screenshot", &json!({ "scale": 3 }));
+        assert!(error_of(&wrong).contains("from 0.1 to 1"));
     }
 
     #[test]
