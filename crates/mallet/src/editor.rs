@@ -815,6 +815,29 @@ impl Editor {
         }
     }
 
+    /// Reads the open map's file again in place of what is open, as another program left
+    /// it. The camera, the 2D views and the grid stay where they are; the selection and
+    /// the undo history start over, and unsaved changes are gone. Returns the file.
+    pub fn reload(&mut self) -> Result<PathBuf, String> {
+        let open = self.document.as_ref().ok_or("no map is open")?;
+        let path = open
+            .path
+            .clone()
+            .ok_or("the map has never been saved, so there is no file to read it from")?;
+        let document = Document::load(&path).map_err(|error| {
+            self.message = format!("Could not read {} again: {error}", path.display());
+            self.message.clone()
+        })?;
+        self.document = Some(document);
+        self.selection.clear();
+        self.face_selection.clear();
+        self.overlay = Overlay::default();
+        self.reload_texture_lights();
+        self.rebuild_scene();
+        self.message = format!("Read {} again", path.display());
+        Ok(path)
+    }
+
     /// Makes a map that was just read the open one, with the grid it was saved with, and
     /// frames it in every viewport.
     fn show_document(&mut self, document: Document) {

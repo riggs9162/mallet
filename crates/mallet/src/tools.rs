@@ -152,6 +152,17 @@ fn editor_definitions() -> Value {
             &["path"],
         ),
         tool(
+            "reload_map",
+            "Read the open map's file again in place of what is open, for a map another program has written \
+             since, such as a generator. The tab, the camera, the 2D views and the grid stay as they are; the \
+             selection and the undo history start over. A map with unsaved changes is only read again with \
+             discard set to true.",
+            json!({
+                "discard": { "type": "boolean", "description": "Read the file again even with unsaved changes, which are lost." }
+            }),
+            &[],
+        ),
+        tool(
             "list_entities",
             "List entities with their id, classname, targetname, origin and brush count. Includes the world.",
             json!({
@@ -1330,6 +1341,16 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             let path = PathBuf::from(string_arg(args, "path")?);
             editor.export_copy(&path)?;
             Ok(ToolResult::text(format!("Exported a copy to {}", path.display())))
+        }
+        "reload_map" => {
+            let unsaved = editor.document.as_ref().is_some_and(|document| document.dirty);
+            if unsaved && optional_flag(args, "discard")? != Some(true) {
+                return Err(
+                    "the map has unsaved changes; save it first, or pass discard: true to lose them".to_owned(),
+                );
+            }
+            editor.reload()?;
+            Ok(ToolResult::json(&status_json(editor)))
         }
         "batch" => Err("batch is run by the MCP server itself, and a batch cannot hold another batch".to_owned()),
         "list_entities" => Ok(ToolResult::json(&list_entities(editor, args)?)),
@@ -3744,5 +3765,81 @@ mod test_game {
             }
             Content::Text(_) => None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use glam::DVec3;
+    use serde_json::json;
+
+    use super::test_game::{error_of, json_of};
+    use super::*;
+
+    /// A file in the system's temporary folder, removed again when dropped.
+    struct TempMap(PathBuf);
+
+    impl TempMap {
+        fn new(name: &str) -> Self {
+            Self(std::env::temp_dir().join(format!("mallet-tools-{name}-{}.vmf", std::process::id())))
+        }
+
+        /// Writes the editor's map to the file without making it the editor's file.
+        fn write(&self, editor: &mut Editor) {
+            editor.document.as_ref().unwrap().export(&self.0).unwrap();
+        }
+    }
+
+    impl Drop for TempMap {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn editor() -> Editor {
+        let mut editor = Editor::default();
+        editor.new_map();
+        editor
+    }
+
+    fn block(editor: &mut Editor, x: f64) -> u32 {
+        editor
+            .create_block(DVec3::new(x, 0.0, 0.0), DVec3::new(x + 32.0, 32.0, 32.0))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_map_is_read_again_from_its_file() {
+        let file = TempMap::new("reload");
+        let mut editor = editor();
+        block(&mut editor, 0.0);
+        file.write(&mut editor);
+        let document = editor.document.as_mut().unwrap();
+        document.path = Some(file.0.clone());
+        document.dirty = false;
+
+        let mut generator = self::editor();
+        block(&mut generator, 0.0);
+        block(&mut generator, 64.0);
+        generator.create_entity("info_target", DVec3::ZERO, &[]).unwrap();
+        file.write(&mut generator);
+
+        editor.camera.position = DVec3::new(1.0, 2.0, 3.0);
+        let status = json_of(&run(&mut editor, "reload_map", &json!({})));
+        assert_eq!((status["solids"].as_u64(), status["entities"].as_u64()), (Some(2), Some(1)));
+        assert_eq!(status["can_undo"], false, "the undo history starts over");
+        assert_eq!(editor.camera.position, DVec3::new(1.0, 2.0, 3.0), "the camera stays");
+
+        block(&mut editor, 128.0);
+        let refused = run(&mut editor, "reload_map", &json!({}));
+        assert!(error_of(&refused).contains("unsaved changes"));
+        assert_eq!(editor.scene.solid_count, 3);
+        let status = json_of(&run(&mut editor, "reload_map", &json!({ "discard": true })));
+        assert_eq!(status["solids"], 2);
+
+        let mut unsaved = self::editor();
+        assert!(error_of(&run(&mut unsaved, "reload_map", &json!({}))).contains("never been saved"));
     }
 }
