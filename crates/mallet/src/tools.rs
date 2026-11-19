@@ -1426,6 +1426,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
         "list_entities" => Ok(ToolResult::json(&objects::list_entities(editor, args)?)),
         "list_solids" => Ok(ToolResult::json(&objects::list_solids(editor, args)?)),
         "set_entity_keys" => objects::set_entity_keys(editor, args),
+        "trace_line" => objects::trace_line(editor, args),
         "get_entity" => {
             let id = id_arg(args)?;
             let entity = editor

@@ -1,8 +1,9 @@
 //! The tools that find a map's objects in bulk, so an agent asks one question instead of
 //! reading every object: selecting by what objects are and where they are, listing
-//! entities and brushes with filters, and setting many keys at once.
+//! entities and brushes with filters, setting many keys at once, and tracing lines
+//! against the brushes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::DVec3;
 use mallet_vmf::geometry::Bounds;
@@ -13,11 +14,17 @@ use super::{id_list, optional_flag, optional_numbers, optional_string, tool, who
 use crate::editor::{Editor, SelectMode};
 use crate::mcp::ToolResult;
 use crate::scene::{Owner, WireMesh};
+use crate::sound::learn_solid_materials;
 
 /// Selections of more objects of a kind than this give their ids as ranges.
 const MAX_LISTED_IDS: usize = 100;
 /// How many brushes `list_solids` returns when no limit is given.
 const DEFAULT_SOLIDS: u64 = 100;
+/// The most lines `trace_line` traces at once.
+const MAX_RAYS: usize = 256;
+/// How far a line given by a direction is traced when no distance is given, in units:
+/// further than any map is across.
+const DEFAULT_REACH: f64 = 65536.0;
 
 /// The `tools/list` entries of the tools this module adds.
 pub fn definitions() -> Vec<Value> {
@@ -59,6 +66,34 @@ pub fn definitions() -> Vec<Value> {
                 }
             }),
             &["keys"],
+        ),
+        tool(
+            "trace_line",
+            "Trace lines through the map and get the first brush face each meets: the point, how far along \
+             the line it is, the face's outward normal, side id, brush id, entity and material. Use it to find \
+             the floor under a point before placing something (direction [0, 0, -1]), the ceiling, the wall a \
+             prop should stand against, or whether two points see each other. A line runs from from to to, or \
+             from from along direction for distance units. Like a player or a bullet it passes through \
+             triggers, clips, hints and other tool brushes; point entities, props and overlays do not stop it \
+             either.",
+            json!({
+                "rays": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": MAX_RAYS,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": vec3,
+                            "to": vec3,
+                            "direction": vec3,
+                            "distance": { "type": "number", "exclusiveMinimum": 0, "description": "How far to trace along direction; default to the end of the map." }
+                        },
+                        "required": ["from"]
+                    }
+                }
+            }),
+            &["rays"],
         ),
     ]
 }
@@ -490,6 +525,99 @@ pub(super) fn set_entity_keys(editor: &mut Editor, args: &Value) -> Result<ToolR
     ))
 }
 
+/// The `trace_line` tool.
+pub(super) fn trace_line(editor: &mut Editor, args: &Value) -> Result<ToolResult, String> {
+    let rays = args
+        .get("rays")
+        .and_then(Value::as_array)
+        .filter(|rays| !rays.is_empty() && rays.len() <= MAX_RAYS)
+        .ok_or_else(|| {
+            format!("\"rays\" must be 1 to {MAX_RAYS} lines, each with \"from\" and \"to\" or \"direction\"")
+        })?;
+    let mut lines: Vec<(DVec3, DVec3, f64)> = Vec::with_capacity(rays.len());
+    for (index, ray) in rays.iter().enumerate() {
+        let wrong = |what: &str| format!("ray {index}: {what}");
+        let from = optional_numbers::<3>(ray, "from")
+            .map_err(|error| wrong(&error))?
+            .map(DVec3::from_array)
+            .ok_or_else(|| wrong("\"from\" is required"))?;
+        let to = optional_numbers::<3>(ray, "to")
+            .map_err(|error| wrong(&error))?
+            .map(DVec3::from_array);
+        let direction = optional_numbers::<3>(ray, "direction")
+            .map_err(|error| wrong(&error))?
+            .map(DVec3::from_array);
+        let (direction, reach) = match (to, direction) {
+            (Some(to), None) => (to - from, (to - from).length()),
+            (None, Some(direction)) => {
+                let reach = match ray.get("distance") {
+                    None | Some(Value::Null) => DEFAULT_REACH,
+                    Some(distance) => distance
+                        .as_f64()
+                        .filter(|distance| *distance > 0.0)
+                        .ok_or_else(|| wrong("\"distance\" must be a number above zero"))?,
+                };
+                (direction, reach)
+            }
+            _ => return Err(wrong("give either \"to\" or \"direction\"")),
+        };
+        let direction = direction
+            .try_normalize()
+            .ok_or_else(|| wrong("the line has no length"))?;
+        lines.push((from, direction, reach));
+    }
+    if editor.document.is_none() {
+        return Err("no map is open".to_owned());
+    }
+    let mut solid = HashMap::new();
+    learn_solid_materials(&mut solid, &editor.scene, editor.materials.as_mut());
+    let scene = &editor.scene;
+    let world = editor
+        .document
+        .as_ref()
+        .and_then(|document| document.vmf.world())
+        .and_then(Entity::id);
+    let stops = |mesh: &WireMesh| {
+        let entity_solid = match mesh.owner {
+            Some(Owner::Entity(entity)) => !scene.sounds.non_solid.contains(&entity),
+            _ => true,
+        };
+        entity_solid
+            && mesh.faces.iter().any(|face| {
+                face.material
+                    .as_deref()
+                    .is_none_or(|name| solid.get(&name.to_ascii_lowercase()).copied().unwrap_or(true))
+            })
+    };
+    let round = |value: f64| (value * 1000.0).round() / 1000.0 + 0.0;
+    let hits: Vec<Value> = lines
+        .iter()
+        .map(|(from, direction, reach)| {
+            let hit = scene
+                .surface_face_where(*from, *direction, stops)
+                .filter(|(hit, _)| hit.point.distance(*from) <= *reach + 1e-6);
+            let Some((hit, normal)) = hit else {
+                return Value::Null;
+            };
+            let mesh = scene.meshes.iter().find(|mesh| mesh.solid == Some(hit.solid));
+            let face = mesh.and_then(|mesh| mesh.faces.iter().find(|face| face.side == Some(hit.side)));
+            json!({
+                "point": hit.point.to_array().map(round),
+                "distance": round(hit.point.distance(*from)),
+                "normal": normal.to_array().map(round),
+                "side": hit.side,
+                "solid": hit.solid,
+                "entity": mesh.and_then(|mesh| match mesh.owner {
+                    Some(Owner::Entity(id)) => Some(id),
+                    _ => world,
+                }),
+                "material": face.and_then(|face| face.material.clone()),
+            })
+        })
+        .collect();
+    Ok(ToolResult::json(&json!({ "hits": hits })))
+}
+
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
@@ -720,4 +848,35 @@ mod tests {
         assert!(error_of(&unknown).contains("no entity has id 9999"));
     }
 
+    #[test]
+    fn lines_are_traced_to_the_first_solid_brush_face() {
+        let (mut editor, [floor, wall], _) = editor();
+        editor.material = "tools/toolstrigger".to_owned();
+        editor
+            .create_block(DVec3::new(-64.0, -64.0, 32.0), DVec3::new(64.0, 64.0, 64.0))
+            .unwrap();
+        let rays = json!({ "rays": [
+            { "from": [0, 0, 512], "direction": [0, 0, -1] },
+            { "from": [0, 0, 64], "to": [512, 0, 64] },
+            { "from": [0, 0, 64], "to": [128, 0, 64] },
+            { "from": [0, 0, 64], "direction": [0, 0, 1], "distance": 4096 }
+        ] });
+        let traced = json_of(&run(&mut editor, "trace_line", &rays));
+        let hits = traced["hits"].as_array().unwrap();
+        assert_eq!(
+            hits[0]["point"],
+            json!([0.0, 0.0, 0.0]),
+            "the trigger brush is passed through"
+        );
+        assert_eq!(hits[0]["distance"], 512.0);
+        assert_eq!(hits[0]["normal"], json!([0.0, 0.0, 1.0]));
+        assert_eq!(hits[0]["solid"], floor);
+        assert_eq!(hits[0]["material"], "CONCRETE/FLOOR");
+        assert_eq!(hits[1]["solid"], wall);
+        assert_eq!(hits[1]["point"], json!([240.0, 0.0, 64.0]));
+        assert!(hits[2].is_null(), "the wall lies beyond the line's end");
+        assert!(hits[3].is_null(), "nothing is above");
+        let wrong = run(&mut editor, "trace_line", &json!({ "rays": [{ "from": [0, 0, 0] }] }));
+        assert!(error_of(&wrong).contains("ray 0: give either"));
+    }
 }

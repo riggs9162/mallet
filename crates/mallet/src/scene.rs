@@ -1250,10 +1250,22 @@ impl Scene {
     /// The brush face a ray hits first, its hit point and its outward normal, passing
     /// over selected brushes when `skip_selected` is set.
     fn surface_face_among(&self, origin: DVec3, direction: DVec3, skip_selected: bool) -> Option<(FaceHit, DVec3)> {
+        self.surface_face_where(origin, direction, |mesh| !(skip_selected && mesh.selected))
+    }
+
+    /// The brush face a ray hits first among the brushes `wanted` lets count, its hit
+    /// point and its outward normal, seeing through point entities, props, overlays and
+    /// decals as [`Scene::surface_face`] does.
+    pub fn surface_face_where(
+        &self,
+        origin: DVec3,
+        direction: DVec3,
+        wanted: impl Fn(&WireMesh) -> bool,
+    ) -> Option<(FaceHit, DVec3)> {
         let (mesh, distance, plane) = self
             .meshes
             .iter()
-            .filter(|mesh| !(skip_selected && mesh.selected))
+            .filter(|mesh| wanted(mesh))
             .filter(|mesh| mesh.model.is_none() && !mesh.decal && mesh.faces.iter().any(|face| face.side.is_some()))
             .filter_map(|mesh| {
                 if let Some((distance, face)) = displacement_hit(mesh, origin, direction) {
