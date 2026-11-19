@@ -31,7 +31,13 @@ Use get_status first to see which map is open. Edits made through these tools ar
 in the editor. Use screenshot to see the camera, top, front and side viewports. \
 Unless the user turns it off in Mallet Options > AI agents, you work in your own view: \
 your tab, camera, 2D views, grid, selection and tools are yours, the map is shared, and \
-tools that would drive the window (send_input and the show_ tools) are refused.";
+tools that would drive the window (send_input and the show_ tools) are refused. \
+To work quickly: batch runs several calls in one request and makes their edits one undo \
+step; preview_materials and preview_models show what textures and props look like before \
+you use them, and describe_model says which prop classes a model works as; select, \
+list_entities and list_solids find objects by class, material and place; trace_line finds \
+floors and walls; reload_map reads the open map again after another program wrote its \
+file, and insert_map pastes another map file in.";
 
 /// One piece of a tool result.
 pub enum Content {
