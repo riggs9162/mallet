@@ -486,6 +486,34 @@ would not work on the entities it is for, such as a model that is not a static p
 Thumbnails use the loading threads and the memory limit set for the texture browser in
 Mallet Options.
 
+## Editor text
+
+`editor_text` is Hammer++'s entity for notes and labels: text that stands in the map and
+that only the editor shows, since no game has such an entity. Every game's class list has
+it, so pick it for the Entity tool like any other class and click where the text goes.
+
+| Key | What it sets |
+| --- | --- |
+| Entity Message (`message`) | The text. `
+` starts a new line |
+| Text Size (`textsize`) | How tall a line is in units, 10 unless set |
+| Color (`color`) | The colour of the letters; their outline stays black |
+| Pitch Yaw Roll (`angles`) | How the text is turned |
+
+The first line starts at the entity's origin and runs to the right of its angles, the way
+the game lays out `point_worldtext`. It reads the right way round when you look the way
+the angles point, and mirrored from the other side. The textured view and the lighting
+preview draw the letters; the 2D views and the wireframe view show the rectangle around
+them. Click the letters to select the entity. An entity without a message shows as a box.
+
+Latin and Cyrillic letters are drawn, and `?` stands in for anything else. Entities whose
+class has the FGD's `worldtext()` helper, such as `point_worldtext`, show their message
+the same way, always in this one typeface.
+
+The entity is saved with the map like any other, and the compilers treat it as one: the
+game leaves it out, as it has no such class, but text placed outside the sealed map leaks
+it like any point entity there.
+
 ## Compiling
 
 F9, File > Run Map or the hammer icon on the toolbar opens Hammer's Run Map dialog: Run

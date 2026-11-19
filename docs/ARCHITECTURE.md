@@ -306,12 +306,16 @@ a cache shared by all tabs, with the error for each model that failed.
 
 `GameData` reads FGD files, following `@include`, and merges each class with its base
 classes: keyvalues with types, defaults, help and choices, spawnflags, inputs and outputs,
-and the `size()`, `color()`, `studio()`, `iconsprite()` and `sprite()` helpers. Base classes have their
+and the `size()`, `color()`, `studio()`, `iconsprite()`, `sprite()` and `worldtext()` helpers. Base classes have their
 own namespace, since `base.fgd` has both a `Light` base class and a `light` point class.
 Mallet reads the FGD in the game's `bin` folder named after the game folder (such as
 `garrysmod.fgd`) unless Tools > Game Data Files picks others. The scene uses a class's
 size and colour for point entities and shows its `studio()` model, such as the player
 figure of `info_player_start`. New entities start with their class's defaults.
+
+Classes that belong to the editor and to no game are written in `fgd::EDITOR_CLASSES`
+and read before the game's files, so every game has them and a file that lists one
+replaces it. So far that is `editor_text`, which Hammer++ reads from its own FGD.
 
 Outputs are `Connection`s read from and written to an entity's `connections` block, keeping
 the separator the map uses, and change through the undoable `Edit::SetConnections`.
@@ -673,6 +677,17 @@ changes, never for selection changes or camera moves:
   materials read, tint and blend in gamma space by default (`$nosrgb`), so they are drawn
   in their own pass through a view of the image without the sRGB curve, where the
   graphics card has one; other shaders blend in linear light. Lines are drawn after them.
+- An `editor_text`, or an entity whose class has `worldtext()` such as point_worldtext,
+  shows its `message` standing in the map (`world_text.rs`). The text is laid out as
+  the game's `C_PointWorldText` lays it out: the first line's baseline starts at the
+  origin and runs to the right of the entity's angles, lines are one `textsize` apart,
+  and the text reads the right way round looking the way the angles point. Its mesh in
+  the scene is the rectangle around the text, which is what the 2D views outline and
+  what clicks, the selection box and culling use, so the entity needs no box. The
+  letters are cells of one picture of egui's monospace typeface, drawn white with a
+  black outline the first time a map shows text (about 10 MB on the graphics card), and
+  are built every frame as translucent faces tinted with the entity's `color`, from
+  both sides. An entity with no text to show keeps its box.
 - The selection's red outline and, in 3D, its faces drawn again over the cached geometry
   at equal depth, tinted red, are kept until the selection, the map, a drag or a texture
   changes, so looking around a large selection builds nothing. Tool previews are small
