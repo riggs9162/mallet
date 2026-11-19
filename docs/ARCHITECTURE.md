@@ -384,19 +384,23 @@ the background for the kind filters (`MaterialInfo`), and loads thumbnails on fo
 threads, newest request first, so what is on screen loads before what scrolled past.
 
 The model browser (`app/model_browser.rs`) works the same way for `.mdl` files. Its listing
-thread also collects which models have a `.phy` beside them. Whether a model is a static
-prop is a flag in its `.mdl`, learned for free when its thumbnail is drawn. Only the "Static
-props" filter needs it for models not yet seen, and then one thread reads the flag of the
-models the other filters let through, one after another, and stops when the filters change:
-a game's files often sit on a slow disk, and reading all of them is not worth it. Thumbnails and
+thread also collects which models have a `.phy` beside them. Which prop classes keep a model
+depends on that, on the static prop flag in its `.mdl` and on the prop data in its keyvalues
+(`PropTraits`), which are learned for free when its thumbnail is drawn. Only the "Static
+props" and "Physics props" filters need them for models not yet seen, and then one thread
+reads the start of the `.mdl` and its keyvalues (`mallet_content::prop_traits`, two short
+reads) of the models the other filters let through, one after another, and stops when the
+filters change: a game's files often sit on a slow disk, and reading all of them is not
+worth it. The physics filter reads only the models that have a `.phy`. Thumbnails and
 the preview are drawn on the CPU by `model_render.rs`, a small depth-buffered triangle
 filler with perspective-correct texturing, half-Lambert lighting and alpha test and blend.
 That keeps model pictures off the graphics card and away from the 3D views' renderer:
 worker threads paint thumbnails newest request first, and one preview thread keeps the
 selected model loaded and redraws it for the newest camera angle only, at a lower quality
 while it is being dragged. `load_model_variant` loads a model with a chosen skin and body
-groups and returns `ModelDetails` (skins, body groups, static prop flag, sequences) for the
-preview; `load_model` still loads the first skin with every body group for the 3D views.
+groups and returns `ModelDetails` (skins, body groups, static prop flag, prop data,
+sequences) for the preview; `load_model` still loads the first skin with every body group
+for the 3D views.
 
 ## Clipping
 
@@ -900,11 +904,12 @@ Answers are JSON laid out by `mcp::json_text`: an array or object that fits on a
 stays on it, and only longer ones are broken up, which takes a fraction of the text of
 pretty-printed JSON.
 
-Which prop classes a model works as comes from `ModelDetails::prop_class_problem` in
+Which prop classes a model works as comes from `PropTraits::class_problem` in
 `mallet-content`, which follows the Source SDK: VBSP's `IsStaticProp` (`$staticprop`, and
 no `prop_data` unless it has `allowstatic`) and the game's `CBaseProp::Spawn` (a
 `prop_physics` needs prop data, any other prop must not have it, and the `_override`
-classes skip the check).
+classes skip the check). The model browser uses the same rules for its warnings, its kind
+filters and the class it gives a new prop (`PropTraits::default_class`).
 
 Tools:
 

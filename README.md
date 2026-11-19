@@ -464,24 +464,33 @@ Browser. What a picked model is for shows in the window's title:
 - Opened from Object Properties, or from the menu with props selected, double-clicking a
   model puts it on those entities as one undo step.
 - Otherwise it becomes the model of new props: the Entity tool is chosen and every prop it
-  places gets that model. When the current class takes no model, the class changes to
-  `prop_static`, `prop_physics` or `prop_dynamic`, whichever suits the model.
+  places gets that model. When the current class takes no model, the class changes to the
+  first of `prop_static`, `prop_physics` and `prop_dynamic` that keeps the model in game,
+  or to `prop_dynamic_override` when none of them does.
+
+Which classes keep a model follows the rules of the map compiler and the game. A
+`prop_static` needs a model compiled as a static prop that has no prop data, or VBSP leaves
+it out of the map. A `prop_physics` needs prop data and a collision model, and a
+`prop_dynamic` must not have prop data, or the game removes the prop.
+`prop_dynamic_override` takes any model, and `prop_physics_override` any model with a
+collision model.
 
 The sidebar narrows the list to particular games and addons, and to a folder in the folder
 tree; click a folder's name to choose it and its arrow to open it. The filter takes several
 words that must all be in a model's path. A word starting with `!` leaves out the models
 that have it, `*` stands for any text and `?` for one character, so `props_* crate !gib`
-finds crates in the prop folders that are not gibs. "Static props" shows only models
-`prop_static` can use and "Physics props" only those with a collision model. "Only used
+finds crates in the prop folders that are not gibs. "Static props" shows only the models a
+`prop_static` keeps and "Physics props" only those a `prop_physics` keeps. "Only used
 models" shows what the map's entities use. Right-click a model to copy its path or show
 its folder.
 
 Clicking a model shows it in the preview on the right: drag to turn it, scroll to zoom and
 double-click to reset. Under it are its skins and body groups to try, its size, triangle
-count, materials (missing ones in orange) and animation sequences, and a warning when it
-would not work on the entities it is for, such as a model that is not a static prop on a
-`prop_static`. A skin or body group chosen there is written to the entity's `skin` and
-`body` keys along with the model. The 3D views still draw every prop with its first skin.
+count, the prop classes it works as, materials (missing ones in orange) and animation
+sequences. A warning names each class of the entities it is for that would lose the model,
+and says why, such as an oil drum with prop data on a `prop_static`. A skin or body group
+chosen there is written to the entity's `skin` and `body` keys along with the model. The
+3D views still draw every prop with its first skin.
 
 Thumbnails use the loading threads and the memory limit set for the texture browser in
 Mallet Options.
