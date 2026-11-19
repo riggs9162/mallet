@@ -909,7 +909,13 @@ Which prop classes a model works as comes from `PropTraits::class_problem` in
 no `prop_data` unless it has `allowstatic`) and the game's `CBaseProp::Spawn` (a
 `prop_physics` needs prop data, any other prop must not have it, and the `_override`
 classes skip the check). The model browser uses the same rules for its warnings, its kind
-filters and the class it gives a new prop (`PropTraits::default_class`).
+filters and the class it gives a new prop (`PropTraits::default_class`). Check for Problems
+(`problems.rs`) uses them for the props in the map: it reads the traits of each model once
+with `mallet_content::prop_traits`, whatever the number of props that use it, and its Fix
+gives a prop the class `PropTraits::replacement_class` names, with the edits a class change
+in Object Properties makes. It also removes the keys that still hold a default of the old
+class and that the new class lacks, so a fixed prop does not come back as one with unused
+keyvalues.
 
 Tools:
 
@@ -940,7 +946,7 @@ Tools:
 | `group_selection`, `ungroup_selection` | Hammer's Group and Ungroup |
 | `hide_selection`, `hide_unselected`, `show_all_hidden` | Hammer's QuickHide: hide the selection or everything else, and show what QuickHide hid again |
 | `list_visgroups`, `create_visgroup`, `move_selection_to_visgroup`, `set_visgroup_visible`, `edit_visgroup`, `delete_visgroup`, `select_visgroup` | Hammer's VisGroups: list the user's and the automatic groups, make a group from the selection, move objects in and out, show and hide groups, rename, recolour and remove them, and select their members |
-| `check_for_problems` | Hammer's Check for Problems, optionally fixing what it can |
+| `check_for_problems` | Hammer's Check for Problems, and props whose class loses their model, optionally fixing what it can |
 | `make_hollow`, `carve` | Hammer's Make Hollow and Carve: walls of a set width in place of the selected brushes, and their shape cut out of the brushes they overlap |
 | `clip_selection` | Cut the selected brushes along the plane through three points, keeping both halves, the front or the back, like the Clipping tool |
 | `create_entity` | Point entity of any class at a position, with extra keyvalues, like the Entity tool |

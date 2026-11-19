@@ -179,7 +179,7 @@ These follow Hammer++'s default keybindings.
 | 1 to 9 and 0 over a 2D view | Preset zooms: 5 is one pixel per unit, each key below halves it and each above doubles it |
 | 1 / 2 over the 3D view | Draw less / more of the map, like Hammer's far clipping plane |
 | Ctrl+Shift+F | Find Entities: the Entity Report with its name filter ready. Map > Entity Report lists the map's entities by class, name or keyvalue (a trailing `*` matches the start), with Go to, Select All, Properties and Delete |
-| Alt+P | Check for Problems: a missing player start, entities with no class, brush entities with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused keyvalues, lightmap scales of 0 and duplicate ids, with Go to Error, Fix and Fix All (Map menu) |
+| Alt+P | Check for Problems: a missing player start, entities with no class, brush entities with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused keyvalues, lightmap scales of 0, duplicate ids and props whose class loses their model, with Go to Error, Fix and Fix All (Map menu) |
 | Ctrl+Shift+G | Go to Brush Number: select a brush by its number and centre the views on it; View > Go to Coordinates centres them on a point |
 | Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the camera forward |
 | Arrow keys over a 2D view with nothing to nudge | Pan the view |
@@ -474,6 +474,15 @@ it out of the map. A `prop_physics` needs prop data and a collision model, and a
 `prop_dynamic` must not have prop data, or the game removes the prop.
 `prop_dynamic_override` takes any model, and `prop_physics_override` any model with a
 collision model.
+
+Check for Problems (Alt+P) lists the props already in the map whose class loses their
+model, each with the reason. Its Fix gives such a prop a class that keeps the model and
+leaves the prop doing what it did: a `prop_static` becomes a `prop_dynamic`, or a
+`prop_dynamic_override` when the model has prop data, a `prop_dynamic` becomes a
+`prop_dynamic_override` and a `prop_physics` a `prop_physics_override`. Keys that still
+hold a default of the old class and mean nothing to the new one are removed with it; keys
+you gave a value of your own stay. A physics prop whose model has no collision model has
+to be changed by hand.
 
 The sidebar narrows the list to particular games and addons, and to a folder in the folder
 tree; click a folder's name to choose it and its arrow to open it. The filter takes several
