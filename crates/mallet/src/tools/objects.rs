@@ -1,13 +1,15 @@
 //! The tools that find a map's objects in bulk, so an agent asks one question instead of
-//! reading every object: selecting by what objects are and where they are.
+//! reading every object: selecting by what objects are and where they are,
+//! and listing entities with filters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec3;
 use mallet_vmf::geometry::Bounds;
+use mallet_vmf::Entity;
 use serde_json::{json, Value};
 
-use super::{id_list, optional_flag, optional_numbers, optional_string};
+use super::{id_list, optional_flag, optional_numbers, optional_string, whole_number, DEFAULT_LIST_LIMIT};
 use crate::editor::{Editor, SelectMode};
 use crate::mcp::ToolResult;
 use crate::scene::{Owner, WireMesh};
@@ -251,6 +253,98 @@ pub(super) fn selection_json(editor: &Editor) -> Value {
     selection
 }
 
+fn entity_summary(entity: &Entity, keys: &[String]) -> Value {
+    let mut summary = json!({
+        "id": entity.id(),
+        "classname": entity.classname(),
+        "targetname": entity.get("targetname"),
+        "origin": entity.origin().map(|origin| origin.to_array()),
+        "solids": entity.solids().count(),
+    });
+    if !keys.is_empty() {
+        let values: serde_json::Map<String, Value> =
+            keys.iter().map(|key| (key.clone(), json!(entity.get(key)))).collect();
+        summary["keys"] = Value::Object(values);
+    }
+    summary
+}
+
+/// The `list_entities` tool.
+pub(super) fn list_entities(editor: &Editor, args: &Value) -> Result<Value, String> {
+    let classname = optional_string(args, "classname")?;
+    let targetname = optional_string(args, "targetname")?;
+    let limit = whole_number(args, "limit")?.unwrap_or(DEFAULT_LIST_LIMIT).max(1) as usize;
+    let offset = whole_number(args, "offset")?.unwrap_or(0) as usize;
+    let keys = super::string_list(args, "keys")?.unwrap_or_default();
+    let summary = optional_flag(args, "summary")? == Some(true);
+    let selected_only = optional_flag(args, "selected_only")? == Some(true);
+    let wanted: Vec<(String, String)> = match args.get("where") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Object(pairs)) => pairs
+            .iter()
+            .map(|(key, value)| {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| format!("\"where\" must give \"{key}\" a string value"))?;
+                Ok((key.clone(), value.to_owned()))
+            })
+            .collect::<Result<_, String>>()?,
+        Some(_) => return Err("\"where\" must be an object of keys and the values to look for".to_owned()),
+    };
+    let area = Area::from_args(args)?;
+    let boxes = if area.is_some() {
+        owner_bounds(editor)
+    } else {
+        BTreeMap::new()
+    };
+    let vmf = &editor.document.as_ref().ok_or("no map is open")?.vmf;
+    let matching: Vec<&Entity> = vmf
+        .all_entities()
+        .filter(|entity| classname.is_none_or(|pattern| matches_pattern(pattern, entity.classname())))
+        .filter(|entity| {
+            targetname.is_none_or(|pattern| matches_pattern(pattern, entity.get("targetname").unwrap_or_default()))
+        })
+        .filter(|entity| {
+            wanted
+                .iter()
+                .all(|(key, pattern)| entity.get(key).is_some_and(|value| matches_pattern(pattern, value)))
+        })
+        .filter(|entity| {
+            let owner = entity.id().map(Owner::Entity);
+            let in_area = area.as_ref().is_none_or(|area| {
+                owner
+                    .and_then(|owner| boxes.get(&owner))
+                    .is_some_and(|bounds| area.takes(bounds))
+            });
+            let selected = !selected_only || owner.is_some_and(|owner| editor.selection.contains(&owner));
+            in_area && selected
+        })
+        .collect();
+    if summary {
+        let mut classes: BTreeMap<&str, usize> = BTreeMap::new();
+        for entity in &matching {
+            *classes.entry(entity.classname()).or_default() += 1;
+        }
+        return Ok(json!({ "total": matching.len(), "classes": classes }));
+    }
+    let entities: Vec<Value> = matching
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|entity| entity_summary(entity, &keys))
+        .collect();
+    let returned = entities.len();
+    let mut listed = json!({
+        "total": matching.len(),
+        "returned": returned,
+        "entities": entities,
+    });
+    if offset + returned < matching.len() {
+        listed["next_offset"] = json!(offset + returned);
+    }
+    Ok(listed)
+}
+
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
@@ -374,6 +468,55 @@ mod tests {
         assert_eq!(scattered["entity_count"], MAX_LISTED_IDS + 1);
         assert!(scattered.get("entities").is_none() && scattered.get("entity_ranges").is_none());
         assert!(scattered["ids_left_out"].as_str().unwrap().contains("selected_only"));
+    }
+
+    #[test]
+    fn entities_are_listed_by_filters_and_counted_by_class() {
+        let (mut editor, _, [near, far, light]) = editor();
+        let props = json_of(&run(
+            &mut editor,
+            "list_entities",
+            &json!({ "classname": "prop_static", "keys": ["model", "skin"] }),
+        ));
+        assert_eq!(props["total"], 2);
+        assert_eq!(
+            props["entities"][0]["keys"],
+            json!({ "model": "models/crate.mdl", "skin": null })
+        );
+
+        let barrels = json_of(&run(
+            &mut editor,
+            "list_entities",
+            &json!({ "where": { "model": "*barrel*" } }),
+        ));
+        assert_eq!(barrels["entities"][0]["id"], far);
+
+        let area = json!({ "min": [-64, -64, 0], "max": [64, 64, 128] });
+        let here = json_of(&run(&mut editor, "list_entities", &json!({ "box": area })));
+        let ids: Vec<u64> = here["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entity| entity["id"].as_u64())
+            .collect();
+        assert_eq!(ids, [u64::from(near), u64::from(light)]);
+
+        let counted = json_of(&run(&mut editor, "list_entities", &json!({ "summary": true })));
+        assert_eq!(counted["total"], 4);
+        assert_eq!(
+            counted["classes"],
+            json!({ "light": 1, "prop_static": 2, "worldspawn": 1 })
+        );
+
+        let paged = json_of(&run(&mut editor, "list_entities", &json!({ "limit": 1, "offset": 1 })));
+        assert_eq!(
+            (paged["returned"].as_u64(), paged["next_offset"].as_u64()),
+            (Some(1), Some(2))
+        );
+
+        run(&mut editor, "select", &json!({ "entities": [light] }));
+        let selected = json_of(&run(&mut editor, "list_entities", &json!({ "selected_only": true })));
+        assert_eq!(selected["entities"][0]["classname"], "light");
     }
 
 }

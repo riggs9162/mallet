@@ -186,13 +186,33 @@ fn editor_definitions() -> Value {
         ),
         tool(
             "list_entities",
-            "List entities with their id, classname, targetname, origin and brush count. Includes the world.",
+            "List entities with their id, classname, targetname, origin and brush count, and any other keys \
+             asked for. Includes the world. The filters narrow each other down: by class, by name, by the \
+             values of keys, by place and by the selection. With summary, how many entities of each class \
+             there are instead, for a first look at a map.",
             json!({
                 "classname": {
                     "type": "string",
-                    "description": "Only list this classname. A trailing * matches a prefix, such as trigger_*."
+                    "description": "Only this classname; * stands for any text, as in trigger_* or *door*."
                 },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum entities to return; default 200." }
+                "targetname": { "type": "string", "description": "Only entities with this name; * stands for any text." },
+                "where": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Only entities whose keys have these values, such as {\"model\": \"*oildrum*\"}; * stands for any text."
+                },
+                "box": {
+                    "type": "object",
+                    "properties": { "min": vec3, "max": vec3 },
+                    "required": ["min", "max"],
+                    "description": "Only entities inside this box, or with touching, entities that reach into it. Hidden entities are left out."
+                },
+                "touching": { "type": "boolean" },
+                "selected_only": { "type": "boolean", "description": "Only selected entities." },
+                "keys": { "type": "array", "items": { "type": "string" }, "description": "Keys to give for each entity, such as [\"model\", \"angles\"]." },
+                "summary": { "type": "boolean", "description": "Count the entities by class instead of listing them." },
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum entities to return; default 200." },
+                "offset": { "type": "integer", "minimum": 0, "description": "How many matching entities to skip; default 0." }
             }),
             &[],
         ),
@@ -1402,7 +1422,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             Ok(ToolResult::json(&selection))
         }
         "batch" => Err("batch is run by the MCP server itself, and a batch cannot hold another batch".to_owned()),
-        "list_entities" => Ok(ToolResult::json(&list_entities(editor, args)?)),
+        "list_entities" => Ok(ToolResult::json(&objects::list_entities(editor, args)?)),
         "get_entity" => {
             let id = id_arg(args)?;
             let entity = editor
@@ -2647,30 +2667,6 @@ fn selection_json(editor: &Editor) -> Value {
     objects::selection_json(editor)
 }
 
-fn list_entities(editor: &Editor, args: &Value) -> Result<Value, String> {
-    let pattern = optional_string(args, "classname")?;
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_LIST_LIMIT);
-    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-    let matching: Vec<&Entity> = editor
-        .document
-        .as_ref()
-        .ok_or("no map is open")?
-        .vmf
-        .all_entities()
-        .filter(|entity| pattern.is_none_or(|pattern| classname_matches(pattern, entity.classname())))
-        .collect();
-    let entities: Vec<Value> = matching
-        .iter()
-        .take(limit)
-        .map(|entity| entity_summary(entity))
-        .collect();
-    Ok(json!({
-        "total": matching.len(),
-        "returned": entities.len(),
-        "entities": entities,
-    }))
-}
-
 fn set_camera(editor: &mut Editor, args: &Value) -> Result<ToolResult, String> {
     let camera = &mut editor.camera;
     if let Some(position) = optional_numbers::<3>(args, "position")? {
@@ -2939,22 +2935,7 @@ fn lights_json(editor: &Editor, args: &Value) -> Result<Value, String> {
 }
 
 fn classname_matches(pattern: &str, classname: &str) -> bool {
-    match pattern.strip_suffix('*') {
-        Some(prefix) => classname
-            .get(..prefix.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(prefix)),
-        None => classname.eq_ignore_ascii_case(pattern),
-    }
-}
-
-fn entity_summary(entity: &Entity) -> Value {
-    json!({
-        "id": entity.id(),
-        "classname": entity.classname(),
-        "targetname": entity.get("targetname"),
-        "origin": entity.origin().map(|origin| origin.to_array()),
-        "solids": entity.solids().count(),
-    })
+    objects::matches_pattern(pattern, classname)
 }
 
 /// Merges `changes` into `target`: objects merge key by key, anything else replaces.
