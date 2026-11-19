@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use egui_phosphor::regular as icon;
-use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, PropTraits, Source, SourceKind};
+use mallet_content::{
+    MaterialLoader, ModelDetails, ModelVariant, PropData, PropTraits, Source, SourceKind, PROP_CLASSES,
+};
 
 use super::texture_browser::{checkerboard, elide, thousands};
 use super::MalletApp;
@@ -1235,21 +1237,15 @@ impl ModelBrowserState {
                 details.push(format!("also in {}", others.join(", ")));
             }
         }
-        let mut traits = Vec::new();
-        match self.prop_traits.get(path).map(|prop| prop.static_prop) {
-            Some(true) => traits.push("static prop"),
-            Some(false) => traits.push("not a static prop"),
-            None => {}
-        }
-        if self
+        let collision = self
             .listing
             .as_ref()
-            .is_some_and(|listing| listing.collision.contains(path))
-        {
-            traits.push("has a collision model");
+            .is_some_and(|listing| listing.collision.contains(path));
+        if let Some(traits) = self.prop_traits.get(path) {
+            details.push(format!("works as {}", classes_taking(traits, collision)));
         }
-        if !traits.is_empty() {
-            details.push(traits.join(", "));
+        if collision {
+            details.push("has a collision model".to_owned());
         }
         details.extend(failure);
         response.on_hover_text(details.join("\n"))
@@ -1433,9 +1429,12 @@ impl ModelBrowserState {
                             .color(MUTED),
                     );
                 }
+                let spacing = egui::vec2(12.0, 3.0);
+                let widest_column = (ui.available_width() - spacing.x) / 2.0;
                 egui::Grid::new("model_details")
                     .num_columns(2)
-                    .spacing([12.0, 3.0])
+                    .spacing(spacing)
+                    .max_col_width(widest_column)
                     .show(ui, |ui| {
                         let mut row = |name: &str, value: String| {
                             ui.label(RichText::new(name).color(MUTED));
@@ -1448,7 +1447,9 @@ impl ModelBrowserState {
                             "Size",
                             format!("{:.0} x {:.0} x {:.0} units", info.size[0], info.size[1], info.size[2]),
                         );
-                        row("Static prop", if details.static_prop { "yes" } else { "no" }.to_owned());
+                        row("Works as", classes_taking(&details.prop_traits(), collision));
+                        row("$staticprop", if details.static_prop { "yes" } else { "no" }.to_owned());
+                        row("Prop data", prop_data_words(details.prop_data.as_ref()));
                         row("Collision model", if collision { "yes" } else { "no" }.to_owned());
                         if !details.surface_prop.is_empty() {
                             row("Surface", details.surface_prop.clone());
@@ -1744,6 +1745,33 @@ fn warnings(classes: &[String], traits: Option<&PropTraits>, collision: bool) ->
         .collect()
 }
 
+/// The usual prop classes that take a model, in words, as the browser lists them.
+fn classes_taking(traits: &PropTraits, collision: bool) -> String {
+    let classes: Vec<&str> = PROP_CLASSES
+        .into_iter()
+        .filter(|class| traits.works_as(class, collision))
+        .collect();
+    if classes.is_empty() {
+        "prop_dynamic_override only".to_owned()
+    } else {
+        classes.join(", ")
+    }
+}
+
+/// A model's prop data in a few words: the entry of the game's prop data it builds on,
+/// and whether it lets the model be a static prop all the same.
+fn prop_data_words(data: Option<&PropData>) -> String {
+    let Some(data) = data else {
+        return "none".to_owned();
+    };
+    let base = data.base.as_deref().unwrap_or("yes");
+    if data.allow_static {
+        format!("{base}, static allowed")
+    } else {
+        base.to_owned()
+    }
+}
+
 /// The words of a search: every plain word must be in a name, and no word that started
 /// with `!` may be.
 pub(super) struct Search {
@@ -1832,8 +1860,6 @@ fn reveal(loader: &MaterialLoader, model: &str) {
 
 #[cfg(test)]
 mod tests {
-    use mallet_content::PropData;
-
     use super::*;
 
     /// A model compiled as a static prop, without prop data: a lamp post.
@@ -1921,6 +1947,21 @@ mod tests {
             warnings(&classes, None, true).is_empty(),
             "nothing is said about a model that was not looked at yet"
         );
+    }
+
+    #[test]
+    fn what_a_model_works_as_is_put_in_words() {
+        assert_eq!(classes_taking(&lamp(), false), "prop_static, prop_dynamic");
+        assert_eq!(classes_taking(&drum(), true), "prop_physics");
+        assert_eq!(classes_taking(&drum(), false), "prop_dynamic_override only");
+        assert_eq!(classes_taking(&PropTraits::default(), true), "prop_dynamic");
+        assert_eq!(prop_data_words(None), "none");
+        assert_eq!(prop_data_words(drum().prop_data.as_ref()), "Metal.Medium");
+        let allowed = PropData {
+            base: None,
+            allow_static: true,
+        };
+        assert_eq!(prop_data_words(Some(&allowed)), "yes, static allowed");
     }
 
     #[test]
