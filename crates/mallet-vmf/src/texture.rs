@@ -141,21 +141,13 @@ pub fn face_axes(normal: DVec3) -> (DVec3, DVec3) {
     (u, v)
 }
 
-/// The best axes for a face from its normal alone: the world axes of [`world_axes`], laid
-/// flat onto the face. On walls, floors and ceilings they are exactly Hammer's world
-/// alignment, so the texture lines up with neighbouring faces; on slopes they lie in the
-/// face, so the texture keeps its proportions instead of stretching, while still running
-/// the way the world axes do.
-pub fn normal_axes(normal: DVec3) -> (DVec3, DVec3) {
-    let normal = normal.normalize_or_zero();
-    let (world_u, world_v) = world_axes(normal);
-    if normal == DVec3::ZERO {
-        return (world_u, world_v);
-    }
-    let u = (world_u - normal * world_u.dot(normal)).normalize_or(world_u);
-    let flat_v = world_v - normal * world_v.dot(normal);
-    let v = (flat_v - u * flat_v.dot(u)).normalize_or(world_v);
-    (u, v)
+/// How close to 1 the dot product of two face normals may come before the faces count as
+/// facing the same way, or the opposite way, for [`Side::wrap_alignment`].
+const PARALLEL_DOT: f64 = 1.0 - 1e-9;
+
+/// The distance of a side's plane from the origin along its normal.
+fn plane_distance(side: &Side, normal: DVec3) -> f64 {
+    normal.dot(side.plane[0])
 }
 
 /// The least area a unit square of texture may keep when its axes are flattened onto a
@@ -240,22 +232,37 @@ impl Side {
         }
     }
 
-    /// Lines the texture up from the face's normal alone, the best start for any face:
-    /// the axes of [`normal_axes`], at Hammer's default scale with no shift and no
-    /// rotation. The luxel scale and smoothing groups are left alone.
-    pub fn reset_alignment(&mut self) {
-        let (u, v) = normal_axes(side_normal(self));
-        self.uaxis = TexAxis {
-            axis: u,
-            offset: 0.0,
-            scale: DEFAULT_TEXTURE_SCALE,
+    /// Hammer's wrap: carries the texture of `from` on over the edge where the two faces'
+    /// planes meet, as if the texture were folded around that edge. Every value of `from`
+    /// is taken over, and its axes are turned about the edge from that face's plane into
+    /// this one, with the shift moved so the texture meets itself along the edge. Faces that
+    /// lie in the same plane get the values as they are, and faces facing the opposite way,
+    /// which share no edge, get them as [`Side::copy_alignment`] gives them.
+    pub fn wrap_alignment(&mut self, from: &Side) {
+        let (from_normal, normal) = (side_normal(from), side_normal(self));
+        let cos = from_normal.dot(normal);
+        if from_normal == DVec3::ZERO || normal == DVec3::ZERO || cos.abs() >= PARALLEL_DOT {
+            return self.copy_alignment(from);
+        }
+        let hinge = from_normal.cross(normal).normalize();
+        let degrees = cos.clamp(-1.0, 1.0).acos().to_degrees();
+        let (from_distance, distance) = (plane_distance(from, from_normal), plane_distance(self, normal));
+        let on_edge = (from_normal * (from_distance - distance * cos) + normal * (distance - from_distance * cos))
+            / (1.0 - cos * cos);
+        let fold = |axis: TexAxis| {
+            let turned = rotate(axis.axis, hinge, degrees);
+            let scale = if axis.scale == 0.0 { DEFAULT_TEXTURE_SCALE } else { axis.scale };
+            TexAxis {
+                axis: turned,
+                offset: axis.offset + (axis.axis.dot(on_edge) - turned.dot(on_edge)) / scale,
+                scale: axis.scale,
+            }
         };
-        self.vaxis = TexAxis {
-            axis: v,
-            offset: 0.0,
-            scale: DEFAULT_TEXTURE_SCALE,
-        };
-        self.rotation = Some(0.0);
+        self.uaxis = fold(from.uaxis);
+        self.vaxis = fold(from.vaxis);
+        self.rotation = from.rotation;
+        self.lightmap_scale = from.lightmap_scale;
+        self.smoothing_groups = from.smoothing_groups;
     }
 
     /// Sets the texture rotation in degrees, turning both axes about the face normal by

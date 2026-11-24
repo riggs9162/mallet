@@ -90,21 +90,22 @@ impl TextureMode {
 /// How a texture tool right-click lines up the texture it puts on a face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyHow {
-    /// Keep the face's own alignment (Alt+right-click).
+    /// Keep the face's own alignment (Shift+right-click).
     Texture,
     /// Copy every value of the lifted face: axes, scale, shift, rotation, luxel scale and
     /// smoothing groups (right-click).
     Values,
-    /// Start fresh from the face's normal, as a new face gets it (Shift+right-click).
-    Normal,
+    /// Carry the lifted face's values on over the edge onto the face, turned to its normal
+    /// so the texture continues around the corner, as Hammer's Alt+right-click does.
+    Wrap,
 }
 
 impl ApplyHow {
     /// What a right-click with these modifiers does.
     pub fn from_modifiers(modifiers: egui::Modifiers) -> Self {
-        if modifiers.shift {
-            ApplyHow::Normal
-        } else if modifiers.alt {
+        if modifiers.alt {
+            ApplyHow::Wrap
+        } else if modifiers.shift {
             ApplyHow::Texture
         } else {
             ApplyHow::Values
@@ -327,9 +328,6 @@ impl Editor {
         };
         match mode {
             TextureMode::Lift => return self.lift(hit.side),
-            TextureMode::ApplyTexture | TextureMode::ApplyAll if modifiers.shift => {
-                return self.texture_apply_click(Some(hit), ApplyHow::Normal)
-            }
             TextureMode::ApplyTexture => return self.texture_apply_click(Some(hit), ApplyHow::Texture),
             TextureMode::ApplyAll => return self.texture_apply_click(Some(hit), ApplyHow::Values),
             TextureMode::AlignToView => return self.align_to_view(hit.side),
@@ -363,14 +361,16 @@ impl Editor {
         let sides = BTreeSet::from([hit.side]);
         let lifted = self.lifted.clone();
         let result = match (how, lifted) {
-            (ApplyHow::Texture, _) | (ApplyHow::Values, None) => self.apply_material(&sides, &material),
+            (ApplyHow::Texture, _) | (ApplyHow::Values | ApplyHow::Wrap, None) => {
+                self.apply_material(&sides, &material)
+            }
             (ApplyHow::Values, Some(lifted)) => self.edit_sides(&sides, None, |side, _| {
                 side.material.clone_from(&material);
                 side.copy_alignment(&lifted);
             }),
-            (ApplyHow::Normal, _) => self.edit_sides(&sides, None, |side, _| {
+            (ApplyHow::Wrap, Some(lifted)) => self.edit_sides(&sides, None, |side, _| {
                 side.material.clone_from(&material);
-                side.reset_alignment();
+                side.wrap_alignment(&lifted);
             }),
         };
         match result {
@@ -378,9 +378,9 @@ impl Editor {
                 self.remember_material(&material);
                 self.message = match how {
                     ApplyHow::Texture => format!("Applied {material}"),
-                    ApplyHow::Values if self.lifted.is_some() => format!("Applied {material} and the lifted values"),
-                    ApplyHow::Values => format!("Applied {material}; lift a face first to copy its alignment too"),
-                    ApplyHow::Normal => format!("Applied {material} aligned to the face"),
+                    _ if self.lifted.is_none() => format!("Applied {material}; lift a face first to copy its values"),
+                    ApplyHow::Values => format!("Applied {material} and the lifted values"),
+                    ApplyHow::Wrap => format!("Wrapped {material} on from the lifted face"),
                 };
             }
             Err(error) => self.message = error,
