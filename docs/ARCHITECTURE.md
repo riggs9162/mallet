@@ -151,13 +151,14 @@ nothing at all does a prop's bounding box count, so thin or hollow models can st
 picked. The texture tool uses the same test, so props block it only where they are. The camera smooths
 raw mouse movement over two frames and eases its speed, using real frame times.
 
-Paint select (`app/paint_select.rs`) runs while Shift and the left button are held with the
+Paint select (`app/paint_select.rs`) runs while Ctrl and the left button are held with the
 Selection tool. Each frame it picks at points along the path the cursor took since the last
 frame, every 4 pixels in 2D and every 8 in 3D, where each pick casts a ray at the whole map,
-and adds what it finds through `select_picked`. A stroke adds each object once, so holding
-the cursor still does not redo the selection every frame. In 2D a stroke only starts where
-the press would otherwise draw a marquee, and in 3D only off the gizmo, so Shift drags of
-the selection still clone it.
+and adds what it finds through `select_picked`, or removes it when the stroke's first object
+was already selected, which makes a Ctrl+click toggle. A stroke picks each object once, so
+holding the cursor still does not redo the selection every frame. In 2D a stroke only starts
+on an object where the press would otherwise draw a marquee, so a Ctrl drag from empty space
+still draws an adding marquee, and in 3D only off the gizmo.
 
 QuickHide (H, Ctrl+H and U) hides objects the way Hammer saves them: `Edit::SetHidden` wraps a
 brush or entity in a `hidden` block where it stands, so the map keeps and saves it while the scene,

@@ -1769,8 +1769,6 @@ impl MalletApp {
                     let world = view.to_world(rect, position);
                     let hit = editor.scene.pick_2d(view.axis, world, tolerance, editor.solid_picks());
                     match hit {
-                        Some(owner) if pointer.modifiers.shift => editor.select_picked([owner], SelectMode::Add),
-                        None if pointer.modifiers.shift => {}
                         _ if !pointer.modifiers.ctrl && on_selection(editor, view.axis, world, hit) => {
                             editor.overlay.handle_mode = editor.overlay.handle_mode.next();
                             editor.message = format!("{} handles", editor.overlay.handle_mode.label());

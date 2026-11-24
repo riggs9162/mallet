@@ -1,8 +1,10 @@
-//! The Selection tool's paint select: while Shift and the left mouse button are held, every
-//! object the cursor passes over joins the selection, in the 2D views and the 3D views. In
-//! mouselook the crosshair does the picking. A Shift drag that starts on the selection box in
-//! a 2D view still moves or clones the selection, and one that starts on the gizmo in a 3D
-//! view still drags the gizmo.
+//! The Selection tool's paint select: while Ctrl and the left mouse button are held, every
+//! object the cursor passes over joins the selection, in the 2D views and the 3D views. A
+//! stroke whose first object is already selected takes objects off the selection instead,
+//! so a Ctrl+click toggles one object as in Hammer. In mouselook the crosshair does the
+//! picking. In a 2D view a stroke starts only on an object outside the selection box, so a
+//! Ctrl drag from empty space still draws a marquee that adds to the selection, and in a 3D
+//! view a drag that starts on the gizmo still drags the gizmo.
 
 use std::collections::BTreeSet;
 
@@ -36,14 +38,17 @@ pub(super) struct PaintSelect {
     last: Pos2,
     /// What the stroke has picked so far, so each object is only added once.
     added: BTreeSet<Owner>,
+    /// Whether the stroke adds to or takes from the selection, decided by the first object
+    /// it picks; `None` until it picks one.
+    mode: Option<SelectMode>,
 }
 
 /// What one frame of a viewport tells paint select.
 struct StrokeFrame {
     /// Whether the left button is held down on the viewport.
     held: bool,
-    /// Whether Shift is held.
-    shift: bool,
+    /// Whether Ctrl is held.
+    ctrl: bool,
     /// Where a new stroke would start, when one may start in the viewport now.
     start: Option<Pos2>,
     /// Where the cursor picks.
@@ -66,9 +71,10 @@ impl MalletApp {
     }
 
     /// Runs paint select in a 2D view for one frame. A stroke starts when the left button
-    /// goes down with Shift held anywhere but on the selection box, its handles and the
-    /// pivot. Returns whether a stroke is going on in this view, so the view's own clicks
-    /// and drags leave it alone until the button comes up.
+    /// goes down with Ctrl held on an object anywhere but on the selection box, its handles
+    /// and the pivot, so a Ctrl drag from empty space still draws an adding marquee. Returns
+    /// whether a stroke is going on in this view, so the view's own clicks and drags leave
+    /// it alone until the button comes up.
     pub(super) fn paint_select_2d(
         &mut self,
         slot: usize,
@@ -79,26 +85,30 @@ impl MalletApp {
         pointer: &PointerState,
     ) -> bool {
         let held = response.is_pointer_button_down_on() && response.ctx.input(|input| input.pointer.primary_down());
+        let tolerance = pick_tolerance(editor) / view.scale;
+        let pick = |editor: &Editor, point: Pos2| {
+            editor
+                .scene
+                .pick_2d(view.axis, view.to_world(rect, point), tolerance, editor.solid_picks())
+        };
         let start = pointer.press_origin.filter(|origin| {
-            self.drag.is_none() && matches!(Self::begin_drag(slot, view, rect, *origin, editor, false), Drag::Marquee { .. })
+            self.drag.is_none()
+                && pointer.modifiers.ctrl
+                && matches!(Self::begin_drag(slot, view, rect, *origin, editor, false), Drag::Marquee { .. })
+                && pick(editor, *origin).is_some()
         });
         let frame = StrokeFrame {
             held,
-            shift: pointer.modifiers.shift,
+            ctrl: pointer.modifiers.ctrl,
             start,
             cursor: pointer.position,
             sampling: SAMPLING_2D,
         };
-        let tolerance = pick_tolerance(editor) / view.scale;
-        self.paint_select(slot, editor, frame, |editor, point| {
-            editor
-                .scene
-                .pick_2d(view.axis, view.to_world(rect, point), tolerance, editor.solid_picks())
-        })
+        self.paint_select(slot, editor, frame, pick)
     }
 
     /// Runs paint select in a 3D view for one frame. A stroke starts when the left button
-    /// goes down with Shift held anywhere but on the gizmo, which `on_gizmo` tells. Returns
+    /// goes down with Ctrl held anywhere but on the gizmo, which `on_gizmo` tells. Returns
     /// whether a stroke is going on in this view, so the view's own clicks leave it alone
     /// until the button comes up.
     pub(super) fn paint_select_3d(
@@ -117,7 +127,7 @@ impl MalletApp {
         let free = !on_gizmo && self.drag.is_none() && self.gizmo_drag.is_none();
         let frame = StrokeFrame {
             held,
-            shift: pointer.modifiers.shift,
+            ctrl: pointer.modifiers.ctrl,
             start: cursor.filter(|_| free && editor.tool == Tool::Select),
             cursor,
             sampling: SAMPLING_3D,
@@ -131,7 +141,8 @@ impl MalletApp {
     }
 
     /// Starts, follows or ends the stroke in `slot` for one frame, picking with `pick` at
-    /// points along the cursor's path and adding what it finds to the selection.
+    /// points along the cursor's path and adding what it finds to the selection, or taking
+    /// it off when the stroke's first object was already selected.
     fn paint_select(
         &mut self,
         slot: usize,
@@ -148,7 +159,7 @@ impl MalletApp {
             Some(stroke) => match frame.cursor {
                 Some(cursor) => {
                     let from = std::mem::replace(&mut stroke.last, cursor);
-                    if frame.shift {
+                    if frame.ctrl {
                         path(from, cursor, frame.sampling).collect()
                     } else {
                         Vec::new()
@@ -157,7 +168,7 @@ impl MalletApp {
                 None => Vec::new(),
             },
             None => {
-                let Some(start) = frame.start.filter(|_| frame.held && frame.shift) else {
+                let Some(start) = frame.start.filter(|_| frame.held && frame.ctrl) else {
                     return false;
                 };
                 let cursor = frame.cursor.unwrap_or(start);
@@ -165,6 +176,7 @@ impl MalletApp {
                     slot,
                     last: cursor,
                     added: BTreeSet::new(),
+                    mode: None,
                 });
                 std::iter::once(start)
                     .chain(path(start, cursor, frame.sampling))
@@ -179,9 +191,15 @@ impl MalletApp {
             .filter_map(|point| pick(editor, point))
             .filter(|owner| stroke.added.insert(*owner))
             .collect();
-        if !picked.is_empty() {
-            editor.select_picked(picked, SelectMode::Add);
-        }
+        let Some(first) = picked.first() else {
+            return true;
+        };
+        let mode = *stroke.mode.get_or_insert(if editor.selection.contains(first) {
+            SelectMode::Remove
+        } else {
+            SelectMode::Add
+        });
+        editor.select_picked(picked, mode);
         true
     }
 }
