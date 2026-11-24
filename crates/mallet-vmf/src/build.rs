@@ -8,7 +8,7 @@ use crate::texture::face_axes;
 use crate::{IdAllocator, Side, Solid, SolidItem, TexAxis};
 
 /// Texture scale Hammer applies to new faces.
-const DEFAULT_TEXTURE_SCALE: f64 = 0.25;
+pub(crate) const DEFAULT_TEXTURE_SCALE: f64 = 0.25;
 /// Luxels per world unit Hammer applies to new faces.
 const DEFAULT_LIGHTMAP_SCALE: u32 = 16;
 

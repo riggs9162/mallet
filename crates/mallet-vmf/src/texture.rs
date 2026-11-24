@@ -9,6 +9,7 @@
 
 use glam::DVec3;
 
+use crate::build::DEFAULT_TEXTURE_SCALE;
 use crate::{Side, TexAxis};
 
 /// Where to line a texture up on a face.
@@ -140,6 +141,23 @@ pub fn face_axes(normal: DVec3) -> (DVec3, DVec3) {
     (u, v)
 }
 
+/// The best axes for a face from its normal alone: the world axes of [`world_axes`], laid
+/// flat onto the face. On walls, floors and ceilings they are exactly Hammer's world
+/// alignment, so the texture lines up with neighbouring faces; on slopes they lie in the
+/// face, so the texture keeps its proportions instead of stretching, while still running
+/// the way the world axes do.
+pub fn normal_axes(normal: DVec3) -> (DVec3, DVec3) {
+    let normal = normal.normalize_or_zero();
+    let (world_u, world_v) = world_axes(normal);
+    if normal == DVec3::ZERO {
+        return (world_u, world_v);
+    }
+    let u = (world_u - normal * world_u.dot(normal)).normalize_or(world_u);
+    let flat_v = world_v - normal * world_v.dot(normal);
+    let v = (flat_v - u * flat_v.dot(u)).normalize_or(world_v);
+    (u, v)
+}
+
 /// The least area a unit square of texture may keep when its axes are flattened onto a
 /// face, for [`Side::copy_alignment`] to keep them: half, so a texture is stretched to at
 /// most twice its size. World alignment never goes below about 0.58.
@@ -220,6 +238,24 @@ impl Side {
         if !axes_fit(self.uaxis.axis, self.vaxis.axis, side_normal(self)) {
             self.align(false);
         }
+    }
+
+    /// Lines the texture up from the face's normal alone, the best start for any face:
+    /// the axes of [`normal_axes`], at Hammer's default scale with no shift and no
+    /// rotation. The luxel scale and smoothing groups are left alone.
+    pub fn reset_alignment(&mut self) {
+        let (u, v) = normal_axes(side_normal(self));
+        self.uaxis = TexAxis {
+            axis: u,
+            offset: 0.0,
+            scale: DEFAULT_TEXTURE_SCALE,
+        };
+        self.vaxis = TexAxis {
+            axis: v,
+            offset: 0.0,
+            scale: DEFAULT_TEXTURE_SCALE,
+        };
+        self.rotation = Some(0.0);
     }
 
     /// Sets the texture rotation in degrees, turning both axes about the face normal by

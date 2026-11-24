@@ -95,12 +95,16 @@ pub enum ApplyHow {
     /// Copy every value of the lifted face: axes, scale, shift, rotation, luxel scale and
     /// smoothing groups (right-click).
     Values,
+    /// Start fresh from the face's normal, as a new face gets it (Shift+right-click).
+    Normal,
 }
 
 impl ApplyHow {
     /// What a right-click with these modifiers does.
     pub fn from_modifiers(modifiers: egui::Modifiers) -> Self {
-        if modifiers.alt {
+        if modifiers.shift {
+            ApplyHow::Normal
+        } else if modifiers.alt {
             ApplyHow::Texture
         } else {
             ApplyHow::Values
@@ -323,6 +327,9 @@ impl Editor {
         };
         match mode {
             TextureMode::Lift => return self.lift(hit.side),
+            TextureMode::ApplyTexture | TextureMode::ApplyAll if modifiers.shift => {
+                return self.texture_apply_click(Some(hit), ApplyHow::Normal)
+            }
             TextureMode::ApplyTexture => return self.texture_apply_click(Some(hit), ApplyHow::Texture),
             TextureMode::ApplyAll => return self.texture_apply_click(Some(hit), ApplyHow::Values),
             TextureMode::AlignToView => return self.align_to_view(hit.side),
@@ -361,6 +368,10 @@ impl Editor {
                 side.material.clone_from(&material);
                 side.copy_alignment(&lifted);
             }),
+            (ApplyHow::Normal, _) => self.edit_sides(&sides, None, |side, _| {
+                side.material.clone_from(&material);
+                side.reset_alignment();
+            }),
         };
         match result {
             Ok(_) => {
@@ -369,6 +380,7 @@ impl Editor {
                     ApplyHow::Texture => format!("Applied {material}"),
                     ApplyHow::Values if self.lifted.is_some() => format!("Applied {material} and the lifted values"),
                     ApplyHow::Values => format!("Applied {material}; lift a face first to copy its alignment too"),
+                    ApplyHow::Normal => format!("Applied {material} aligned to the face"),
                 };
             }
             Err(error) => self.message = error,
