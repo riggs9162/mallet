@@ -106,8 +106,10 @@ impl MalletApp {
                         ui.add_space(2.0);
                         ui.label(
                             RichText::new(
-                                "Right-click applies the current texture; Alt+right-click also applies the lifted \
-                                 alignment. Ctrl+click adds faces, Shift+click takes the whole brush, Alt+click lifts.",
+                                "Right-click applies the current texture with every value of the lifted face; \
+                                 Alt+right-click keeps \
+                                 the face's own alignment. Ctrl+click adds faces, double-click takes the whole \
+                                 brush, Alt+click lifts.",
                             )
                             .small()
                             .color(MUTED),

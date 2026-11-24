@@ -1175,7 +1175,7 @@ impl MalletApp {
             if let (true, Some(aim)) = (applied, aim) {
                 let (origin, direction) = editor.camera.ray(rect, aim);
                 let hit = editor.scene.pick_face(origin, direction, &editor.models);
-                editor.texture_apply_click(hit, pointer.modifiers.alt);
+                editor.texture_apply_click(hit, crate::faces::ApplyHow::from_modifiers(pointer.modifiers));
             }
         }
         let active = response.hovered() || moving;

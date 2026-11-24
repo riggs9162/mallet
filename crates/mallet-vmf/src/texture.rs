@@ -140,6 +140,22 @@ pub fn face_axes(normal: DVec3) -> (DVec3, DVec3) {
     (u, v)
 }
 
+/// The least area a unit square of texture may keep when its axes are flattened onto a
+/// face, for [`Side::copy_alignment`] to keep them: half, so a texture is stretched to at
+/// most twice its size. World alignment never goes below about 0.58.
+const AXES_FIT_MIN: f64 = 0.5;
+
+/// Whether texture axes show a texture on a face with this normal without stretching it
+/// more than [`AXES_FIT_MIN`] allows.
+fn axes_fit(u: DVec3, v: DVec3, normal: DVec3) -> bool {
+    let normal = normal.normalize_or_zero();
+    let flat = |axis: DVec3| {
+        let axis = axis.normalize_or_zero();
+        axis - normal * axis.dot(normal)
+    };
+    flat(u).cross(flat(v)).dot(normal).abs() >= AXES_FIT_MIN
+}
+
 /// Turns a vector about `axis` by `degrees`, counter-clockwise looking against the axis.
 fn rotate(vector: DVec3, axis: DVec3, degrees: f64) -> DVec3 {
     let (sin, cos) = degrees.to_radians().sin_cos();
@@ -188,6 +204,21 @@ impl Side {
         if rotation != 0.0 {
             self.uaxis.axis = rotate(u, normal, rotation);
             self.vaxis.axis = rotate(v, normal, rotation);
+        }
+    }
+
+    /// Takes over the texture alignment of `from`: its axes, scale, shift, rotation, luxel
+    /// scale and smoothing groups, as Hammer's Apply (texture + values) does. Axes that
+    /// would stretch the texture badly on this face, as a floor's axes do on a wall, are
+    /// replaced by this face's world alignment, turned by the same rotation.
+    pub fn copy_alignment(&mut self, from: &Side) {
+        self.uaxis = from.uaxis;
+        self.vaxis = from.vaxis;
+        self.rotation = from.rotation;
+        self.lightmap_scale = from.lightmap_scale;
+        self.smoothing_groups = from.smoothing_groups;
+        if !axes_fit(self.uaxis.axis, self.vaxis.axis, side_normal(self)) {
+            self.align(false);
         }
     }
 

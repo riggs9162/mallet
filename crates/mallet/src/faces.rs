@@ -87,6 +87,27 @@ impl TextureMode {
     }
 }
 
+/// How a texture tool right-click lines up the texture it puts on a face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyHow {
+    /// Keep the face's own alignment (Alt+right-click).
+    Texture,
+    /// Copy every value of the lifted face: axes, scale, shift, rotation, luxel scale and
+    /// smoothing groups (right-click).
+    Values,
+}
+
+impl ApplyHow {
+    /// What a right-click with these modifiers does.
+    pub fn from_modifiers(modifiers: egui::Modifiers) -> Self {
+        if modifiers.alt {
+            ApplyHow::Texture
+        } else {
+            ApplyHow::Values
+        }
+    }
+}
+
 /// What Replace Textures does with the materials it finds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReplaceAction {
@@ -302,8 +323,8 @@ impl Editor {
         };
         match mode {
             TextureMode::Lift => return self.lift(hit.side),
-            TextureMode::ApplyTexture => return self.texture_apply_click(Some(hit), false),
-            TextureMode::ApplyAll => return self.texture_apply_click(Some(hit), true),
+            TextureMode::ApplyTexture => return self.texture_apply_click(Some(hit), ApplyHow::Texture),
+            TextureMode::ApplyAll => return self.texture_apply_click(Some(hit), ApplyHow::Values),
             TextureMode::AlignToView => return self.align_to_view(hit.side),
             TextureMode::LiftSelect => self.lift(hit.side),
             TextureMode::Select => {}
@@ -324,26 +345,33 @@ impl Editor {
     }
 
     /// A texture tool right-click: puts the current material on the face under the
-    /// cursor, and with `with_values` (Alt) also the picked-up alignment.
-    pub fn texture_apply_click(&mut self, hit: Option<FaceHit>, with_values: bool) {
+    /// cursor, with the alignment `how` says.
+    pub fn texture_apply_click(&mut self, hit: Option<FaceHit>, how: ApplyHow) {
         let Some(hit) = hit else { return };
-        let material = self.material.clone();
-        let lifted = self.lifted.clone().filter(|_| with_values);
+        let material = self.material.trim().to_owned();
+        if material.is_empty() {
+            self.message = "choose a material first".to_owned();
+            return;
+        }
         let sides = BTreeSet::from([hit.side]);
-        let result = match lifted {
-            Some(lifted) => self
-                .edit_sides(&sides, None, |side, _| {
-                    side.material.clone_from(&material);
-                    side.uaxis = lifted.uaxis;
-                    side.vaxis = lifted.vaxis;
-                    side.rotation = lifted.rotation;
-                    side.lightmap_scale = lifted.lightmap_scale;
-                })
-                .inspect(|_| self.remember_material(&material)),
-            None => self.apply_material(&sides, &material),
+        let lifted = self.lifted.clone();
+        let result = match (how, lifted) {
+            (ApplyHow::Texture, _) | (ApplyHow::Values, None) => self.apply_material(&sides, &material),
+            (ApplyHow::Values, Some(lifted)) => self.edit_sides(&sides, None, |side, _| {
+                side.material.clone_from(&material);
+                side.copy_alignment(&lifted);
+            }),
         };
-        if let Err(error) = result {
-            self.message = error;
+        match result {
+            Ok(_) => {
+                self.remember_material(&material);
+                self.message = match how {
+                    ApplyHow::Texture => format!("Applied {material}"),
+                    ApplyHow::Values if self.lifted.is_some() => format!("Applied {material} and the lifted values"),
+                    ApplyHow::Values => format!("Applied {material}; lift a face first to copy its alignment too"),
+                };
+            }
+            Err(error) => self.message = error,
         }
     }
 

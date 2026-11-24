@@ -376,8 +376,11 @@ the whole brush (Ctrl+double-click adds it). Switching to the texture tool with 
 selects all of their faces instead. Selecting brushes while the sheet is open, by clicking in
 a 2D view, dragging a box or Select All, selects all of their faces, and Ctrl adds or removes a
 brush's faces. With brushes
-selected in any tool, picking a texture in the texture browser puts it on all their faces. Right-click puts the current texture on a face; Alt+right-click also puts the picked
-up alignment on it. Scale, shift, luxel scale, rotation and the UV vectors apply as you drag,
+selected in any tool, picking a texture in the texture browser puts it on all their faces. Right-click puts the current texture on a face together with every value of the face you
+lifted: its axes, scale, shift, rotation, luxel scale and smoothing groups. When those axes
+would stretch the texture badly on the new face, as a floor's would on a wall, the face is
+aligned to the world instead.
+Alt+right-click puts only the texture on, keeping the face's alignment. Scale, shift, luxel scale, rotation and the UV vectors apply as you drag,
 type, scroll or click their arrows, and a drag is one undo step. The ½ and ×2 buttons halve
 or double the scale of one axis while keeping the texture pinned at the face's corner, and
 the dice buttons shift each face randomly, for stairs. Justify (Fit, L, R, T, B, C, and
