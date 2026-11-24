@@ -121,8 +121,11 @@ impl MalletApp {
         on_gizmo: bool,
     ) -> bool {
         let looking = editor.camera.mouse_look();
-        let held = response.ctx.input(|input| input.pointer.primary_down())
-            && (looking || response.is_pointer_button_down_on());
+        let held = if looking {
+            self.look_buttons.down()[0]
+        } else {
+            response.is_pointer_button_down_on() && response.ctx.input(|input| input.pointer.primary_down())
+        };
         let cursor = if looking { Some(rect.center()) } else { pointer.position };
         let free = !on_gizmo && self.drag.is_none() && self.gizmo_drag.is_none();
         let frame = StrokeFrame {

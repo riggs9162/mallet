@@ -184,7 +184,7 @@ These follow Hammer++'s default keybindings.
 | Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the camera forward |
 | Arrow keys over a 2D view with nothing to nudge | Pan the view |
 | Middle-drag or Space+drag | Pan a 2D view |
-| Z | Toggle mouselook in the 3D view (Escape leaves it); the cursor stays in the view and returns afterwards |
+| Z | Toggle mouselook in the 3D view (Escape leaves it); the cursor stays in the view and returns afterwards. Clicks and right-clicks act on what the crosshair points at, so you can select objects and faces and apply textures while flying |
 | Click a viewport's label | Switch that viewport between 3D Textured, 3D Wireframe, 3D Lighting Preview and the 2D Top, Front and Side views |
 | W A S D, arrow keys | Move the 3D camera; the arrow keys strafe left, right, up and down. A key pressed with Ctrl or Alt, such as the S of Ctrl+S, does not move it until released |
 | Alt (in mouselook) | Crouch: fly at a third of the camera speed. Alt with W A S D moves instead of starting a shortcut |

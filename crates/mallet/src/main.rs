@@ -30,6 +30,7 @@ mod handoff;
 mod input;
 mod keymap;
 mod lighting;
+mod look_buttons;
 mod mcp;
 mod model_render;
 mod netgraph;

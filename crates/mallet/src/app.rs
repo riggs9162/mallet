@@ -48,6 +48,7 @@ use crate::document::MapFormat;
 use crate::editor::{self, Editor, PasteCursor, SelectMode, Tool, ViewMode, WindowShot, VIEWPORT_GAP};
 use crate::gizmo::{Change as GizmoChange, Gizmo, GizmoDrag, Part as GizmoPart};
 use crate::keymap::{self, Action, KeyMap};
+use crate::look_buttons::{self, LookButtons};
 use crate::netgraph::{NetGraph, NetGraphExtra};
 use crate::presence::{Presence, Status};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
@@ -229,6 +230,11 @@ pub struct MalletApp {
     slot_textures: [Option<egui::TextureId>; 4],
     /// Where the cursor was when mouselook started, to put it back afterwards.
     look_return: Option<Pos2>,
+    /// The mouse buttons during mouselook, read so that no click through the crosshair is
+    /// lost.
+    look_buttons: LookButtons,
+    /// The left and right clicks of this frame in mouselook, until a 3D view takes them.
+    look_clicks: look_buttons::Buttons,
     /// The tab whose "unsaved changes" question is showing.
     closing: Option<usize>,
     /// Material previews for the side panel.
@@ -327,6 +333,8 @@ impl MalletApp {
             clone_drag: false,
             slot_textures: [None; 4],
             look_return: None,
+            look_buttons: LookButtons::default(),
+            look_clicks: [false; 2],
             closing: None,
             texture_previews: chrome::TexturePreviews::new(),
             net_graph: NetGraph::default(),
@@ -969,6 +977,20 @@ impl MalletApp {
             modifiers: input.modifiers,
         });
         let space_held = ui.input(|input| input.key_down(egui::Key::Space));
+        self.look_clicks = if editor.camera.mouse_look() {
+            let (pressed, down, focus) = ui.input(|input| {
+                let pointer = &input.pointer;
+                (
+                    [pointer.primary_pressed(), pointer.secondary_pressed()],
+                    [pointer.primary_down(), pointer.secondary_down()],
+                    input.focused,
+                )
+            });
+            self.look_buttons.frame(pressed, down, focus)
+        } else {
+            self.look_buttons.idle();
+            [false; 2]
+        };
         let mut camera_updated = false;
         let (mut camera_ms, mut views_ms) = (0.0, 0.0);
         self.cursor = None;
@@ -1092,7 +1114,7 @@ impl MalletApp {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         let clicked = if looking {
-            ui.input(|input| input.pointer.primary_pressed())
+            std::mem::take(&mut self.look_clicks[0])
         } else {
             response.clicked_by(PointerButton::Primary)
         };
@@ -1168,7 +1190,7 @@ impl MalletApp {
         }
         if editor.tool == Tool::Texture && !painting {
             let applied = if looking {
-                ui.input(|input| input.pointer.secondary_pressed())
+                std::mem::take(&mut self.look_clicks[1])
             } else {
                 response.clicked_by(PointerButton::Secondary)
             };
