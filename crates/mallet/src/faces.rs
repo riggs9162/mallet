@@ -311,18 +311,19 @@ impl Editor {
             .truncate(self.config.editing.recent_texture_count());
     }
 
-    /// What a texture tool click on a face does: Alt picks its material up, Ctrl adds or
-    /// removes, and a plain click selects just that face. A double click (`whole`) takes
-    /// every face of the brush, and with Ctrl adds them.
+    /// What a texture tool click on a face does: Alt picks its material up and selects the
+    /// face whatever the mode, Ctrl adds or removes, and a plain click selects just that
+    /// face. A double click (`whole`) takes every face of the brush, and with Ctrl adds them.
     pub fn texture_click(&mut self, hit: Option<FaceHit>, modifiers: egui::Modifiers, whole: bool) {
+        let selecting = modifiers.alt || matches!(self.texture_mode, TextureMode::LiftSelect | TextureMode::Select);
         let Some(hit) = hit else {
-            if !modifiers.ctrl && matches!(self.texture_mode, TextureMode::LiftSelect | TextureMode::Select) {
+            if !modifiers.ctrl && selecting {
                 self.clear_face_selection();
             }
             return;
         };
         let mode = if modifiers.alt {
-            TextureMode::Lift
+            TextureMode::LiftSelect
         } else {
             self.texture_mode
         };
