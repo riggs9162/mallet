@@ -1131,7 +1131,8 @@ impl MalletApp {
                 },
                 Tool::Texture => {
                     let hit = editor.scene.pick_face(origin, direction, &editor.models);
-                    editor.texture_click(hit, pointer.modifiers);
+                    let whole = response.double_clicked_by(PointerButton::Primary);
+                    editor.texture_click(hit, pointer.modifiers, whole);
                 }
                 Tool::Clip if editor.clipper.three_point && !editor.clipper.placed() => {
                     match editor.scene.surface_hit(origin, direction) {

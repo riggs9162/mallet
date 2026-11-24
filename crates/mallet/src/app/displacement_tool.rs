@@ -228,7 +228,7 @@ pub(super) fn displacement_tab(
     }
     ui.add_space(4.0);
     let summary = if faces.is_empty() {
-        "No faces selected. Click faces in the 3D view; Shift+click takes a whole brush.".to_owned()
+        "No faces selected. Click faces in the 3D view; double-click takes a whole brush.".to_owned()
     } else {
         format!(
             "{} faces selected, {} of them displacements.",

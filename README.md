@@ -371,8 +371,8 @@ it too.
 
 Shift+A opens the Face Edit Sheet, laid out like Hammer++'s. In the 3D view, click a face
 to select it and pick up its texture (Lift+Select, as in Hammer; the Mode menu has Lift,
-Select, Apply and Align to View too), Ctrl+click to add faces and Shift+click for the whole
-brush. Switching to the texture tool with brushes selected lets go of the brushes and
+Select, Apply and Align to View too), Ctrl+click to add or remove faces and double-click for
+the whole brush (Ctrl+double-click adds it). Switching to the texture tool with brushes selected lets go of the brushes and
 selects all of their faces instead. Selecting brushes while the sheet is open, by clicking in
 a 2D view, dragging a box or Select All, selects all of their faces, and Ctrl adds or removes a
 brush's faces. With brushes
