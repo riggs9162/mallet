@@ -3094,6 +3094,9 @@ fn run(action: Action, editor: &mut Editor) {
         Action::PreviousCamera | Action::NextCamera if editor.tool == Tool::Camera => {
             editor.step_camera(action == Action::NextCamera);
         }
+        Action::PreviousCamera | Action::NextCamera if editor.tool == Tool::Select => {
+            editor.cycle_selection(action == Action::NextCamera);
+        }
         Action::PreviousCamera | Action::NextCamera => {}
         Action::DeleteSelection if editor.tool == Tool::Camera => report(editor.delete_camera(), editor),
         Action::BlockTool => editor.set_tool(Tool::Block),
