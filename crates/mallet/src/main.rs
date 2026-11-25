@@ -20,6 +20,7 @@ mod clipper;
 mod compile;
 mod config;
 mod crash;
+mod cursor_clip;
 mod decals;
 mod document;
 mod editor;

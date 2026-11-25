@@ -64,6 +64,9 @@ const CLIP_POINT_REACH_PIXELS: f32 = 8.0;
 const PIVOT_REACH_PIXELS: f32 = 7.0;
 /// How far, in pixels, an arrow key pans a 2D view with nothing to nudge.
 const PAN_PIXELS: f64 = 64.0;
+/// How far, in points, the mouse must move with a button held before the press counts
+/// as a drag rather than a click.
+pub const DRAG_THRESHOLD_PIXELS: f32 = 2.0;
 /// How long `send_input` waits for the window to handle its input.
 const INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -241,6 +244,11 @@ pub struct MalletApp {
     slot_textures: [Option<egui::TextureId>; 4],
     /// Where the cursor was when mouselook started, to put it back afterwards.
     look_return: Option<Pos2>,
+    /// A right-button press in a 3D view that turns into mouselook once the mouse moves
+    /// past the drag threshold: the slot and where it went down.
+    look_press: Option<(usize, Pos2)>,
+    /// The 3D view whose Space and right button drag is strafing the camera.
+    camera_strafe: Option<usize>,
     /// The mouse buttons during mouselook, read so that no click through the crosshair is
     /// lost.
     look_buttons: LookButtons,
@@ -344,6 +352,8 @@ impl MalletApp {
             clone_drag: false,
             slot_textures: [None; 4],
             look_return: None,
+            look_press: None,
+            camera_strafe: None,
             look_buttons: LookButtons::default(),
             look_clicks: [false; 2],
             closing: None,
@@ -1067,12 +1077,12 @@ impl MalletApp {
         if rect.height() >= 1.0 {
             editor.camera.aspect = f64::from(rect.width() / rect.height());
         }
+        let mut moving = self.right_button_camera(&ctx, slot, rect, response, editor, pointer);
         let was_looking = editor.camera.mouse_look();
-        let mut moving = false;
         let typing = ctx.wants_keyboard_input() && !was_looking;
         if !*camera_updated && !typing && (response.hovered() || was_looking) {
             *camera_updated = true;
-            moving = editor
+            moving |= editor
                 .camera
                 .update(&ctx, response.hovered() || was_looking, &self.keymap);
             let looking = editor.camera.mouse_look();
@@ -1084,10 +1094,9 @@ impl MalletApp {
                 if pointer.position.is_none_or(|position| position.distance(center) > 1.0) {
                     ctx.send_viewport_cmd(ViewportCommand::CursorPosition(center));
                 }
+                crate::cursor_clip::clip(&ctx, Some(rect));
             } else if was_looking {
-                if let Some(position) = self.look_return.take() {
-                    ctx.send_viewport_cmd(ViewportCommand::CursorPosition(position));
-                }
+                self.end_look_cursor(&ctx);
             }
         }
         if response.hovered() && !typing {
@@ -1229,7 +1238,9 @@ impl MalletApp {
                     egui::Color32::GRAY
                 };
                 canvas.label(rect.left_top() + egui::vec2(6.0, 4.0), label, color);
-                Camera3D::draw_crosshair(&painter, rect);
+                if looking {
+                    Camera3D::draw_crosshair(&painter, rect);
+                }
                 face_pick_notice(&painter, rect, editor);
                 if !busy {
                     self.draw_gizmo(&painter, slot, rect, response, editor);
@@ -1287,6 +1298,78 @@ impl MalletApp {
         }
         if moving {
             ctx.request_repaint();
+        }
+    }
+
+    /// Runs the right mouse button's camera controls in a 3D view, which take the button
+    /// before any tool does. Holding it turns mouselook on once the mouse moves past the
+    /// drag threshold, so a right-click that stays put still opens the menu or applies a
+    /// texture, and letting it go turns mouselook off again. With Space held, a right drag
+    /// strafes the camera across its view instead. The Camera tool and displacement
+    /// painting keep the right button for themselves. Returns whether the camera moved.
+    fn right_button_camera(
+        &mut self,
+        ctx: &egui::Context,
+        slot: usize,
+        rect: Rect,
+        response: &Response,
+        editor: &mut Editor,
+        pointer: &PointerState,
+    ) -> bool {
+        let (pressed, down, delta, space) = ctx.input(|input| {
+            (
+                input.pointer.button_pressed(PointerButton::Secondary),
+                input.pointer.button_down(PointerButton::Secondary),
+                input.pointer.delta(),
+                input.key_down(egui::Key::Space),
+            )
+        });
+        if editor.camera.held_look() {
+            if !self.look_buttons.down()[1] {
+                editor.camera.set_mouse_look(ctx, false, false);
+                self.end_look_cursor(ctx);
+            }
+            return false;
+        }
+        if self.camera_strafe == Some(slot) {
+            if down && space {
+                editor.camera.strafe_by(delta);
+                return delta != egui::Vec2::ZERO;
+            }
+            self.camera_strafe = None;
+            return false;
+        }
+        let free = editor.tool != Tool::Camera && !(editor.tool == Tool::Texture && editor.displacement.painting());
+        if pressed && free && response.hovered() && !editor.camera.mouse_look() {
+            if space {
+                self.camera_strafe = Some(slot);
+                return false;
+            }
+            self.look_press = pointer.position.map(|position| (slot, position));
+        }
+        let Some((_, origin)) = self.look_press.filter(|(pressed_in, _)| *pressed_in == slot) else {
+            return false;
+        };
+        if !down {
+            self.look_press = None;
+        } else if pointer
+            .position
+            .is_some_and(|position| position.distance(origin) > DRAG_THRESHOLD_PIXELS)
+        {
+            self.look_press = None;
+            editor.camera.set_mouse_look(ctx, true, true);
+            self.look_return = Some(origin);
+            ctx.send_viewport_cmd(ViewportCommand::CursorPosition(rect.center()));
+            crate::cursor_clip::clip(ctx, Some(rect));
+        }
+        false
+    }
+
+    /// Gives the cursor back after mouselook: unclipped, where it was when mouselook began.
+    fn end_look_cursor(&mut self, ctx: &egui::Context) {
+        crate::cursor_clip::clip(ctx, None);
+        if let Some(position) = self.look_return.take() {
+            ctx.send_viewport_cmd(ViewportCommand::CursorPosition(position));
         }
     }
 
