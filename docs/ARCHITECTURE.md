@@ -108,12 +108,29 @@ the linear part, and coordinates within a millionth of a whole number snap to it
 `crates/mallet/src/transform.rs` builds the matrices for the editor's commands (around
 the pivot, the selection's centre or the world origin) and turns entity `angles` by
 carrying their forward and up directions through the matrix and squaring them up again,
-which also handles mirrors. The 2D views preview a drag through `Overlay::transform`, now
-a general matrix, so rotations and skews show live in every view, models included.
-`gizmo.rs` places the 3D gizmo at a fixed size on screen, hit-tests its parts in screen
-space, and turns a drag into a move (the mouse ray's closest point on an axis, or its hit
-on a plane), a rotation (the mouse's angle around the gizmo's centre on screen) or a
-scale; the result goes through the same commands as the 2D handles.
+which also handles mirrors. The pivot is a placed point, the origin of an entity selected
+on its own, or the selection's centre. The 2D views preview a resize, rotation or skew
+drag through `Overlay::transform`, a general matrix, so they show live in every view,
+models included. `gizmo.rs` places the 3D gizmo at a fixed size on screen at the centre
+of the selection (the pivot in rotate mode), hit-tests its parts in screen space with a
+6-pixel margin, and turns a rotate or scale drag into a matrix: a rotation is the mouse's
+angle around the gizmo's centre on screen, and stretching along an axis holds the
+opposite face of the selection still. The result goes through the same commands as the
+2D handles.
+
+Moves are not previewed but applied as they are dragged. Every move drag, from the gizmo,
+from a selected object in the 3D view or from the selection's body in a 2D view, goes
+through one `TranslationPlane` (`translation_plane.rs`): a plane fixed when the drag
+starts, through the point it started on and spanned by two world axes. A free 3D drag
+uses the two axes most square to the view direction, so the mouse ray always meets it
+steeply; a gizmo arrow uses its axis and the other axis most square to the view, with a
+`Constraint` that drops the second; a 2D view uses its own two axes. Each frame the mouse
+ray meets the plane, the two in-plane coordinates of the difference from the start are
+snapped to `Editor::snap_step` (the grid, half of it with half-grid snapping, whole units
+without a grid, or 1/64 while Alt is held), and `app/select_3d.rs`'s `LiveMove` applies
+the change since the last frame with `move_selection`. Letting go joins those undo steps
+into one with `History::join_latest`; Escape undoes them. A Shift drag clones first, and
+a clone that ends where it started is taken back.
 
 Brushes and entities are found by id through `mallet_vmf::index`: a map remembers where
 each one was (`Vmf::entity_by_id`, `solid_by_id`, `solid_with_owner`, `world_solid`),
@@ -148,8 +165,28 @@ the camera is inside; in mouselook the ray goes through the crosshair. Props are
 against their model's triangles, in model space through the inverse of their placement,
 so a click through a gap in a fence picks the wall behind it; only when the ray hits
 nothing at all does a prop's bounding box count, so thin or hollow models can still be
-picked. The texture tool uses the same test, so props block it only where they are. The camera smooths
-raw mouse movement over two frames and eases its speed, using real frame times.
+picked. The texture tool uses the same test, so props block it only where they are.
+
+The 3D camera (`view3d.rs`) is a position, a pitch clamped to ±90° and an unbounded yaw.
+`Camera3D::build_view_matrix` rotates by pitch about X, then yaw about Z, applied to the
+camera's own axes, and translates by the negated position; the projection has the
+horizontal field of view (90° by default), a near plane at 1 and the draw distance as
+its far plane. Clicks unproject their pixel onto the near plane through the inverse
+view-projection matrix (`build_ray`). The movement keys drive one signed velocity per
+axis (forward, right and world up) that grows by the acceleration times the frame time
+up to the camera speed, starts from rest when the direction reverses and is zero the
+moment the keys are let go; frame times are clamped to 0.3 seconds. The right mouse
+button, Space with the right button and the wheel go to the camera before any tool sees
+them: holding the right button turns mouselook on once the mouse moves 2 pixels, so a
+right-click that stays put still reaches the tool, and on Windows the hidden cursor is
+clipped to the viewport with `ClipCursor`.
+
+In the 3D view the Selection tool (`app/select_3d.rs`) selects on the press, with
+`Scene::pick_ray_all` listing every hit along the ray nearest first; holding the button
+still steps through them every half second. A press past the 2-pixel drag threshold on
+the selection becomes a live move; one from empty space becomes a rubber band, whose
+screen rectangle `marquee_volume` turns into the planes of the part of the view it covers
+for `Scene::owners_in_volume`. Ctrl toggles, Shift adds.
 
 Paint select (`app/paint_select.rs`) runs while Ctrl and the left button are held with the
 Selection tool. Each frame it picks at points along the path the cursor took since the last
@@ -184,12 +221,8 @@ hidden, read from the members' flags. `editor/visgroups.rs` holds the operations
 step, and `app/visgroups.rs` the side panel section, the Move Selection to VisGroup dialog and the
 Edit VisGroups window. A group's members take its colour in the 2D views, as in Hammer.
 
-A box dragged with the Selection tool does not select when the mouse is let go. It
-becomes `Overlay::selection_box`, a `SelectionBox` in the view it was drawn in, flat along
-that view's depth so the 2D handle code resizes and draws it like any other box.
-`Editor::confirm_selection_box` selects what it covers when Enter is pressed, and Escape,
-a click or a tool change drops it. With `ViewOptions::infinite_selection`, Hammer's
-Automatic infinite selection, the box is confirmed as soon as it is let go.
+A box dragged with the Selection tool in a 2D view selects what it touches when the mouse
+is let go (`Scene::owners_touching`), with the same Ctrl and Shift rules as clicks.
 
 ## Map tabs
 
@@ -677,7 +710,7 @@ changes, never for selection changes or camera moves:
   into the picture a few times a second, rebuilding only the chunks that use it. A texture
   the graphics card refuses, as when its memory is full, shows as missing. MCP screenshots
   wait for the loads to finish.
-- The camera has a draw distance (default 8192 units) that sets the projection's far
+- The camera has a draw distance (default 5000 units) that sets the projection's far
   plane, so frustum culling also drops everything beyond it. Chunks are 1024 units.
 - Point entities whose class has `iconsprite()` show that icon facing the camera in
   place of their box. Classes with `sprite()`, such as env_sprite, show their own sprite

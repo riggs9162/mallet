@@ -138,15 +138,18 @@ These follow Hammer++'s default keybindings.
 | Shift+G | Magnify tool: left-click a 2D view to zoom in and right-click to zoom out, around the cursor |
 | Alt+Enter or double-click | Object Properties for the selection: keyvalues, outputs, inputs and flags from the game's FGD. Angles get Hammer's compass with Up and Down, models a Browse... button, and colours a colour picker; fields apply when you leave them, and Apply applies what is still being typed. Turn SmartEdit off to see every key as plain text |
 | F9 / Shift+F9 | Run Map: Hammer's normal compile dialog, or the compile window after Expert... / compile again with the preset used last |
-| Click | In 2D, click a brush's centre × or its outline to select it; in 3D, click it (or aim the crosshair at it in mouselook). Props are hit where their model is, so clicks through gaps reach what is behind; only when nothing else is hit does a prop's box count. Entities are selected whole; Ctrl+click adds or removes |
-| Drag on empty space | Draw a selection box, as in Hammer. Drag its handles to resize it or its inside to move it, then press Enter to select everything inside it, or Escape to drop it. Ctrl adds to the selection. Turn on Automatic infinite selection in Mallet Options to select as soon as you let go |
+| Click | In 2D, click a brush's centre × or its outline to select it; in 3D, click it (or aim the crosshair at it in mouselook). Props are hit where their model is, so clicks through gaps reach what is behind; only when nothing else is hit does a prop's box count. Entities are selected whole; Ctrl+click adds or removes and Shift+click adds |
+| Hold the left button on an object (3D) | Every half second the selection steps to the next object behind it, under the cursor, so stacked objects can be reached without clicking again |
+| Click a selected object (3D) | Switch the gizmo between moving and scaling |
+| Drag on empty space | Draw a rubber band; letting go selects everything it touches. In the 3D view that is everything whose box reaches into the part of the view the band covers. Ctrl toggles what it touches and Shift adds it |
 | Ctrl+drag | Paint select with the Selection tool: while Ctrl and the left button are held, everything the cursor passes over joins the selection, in the 2D and 3D views (in mouselook, everything the crosshair passes over). A stroke that starts on something already selected takes things off the selection instead. In a 2D view a stroke starts on an object; a Ctrl drag from empty space draws a box that adds, and one on the gizmo in 3D still drags the gizmo |
-| Drag the selection | Move it so its corner snaps to the grid, with texture lock. Hold Shift as the drag starts or on release to clone it, as in Hammer: the original stays and the copy moves. The same goes for resizing, rotating and skewing with the handles, and for the 3D gizmo; the clone and its change undo together |
+| Drag the selection | Move it, with texture lock, in whole grid steps from where the drag started (Alt moves freely). The objects move as you drag, in every view, and the move undoes in one step. In the 3D view the drag slides along the floor or along a wall facing you, whichever the view looks at most squarely. A press only becomes a drag after the mouse moves 2 pixels. Hold Shift as the drag starts to clone: the original stays and the copy moves. Shift also clones when resizing, rotating and skewing with the handles, and with the 3D gizmo; the clone and its change undo together. Escape cancels a drag |
 | Drag a white handle | Resize the selection or the pending block from that edge or corner |
 | Click inside the selection's box (2D) | Switch its handles between scale, rotate (round corner handles) and skew (edge handles). Anywhere inside the box works; the outline or centre cross of an object that is not selected still selects that object |
-| Rotate handles | Drag a corner to turn the selection around the yellow pivot, which you can drag elsewhere; hold Shift to snap to 15° |
+| Rotate handles | Drag a corner to turn the selection around the yellow pivot, which you can drag elsewhere; hold Shift to snap to 15°. The pivot starts at the centre of the selection, or at the origin of an entity selected on its own |
 | Skew handles | Drag an edge along itself to shear the selection; the opposite edge stays put |
-| Arrow keys over a 2D view | Nudge the selection one grid step along the view's axes (Ctrl: one unit) |
+| Arrow keys over a 2D view | Nudge the selection one grid step along the view's axes (Ctrl, or with Snap to Grid off: one unit). Shift nudges a copy and leaves the original. A selection that was wholly in view stays in view |
+| Page Down / Page Up | With the Selection tool, select the next / previous object of the map |
 | Ctrl+M | Transform dialog: rotate, scale or move by typed amounts around the selection's centre, the pivot or the world origin |
 | Ctrl+B / Ctrl+Shift+B | Snap the selection to the grid / snap each selected object on its own |
 | Ctrl+L / Ctrl+I | Flip the selection horizontally / vertically in the 2D view used last |
@@ -181,12 +184,15 @@ These follow Hammer++'s default keybindings.
 | Ctrl+Shift+F | Find Entities: the Entity Report with its name filter ready. Map > Entity Report lists the map's entities by class, name or keyvalue (a trailing `*` matches the start), with Go to, Select All, Properties and Delete |
 | Alt+P | Check for Problems: a missing player start, entities with no class, brush entities with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused keyvalues, lightmap scales of 0, duplicate ids and props whose class loses their model, with Go to Error, Fix and Fix All (Map menu) |
 | Ctrl+Shift+G | Go to Brush Number: select a brush by its number and centre the views on it; View > Go to Coordinates centres them on a point |
-| Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the camera forward |
+| Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the 3D camera along its view, 60 units a notch |
 | Arrow keys over a 2D view with nothing to nudge | Pan the view |
 | Middle-drag or Space+drag | Pan a 2D view |
+| Hold the right button in the 3D view | Mouselook while held: once the mouse moves, the cursor hides and stays in the view, a crosshair shows in the middle, and letting go puts the cursor back. A right-click that does not move still opens the menu or applies a texture |
+| Space + right drag in the 3D view | Slide the camera across its view, with the drag |
 | Z | Toggle mouselook in the 3D view (Escape leaves it); the cursor stays in the view and returns afterwards. Clicks and right-clicks act on what the crosshair points at, so you can select objects and faces and apply textures while flying |
 | Click a viewport's label | Switch that viewport between 3D Textured, 3D Wireframe, 3D Lighting Preview and the 2D Top, Front and Side views |
-| W A S D, arrow keys | Move the 3D camera; the arrow keys strafe left, right, up and down. A key pressed with Ctrl or Alt, such as the S of Ctrl+S, does not move it until released |
+| W A S D, R / F | Fly the 3D camera forward, back and sideways along its view, and R / F straight up and down. It speeds up to the camera speed and stops the moment the keys are let go. A key pressed with Ctrl or Alt, such as the S of Ctrl+S, does not move it until released |
+| Arrow keys over the 3D view | Turn the camera left and right and look up and down |
 | Alt (in mouselook) | Crouch: fly at a third of the camera speed. Alt with W A S D moves instead of starting a shortcut |
 
 View > Net Graph toggles a frame timing overlay in the 3D view's bottom-right corner:
@@ -239,13 +245,17 @@ Besides moving and resizing, the selection can be rotated, skewed and mirrored, 
 undo step per change. Rotating or mirroring an entity turns its `angles` with it;
 displacements turn with their brushes.
 
-In the 3D view the selection tool shows a transform gizmo, as in Hammer++. In its move
-mode the arrows move along one axis and the squares across a plane, snapping the
-selection's corner to the grid; in rotate mode the rings turn the selection around the
-pivot (Shift snaps to 15°); in scale mode the cubes stretch one axis by whole grid steps
-and the centre cube scales evenly. Click the gizmo's centre, or use the buttons under
-Transform in the side panel, to switch modes. Hold Shift when letting go of a move to
-clone. View > 3D Transform Gizmo or the toolbar button hides it.
+In the 3D view the selection tool shows a transform gizmo at the centre of the selection,
+as in Hammer++. In its move mode the arrows move along one axis, the squares across a
+plane and the centre along the floor or a wall facing you, in whole grid steps; the
+selection moves as you drag. In rotate mode the rings turn the selection around the pivot
+(Shift snaps to 15°); in scale mode the cubes stretch one axis by whole grid steps while
+the opposite face stays put, and the centre cube scales evenly. Parts can be grabbed a
+few pixels outside where they are drawn. Click the gizmo's centre, or use the buttons
+under Transform in the side panel, to switch modes; clicking a selected object switches
+between moving and scaling. Hold Shift as a drag starts to clone. View > 3D Transform
+Gizmo or the toolbar button hides it. Map > Snap to Half Grid snaps to half the grid size
+for finer moves.
 
 Tools > Align Objects lines selected objects up with an edge of the selection in the 2D
 view used last. The toolbar's padlock is Hammer's texture lock: textures move and turn
@@ -584,9 +594,10 @@ as you change it:
   builds.
 - **Compiling**: how compiles run, the folder `.mallet` maps compile in and how much
   compiler output the compile window keeps.
-- **Viewports**: draw distance, field of view, the 3D camera's preview in the 2D views
+- **Viewports**: draw distance (5000 units at first), field of view, the 3D camera's preview in the 2D views
   and how far it reaches, camera speed, crouch speed and acceleration,
-  how far the mouse wheel moves the camera, mouselook sensitivity and smoothing,
+  how far the mouse wheel moves the camera, mouselook sensitivity, drawing the plane a
+  move drag slides along (for debugging),
   how far the wheel zooms the 2D views, how close a click must be to select a brush, the
   grid of new maps, how dense the grid may get and how often grid lines are highlighted.
 - **Lighting preview**: HDR or LDR light values; the sun, sky light, dynamic lights, texture
