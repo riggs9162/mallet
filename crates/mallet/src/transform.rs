@@ -149,12 +149,24 @@ fn snap(value: f64, grid: f64) -> f64 {
 }
 
 impl Editor {
-    /// The point rotations and gizmo drags turn around: the placed pivot, or the centre
-    /// of the selection.
+    /// The point rotations turn around: the placed pivot, or the origin of the entity when
+    /// one entity alone is selected, or else the centre of the selection's bounds.
     pub fn pivot(&self) -> DVec3 {
         self.overlay
             .pivot
+            .or_else(|| self.single_entity_origin())
             .unwrap_or_else(|| self.scene.selection_bounds().center())
+    }
+
+    /// The origin of the one selected entity, when the selection is a single entity that
+    /// has an `origin` key.
+    fn single_entity_origin(&self) -> Option<DVec3> {
+        let mut selection = self.selection.iter();
+        let (Some(Owner::Entity(id)), None) = (selection.next(), selection.next()) else {
+            return None;
+        };
+        let vmf = &self.document.as_ref()?.vmf;
+        find_entity(vmf, *id).ok()?.origin()
     }
 
     /// Resolves a [`Pivot`] choice to a point.
