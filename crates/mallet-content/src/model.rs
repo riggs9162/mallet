@@ -315,12 +315,17 @@ fn read_model(filesystem: &GameFs, path: &str, variant: ModelVariant) -> Result<
     details.skins = model.skin_tables().count().max(1);
     let (hull_min, hull_max) = model.bounding_box();
 
-    let basis = root_basis(&model);
+    let (basis, animated) = root_basis(&model);
+    let offset = if animated && !details.static_prop {
+        root_offset(&model)
+    } else {
+        [0.0; 3]
+    };
     let vertices: Vec<ModelVertex> = model
         .vertices()
         .iter()
         .map(|vertex| ModelVertex {
-            position: turn(&basis, vertex.position),
+            position: add(turn(&basis, vertex.position), offset),
             normal: turn(&basis, vertex.normal),
             uv: vertex.texture_coordinates,
         })
@@ -441,8 +446,9 @@ fn prop_data(key_values: &str) -> Option<PropData> {
 /// quarter turn about the up axis away, and the parser works the turn out from the root
 /// bone and the idle animation. For some characters it reads another animation than the
 /// idle one and ends up with a model on its head; a turn that does not keep up pointing
-/// up is replaced by the quarter turn.
-fn root_basis(model: &vmdl::Model) -> [[f32; 3]; 3] {
+/// up is replaced by the quarter turn. Says whether the turn came from the model rather
+/// than that replacement.
+fn root_basis(model: &vmdl::Model) -> ([[f32; 3]; 3], bool) {
     let axis = |x: f32, y: f32, z: f32| {
         let turned = model.apply_root_transform(vmdl::Vector { x, y, z });
         [turned.x, turned.y, turned.z]
@@ -450,10 +456,28 @@ fn root_basis(model: &vmdl::Model) -> [[f32; 3]; 3] {
     let basis = [axis(1.0, 0.0, 0.0), axis(0.0, 1.0, 0.0), axis(0.0, 0.0, 1.0)];
     let [across, along, up] = basis[2];
     if across.abs() < 0.01 && along.abs() < 0.01 && (up - 1.0).abs() < 0.01 {
-        basis
+        (basis, true)
     } else {
-        [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        ([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], false)
     }
+}
+
+/// Where the idle animation puts the root bone, which the game draws the model from. Doors,
+/// for one, stand about a unit off their bind pose this way. Only a position stored as it
+/// is counts; one stored as compressed steps would need the bone's scale and base, which
+/// the parser does not apply.
+fn root_offset(model: &vmdl::Model) -> [f32; 3] {
+    model
+        .animations()
+        .find_map(|description| description.animations.iter().find(|animation| animation.bone == 0))
+        .filter(|animation| animation.flags.contains(vmdl::mdl::AnimationFlags::STUDIO_ANIM_RAWPOS))
+        .map(|animation| animation.position(0))
+        .filter(|position| [position.x, position.y, position.z].iter().all(|value| value.is_finite()))
+        .map_or([0.0; 3], |position| [position.x, position.y, position.z])
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 /// Turns a stored position or normal into the model's own space.
