@@ -62,6 +62,8 @@ use crate::{mcp, tools};
 const CLIP_POINT_REACH_PIXELS: f32 = 8.0;
 /// How close, in pixels, a press has to be to the pivot to drag it.
 const PIVOT_REACH_PIXELS: f32 = 7.0;
+/// The margin, in pixels, a 2D view keeps around a nudged selection it scrolls to follow.
+const NUDGE_MARGIN_PIXELS: f64 = 16.0;
 /// How far, in pixels, an arrow key pans a 2D view with nothing to nudge.
 const PAN_PIXELS: f64 = 64.0;
 /// How far, in points, the mouse must move with a button held before the press counts
@@ -1541,7 +1543,7 @@ impl MalletApp {
         let view = editor.views[view_index].clone();
         if response.hovered() && !editor.camera.mouse_look() {
             editor.active_view = view_index;
-            nudge(ui, &view, editor);
+            nudge(ui, view_index, rect, editor);
         }
         if editor.paste_placing.is_some() {
             if response.clicked_by(PointerButton::Primary) {
@@ -3145,15 +3147,22 @@ fn nudges(editor: &Editor) -> bool {
         && (editor.nudges_vertices() || (editor.tool == Tool::Select && !editor.selection.is_empty()))
 }
 
-/// Moves the selection with the arrow keys in a hovered 2D view, along the view's axes:
-/// one grid step, or one unit with Ctrl, as Hammer's nudge does. With the Vertex tool the
-/// selected corners and edges move instead of the whole brushes.
-fn nudge(ui: &egui::Ui, view: &View2D, editor: &mut Editor) {
+/// Moves the selection with the arrow keys in a hovered 2D view, along the view's axes
+/// (right is +X in the top view and +Y in the front view): one grid step while Snap to
+/// Grid is on, or one unit with Ctrl or without snapping. Shift moves a copy instead,
+/// leaving the selection where it was. With the Vertex tool the selected corners and
+/// edges move instead of the whole brushes.
+///
+/// When the selection was wholly in view before the nudge and still fits in the view, the
+/// view scrolls as needed to keep all of it in view, with a small margin.
+fn nudge(ui: &egui::Ui, view_index: usize, rect: Rect, editor: &mut Editor) {
     if !nudges(editor) || ui.ctx().wants_keyboard_input() {
         return;
     }
-    let (step, offset) = ui.input(|input| {
-        let step = if input.modifiers.ctrl { 1.0 } else { editor.grid };
+    let snapped = editor.snap_to_grid;
+    let grid = editor.snap_step();
+    let (step, offset, clone) = ui.input(|input| {
+        let step = if input.modifiers.ctrl || !snapped { 1.0 } else { grid };
         let mut offset = DVec2::ZERO;
         for (key, direction) in [
             (egui::Key::ArrowLeft, DVec2::NEG_X),
@@ -3161,20 +3170,32 @@ fn nudge(ui: &egui::Ui, view: &View2D, editor: &mut Editor) {
             (egui::Key::ArrowUp, DVec2::Y),
             (egui::Key::ArrowDown, DVec2::NEG_Y),
         ] {
-            if input.key_pressed(key) && !input.modifiers.alt && !input.modifiers.shift {
+            if input.key_pressed(key) && !input.modifiers.alt {
                 offset += direction;
             }
         }
-        (step, offset)
+        (step, offset, input.modifiers.shift)
     });
     if offset == DVec2::ZERO {
         return;
     }
-    let offset = view.axis.lift(offset * step);
+    let axis = editor.views[view_index].axis;
+    let offset = axis.lift(offset * step);
     if editor.nudges_vertices() {
         editor.nudge_vertices(offset);
+        return;
+    }
+    let before = editor.scene.selection_bounds();
+    let result = if clone {
+        editor.clone_selection(offset)
     } else {
-        report(editor.move_selection(offset), editor);
+        editor.move_selection(offset)
+    };
+    report(result, editor);
+    let after = editor.scene.selection_bounds();
+    let view = &mut editor.views[view_index];
+    if !before.is_empty() && !after.is_empty() && view.shows_all(rect, &before, 0.0) {
+        view.keep_in_view(rect, &after, NUDGE_MARGIN_PIXELS);
     }
 }
 

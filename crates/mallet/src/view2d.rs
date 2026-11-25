@@ -221,6 +221,34 @@ impl View2D {
         )
     }
 
+    /// Whether a box shows wholly inside the view, at least `margin` pixels in from its
+    /// edges.
+    pub fn shows_all(&self, rect: Rect, bounds: &Bounds, margin: f64) -> bool {
+        let (min, max) = self.visible(rect, margin);
+        let (low, high) = (self.axis.project(bounds.min), self.axis.project(bounds.max));
+        low.cmpge(min).all() && high.cmple(max).all()
+    }
+
+    /// Scrolls the view, without zooming, just enough to show the whole box with `margin`
+    /// pixels around it. A box too big for that is left alone.
+    pub fn keep_in_view(&mut self, rect: Rect, bounds: &Bounds, margin: f64) {
+        let (min, max) = self.visible(rect, margin);
+        let (low, high) = (self.axis.project(bounds.min), self.axis.project(bounds.max));
+        if (high - low).cmpgt(max - min).any() {
+            return;
+        }
+        let shift = (low - min).min(DVec2::ZERO) + (high - max).max(DVec2::ZERO);
+        self.center += shift;
+    }
+
+    /// The corners of the world area the view shows, `margin` pixels in from its edges.
+    fn visible(&self, rect: Rect, margin: f64) -> (DVec2, DVec2) {
+        let inset = margin / self.scale;
+        let a = self.to_world(rect, rect.left_top());
+        let b = self.to_world(rect, rect.right_bottom());
+        (a.min(b) + DVec2::splat(inset), a.max(b) - DVec2::splat(inset))
+    }
+
     /// Sets the zoom in pixels per world unit, clamped to the supported range.
     pub fn set_scale(&mut self, scale: f64) {
         self.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
