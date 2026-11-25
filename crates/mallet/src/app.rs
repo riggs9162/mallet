@@ -22,6 +22,7 @@ mod properties;
 mod quit;
 mod recovery;
 mod run_map;
+mod select_3d;
 mod soundscape_browser;
 mod texture_browser;
 mod texture_tool;
@@ -52,7 +53,9 @@ use crate::look_buttons::{self, LookButtons};
 use crate::netgraph::{NetGraph, NetGraphExtra};
 use crate::presence::{Presence, Status};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
-use crate::scene::{Remap, SelectionBox};
+use crate::scene::Remap;
+use crate::translation_plane::{Constraint, TranslationPlane};
+use select_3d::{LiveMove, Press3D, Site};
 use crate::transform::{self, HandleMode};
 use crate::view2d::{Axis2D, Handle, View2D};
 use crate::view3d::Camera3D;
@@ -149,8 +152,9 @@ const KEY_ACTIONS: &[Action] = &[
 /// and `anchor` the point a move snaps to the grid.
 #[derive(Clone, Copy, Debug)]
 enum Drag {
-    /// Moving the selection, or a clone of it when Shift is held.
-    Move { view: usize, start: DVec2, anchor: DVec3 },
+    /// Moving the selection, or a clone of it when Shift is held. The move itself is the
+    /// app's live move, applied to the map as it goes.
+    Move { view: usize },
     /// Resizing the selection with one of its handles.
     Resize {
         view: usize,
@@ -169,18 +173,9 @@ enum Drag {
     },
     /// Moving the pivot rotations turn around.
     Pivot { view: usize },
-    /// Drawing a selection rectangle; with `add`, set when Ctrl was held at the press,
-    /// what it covers joins the selection instead of replacing it.
-    Marquee { view: usize, start: DVec2, add: bool },
-    /// Moving the selection box that waits for Enter.
-    MoveSelectionBox { view: usize, start: DVec2, bounds: Bounds },
-    /// Resizing the selection box that waits for Enter with one of its handles.
-    ResizeSelectionBox {
-        view: usize,
-        start: DVec2,
-        bounds: Bounds,
-        handle: Handle,
-    },
+    /// Drawing a selection rectangle, which selects what it touches when let go: `mode`
+    /// comes from the modifiers held at the press, so Ctrl toggles and Shift adds.
+    Marquee { view: usize, start: DVec2, mode: SelectMode },
     /// Drawing a new block, from a grid-snapped corner.
     NewBlock { view: usize, start: DVec2 },
     /// Moving the pending block.
@@ -216,8 +211,6 @@ impl Drag {
             | Self::Skew { view, .. }
             | Self::Pivot { view }
             | Self::Marquee { view, .. }
-            | Self::MoveSelectionBox { view, .. }
-            | Self::ResizeSelectionBox { view, .. }
             | Self::NewBlock { view, .. }
             | Self::MoveBlock { view, .. }
             | Self::ResizeBlock { view, .. }
@@ -231,6 +224,8 @@ struct PointerState {
     position: Option<Pos2>,
     press_origin: Option<Pos2>,
     modifiers: Modifiers,
+    /// Whether the left button is held.
+    primary_down: bool,
 }
 
 /// The editor window. Map and view state live in the shared [`Editor`].
@@ -252,6 +247,18 @@ pub struct MalletApp {
     look_press: Option<(usize, Pos2)>,
     /// The 3D view whose Space and right button drag is strafing the camera.
     camera_strafe: Option<usize>,
+    /// A move of the selection being dragged, live, in a 3D or 2D view.
+    live_move: Option<LiveMove>,
+    /// A left-button press with the Selection tool in a 3D view that is not a drag yet.
+    press_3d: Option<Press3D>,
+    /// What the cursor was over in a 3D view, by slot, position and scene generation, so
+    /// the cursor's shape needs no new pick while the mouse stays still.
+    hover_pick: Option<((usize, Pos2, u64), Option<crate::scene::Owner>)>,
+    /// A press on a gizmo part that is not a drag yet: the slot, the part and where.
+    gizmo_press: Option<(usize, GizmoPart, Pos2)>,
+    /// A left-button press in a 2D view: the view, where it went down, and whether it has
+    /// moved past the drag threshold.
+    press_2d: Option<(usize, Pos2, bool)>,
     /// The mouse buttons during mouselook, read so that no click through the crosshair is
     /// lost.
     look_buttons: LookButtons,
@@ -357,6 +364,11 @@ impl MalletApp {
             look_return: None,
             look_press: None,
             camera_strafe: None,
+            live_move: None,
+            press_3d: None,
+            hover_pick: None,
+            gizmo_press: None,
+            press_2d: None,
             look_buttons: LookButtons::default(),
             look_clicks: [false; 2],
             closing: None,
@@ -481,6 +493,9 @@ impl MalletApp {
             }
             self.dispatch(action, editor);
         }
+        if triggered.contains(&Action::ClearSelection) && !editor.camera.mouse_look() {
+            self.cancel_drags(editor);
+        }
         let alt = ctx.input(|input| input.modifiers.alt);
         for action in triggered {
             let crouching = alt && self.keymap.is_crouch_chord(action);
@@ -492,6 +507,23 @@ impl MalletApp {
         let dropped = ctx.input(|input| input.raw.dropped_files.iter().find_map(|file| file.path.clone()));
         if let Some(path) = dropped {
             let _ = editor.open_in_tab(&path);
+        }
+    }
+
+    /// Escape: cancels whatever the mouse is in the middle of in the viewports. A live move
+    /// is undone, and presses, rubber bands and previewed transforms are dropped.
+    fn cancel_drags(&mut self, editor: &mut Editor) {
+        if let Some(live) = self.live_move.take() {
+            live.cancel(editor);
+        }
+        self.press_3d = None;
+        self.press_2d = None;
+        self.gizmo_press = None;
+        self.gizmo_drag = None;
+        self.paint_select = None;
+        if self.drag.take().is_some() {
+            editor.overlay.transform = None;
+            editor.overlay.marquee = None;
         }
     }
 
@@ -1001,6 +1033,7 @@ impl MalletApp {
             position: input.pointer.latest_pos(),
             press_origin: input.pointer.press_origin(),
             modifiers: input.modifiers,
+            primary_down: input.pointer.primary_down(),
         });
         let space_held = ui.input(|input| input.key_down(egui::Key::Space));
         self.look_clicks = if editor.camera.mouse_look() {
@@ -1128,13 +1161,24 @@ impl MalletApp {
         let positioning = editor.active_position_pick().is_some();
         let busy = picking || positioning || placing;
         let painting = !busy && self.paint_displacements_3d(slot, rect, response, editor, pointer);
+        let live = self.live_move_3d(slot, rect, editor, pointer);
         let gizmo_hot = !busy
             && !self.paint_selecting(slot)
-            && (self.use_gizmo(slot, rect, response, editor, pointer)
+            && (live
+                || self.use_gizmo(slot, rect, response, editor, pointer)
                 || self.vertex_tool_3d(slot, rect, response, editor, pointer)
                 || self.overlay_tool_3d(slot, rect, response, editor, pointer)
                 || painting);
         let selecting = !busy && self.paint_select_3d(slot, rect, response, editor, pointer, gizmo_hot);
+        if editor.tool == Tool::Select && !busy && !looking && !selecting {
+            let pressing = self.press_3d.as_ref().is_some_and(|press| matches!(press, Press3D::Object { slot: at, .. } | Press3D::Empty { slot: at, .. } | Press3D::Marquee { slot: at, .. } if *at == slot));
+            if pressing || !gizmo_hot {
+                self.select_3d(slot, rect, response, editor, pointer);
+            }
+            if response.hovered() && (!gizmo_hot || live) {
+                self.select_cursor_3d(slot, rect, response, editor);
+            }
+        }
         if (picking || positioning) && response.hovered() && !looking {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         }
@@ -1156,14 +1200,10 @@ impl MalletApp {
         } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
             let (origin, direction) = editor.camera.build_ray(rect, aim);
             match editor.tool {
-                Tool::Select if selecting => {}
+                Tool::Select if selecting || !looking => {}
                 Tool::Select => {
                     let hit = editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks());
                     pick(editor, hit, pointer.modifiers);
-                    // Double-clicking opens the properties of what was picked, as in Hammer.
-                    if response.double_clicked_by(PointerButton::Primary) && !editor.selection.is_empty() {
-                        editor.properties_open = true;
-                    }
                 }
                 Tool::Entity => match editor.scene.surface_hit(origin, direction) {
                     Some(point) => {
@@ -1249,6 +1289,7 @@ impl MalletApp {
                 face_pick_notice(&painter, rect, editor);
                 if !busy {
                     self.draw_gizmo(&painter, slot, rect, response, editor);
+                    self.draw_select_3d(&painter, slot, rect, editor, pointer);
                 }
                 vertex_tool::draw_vertex_3d(&painter, &editor.camera, rect, editor);
                 displacement_tool::draw_brush(
@@ -1378,8 +1419,10 @@ impl MalletApp {
         }
     }
 
-    /// The gizmo for the selection in a 3D view, while the selection tool has one.
-    /// During a drag it follows the previewed move.
+    /// The gizmo for the selection in a 3D view, while the selection tool has one. It
+    /// sits at the centre of the selection's bounds, or at the rotation pivot in rotate
+    /// mode. During a rotate or scale drag it follows the previewed transform; a move is
+    /// applied as it goes, so the gizmo follows the selection itself.
     fn gizmo_for(&self, slot: usize, rect: Rect, editor: &Editor) -> Option<Gizmo> {
         let shown = editor.tool == Tool::Select
             && editor.config.transform.gizmo
@@ -1395,12 +1438,22 @@ impl MalletApp {
                 .map_or(drag.gizmo.center, |remap| remap.apply(drag.gizmo.center));
             return Gizmo::new(&editor.camera, rect, center, drag.gizmo.mode);
         }
-        Gizmo::new(&editor.camera, rect, editor.pivot(), editor.config.transform.gizmo_mode)
+        let mode = editor.config.transform.gizmo_mode;
+        let center = match mode {
+            transform::GizmoMode::Rotate => editor.pivot(),
+            transform::GizmoMode::Move | transform::GizmoMode::Scale => editor.scene.selection_bounds().center(),
+        };
+        Gizmo::new(&editor.camera, rect, center, mode)
     }
 
-    /// Runs the gizmo for one frame of a 3D view: starts, follows and finishes drags,
-    /// and switches its mode when its centre is clicked. Returns whether the mouse is on
-    /// the gizmo, so a click there does not also select.
+    /// Runs the gizmo for one frame of a 3D view: a press on one of its parts becomes a
+    /// drag once the mouse moves past the drag threshold, and a press on its centre that
+    /// does not move switches its mode. Moves go through a [`TranslationPlane`] and are
+    /// applied live: along an arrow the plane holds that axis and the other world axis
+    /// most square to the view, constrained to the arrow; a square moves across its axis;
+    /// the centre moves on the plane facing the view. Rotations and scales are previewed
+    /// and applied when the button comes up. Returns whether the mouse is on the gizmo,
+    /// so a click there does not also select.
     fn use_gizmo(
         &mut self,
         slot: usize,
@@ -1414,28 +1467,39 @@ impl MalletApp {
                 self.gizmo_drag = None;
                 editor.overlay.transform = None;
             }
+            if self.gizmo_press.is_some_and(|(at, ..)| at == slot) {
+                self.gizmo_press = None;
+            }
             return false;
         };
-        let camera = &editor.camera;
         let hovered = pointer
             .position
             .filter(|_| response.hovered())
-            .and_then(|position| gizmo.hit(camera, rect, position));
-        if response.drag_started_by(PointerButton::Primary) {
-            let pressed = pointer
-                .press_origin
-                .and_then(|origin| gizmo.hit(camera, rect, origin).map(|part| (part, origin)));
-            if let Some((part, origin)) = pressed {
-                let bounds = editor.scene.selection_bounds();
-                let anchor = editor.scene.selection_anchor();
-                self.gizmo_drag = GizmoDrag::begin(slot, gizmo, part, camera, rect, origin, bounds, anchor);
-                self.clone_drag = pointer.modifiers.shift;
+            .and_then(|position| gizmo.hit(&editor.camera, rect, position));
+        let pressed = response.ctx.input(|input| input.pointer.primary_pressed());
+        let free = self.press_3d.is_none() && self.live_move.is_none() && self.gizmo_drag.is_none();
+        if pressed && free && response.hovered() {
+            if let (Some(part), Some(origin)) = (hovered, pointer.press_origin.or(pointer.position)) {
+                self.gizmo_press = Some((slot, part, origin));
             }
         }
-        let Some(drag) = self.gizmo_drag.filter(|drag| drag.slot == slot) else {
-            if response.clicked_by(PointerButton::Primary) && hovered == Some(GizmoPart::Center) {
-                editor.cycle_gizmo_mode();
+        if let Some((_, part, origin)) = self.gizmo_press.filter(|(at, ..)| *at == slot) {
+            response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            if !pointer.primary_down {
+                self.gizmo_press = None;
+                if part == GizmoPart::Center {
+                    editor.cycle_gizmo_mode();
+                }
+            } else if pointer
+                .position
+                .is_some_and(|position| position.distance(origin) > DRAG_THRESHOLD_PIXELS)
+            {
+                self.gizmo_press = None;
+                self.begin_gizmo_drag(slot, gizmo, part, rect, origin, editor, pointer);
             }
+            return true;
+        }
+        let Some(drag) = self.gizmo_drag.filter(|drag| drag.slot == slot) else {
             if hovered.is_some() {
                 response.ctx.set_cursor_icon(egui::CursorIcon::Grab);
             }
@@ -1464,29 +1528,22 @@ impl MalletApp {
                 );
             }
         }
-        if response.drag_stopped() {
+        if !pointer.primary_down {
             self.gizmo_drag = None;
             editor.overlay.transform = None;
-            let center = drag.gizmo.center;
+            let pivot = drag.pivot();
             let result = match change {
-                Some(GizmoChange::Move(offset)) if offset != DVec3::ZERO => {
-                    if cloning {
-                        editor.clone_selection(offset)
-                    } else {
-                        editor.move_selection(offset)
-                    }
-                }
                 Some(GizmoChange::Rotate(matrix)) if matrix != glam::DMat4::IDENTITY && cloning => {
-                    editor.clone_selection_and("rotated", |editor| editor.transform_selection(matrix, true, center))
+                    editor.clone_selection_and("rotated", |editor| editor.transform_selection(matrix, true, pivot))
                 }
                 Some(GizmoChange::Scale(matrix)) if matrix != glam::DMat4::IDENTITY && cloning => {
-                    editor.clone_selection_and("scaled", |editor| editor.transform_selection(matrix, false, center))
+                    editor.clone_selection_and("scaled", |editor| editor.transform_selection(matrix, false, pivot))
                 }
                 Some(GizmoChange::Rotate(matrix)) if matrix != glam::DMat4::IDENTITY => editor
-                    .transform_selection(matrix, true, center)
+                    .transform_selection(matrix, true, pivot)
                     .map(|()| editor.message = "Rotated selection".to_owned()),
                 Some(GizmoChange::Scale(matrix)) if matrix != glam::DMat4::IDENTITY => editor
-                    .transform_selection(matrix, false, center)
+                    .transform_selection(matrix, false, pivot)
                     .map(|()| editor.message = "Scaled selection".to_owned()),
                 _ => Ok(()),
             };
@@ -1497,17 +1554,67 @@ impl MalletApp {
         true
     }
 
+    /// Starts dragging a gizmo part from the press at `origin`: a live move for the move
+    /// gizmo, or a previewed rotation or scale. Shift clones the selection first.
+    #[allow(clippy::too_many_arguments)]
+    fn begin_gizmo_drag(
+        &mut self,
+        slot: usize,
+        gizmo: Gizmo,
+        part: GizmoPart,
+        rect: Rect,
+        origin: Pos2,
+        editor: &mut Editor,
+        pointer: &PointerState,
+    ) {
+        self.clone_drag = pointer.modifiers.shift;
+        if gizmo.mode != transform::GizmoMode::Move {
+            let bounds = editor.scene.selection_bounds();
+            self.gizmo_drag = GizmoDrag::begin(slot, gizmo, part, &editor.camera, rect, origin, bounds);
+            return;
+        }
+        let forward = editor.camera.forward();
+        let (plane, constraint) = match part {
+            GizmoPart::Axis(axis) => TranslationPlane::along_axis(gizmo.center, axis, forward),
+            GizmoPart::Plane(axis) => (TranslationPlane::across_axis(gizmo.center, axis), Constraint::Free),
+            GizmoPart::Center | GizmoPart::Ring(_) => (TranslationPlane::facing(gizmo.center, forward), Constraint::Free),
+        };
+        let (start, direction) = editor.camera.build_ray(rect, origin);
+        let Some(plane) = plane.anchored(start, direction) else {
+            editor.message = "That handle points at the camera; turn the view to drag it".to_owned();
+            return;
+        };
+        self.live_move = LiveMove::begin(
+            editor,
+            Site::Slot(slot),
+            plane,
+            constraint,
+            pointer.modifiers.shift,
+            Some(part),
+        );
+    }
+
     /// Draws the gizmo over a 3D view, highlighting the part under the mouse or dragged.
     fn draw_gizmo(&self, painter: &egui::Painter, slot: usize, rect: Rect, response: &Response, editor: &Editor) {
         let Some(gizmo) = self.gizmo_for(slot, rect, editor) else {
             return;
         };
-        let hot = match self.gizmo_drag.filter(|drag| drag.slot == slot) {
-            Some(drag) => Some(drag.part),
-            None => response
+        let dragged = self
+            .gizmo_drag
+            .filter(|drag| drag.slot == slot)
+            .map(|drag| drag.part)
+            .or_else(|| {
+                self.live_move
+                    .as_ref()
+                    .filter(|live| live.site == Site::Slot(slot))
+                    .and_then(|live| live.part)
+            })
+            .or_else(|| self.gizmo_press.filter(|(at, ..)| *at == slot).map(|(_, part, _)| part));
+        let hot = dragged.or_else(|| {
+            response
                 .hover_pos()
-                .and_then(|position| gizmo.hit(&editor.camera, rect, position)),
-        };
+                .and_then(|position| gizmo.hit(&editor.camera, rect, position))
+        });
         gizmo.draw(painter, &editor.camera, rect, hot);
     }
 
@@ -1645,30 +1752,17 @@ impl MalletApp {
 
     /// Chooses the drag that a left-button press at `origin` starts with the active tool:
     /// resizing from a handle, moving from inside the box, or starting a new marquee or block.
-    /// With the selection tool, Ctrl always starts a marquee that adds to the selection, as in
-    /// Hammer, even over the selected objects or their handles. A selection box waiting for
-    /// Enter in this view comes first: its handles resize it and its inside moves it.
-    fn begin_drag(index: usize, view: &View2D, rect: Rect, origin: Pos2, editor: &Editor, add: bool) -> Drag {
+    /// With the selection tool, Ctrl always starts a marquee that toggles what it touches,
+    /// even over the selected objects or their handles.
+    fn begin_drag(index: usize, view: &View2D, rect: Rect, origin: Pos2, editor: &Editor, modifiers: Modifiers) -> Drag {
         let start = view.to_world(rect, origin);
-        if add && editor.tool == Tool::Select {
-            return Drag::Marquee { view: index, start, add };
-        }
-        if let Some(bounds) = waiting_box(editor, view.axis) {
-            if let Some(handle) = view.hit_handle(rect, &bounds, origin, HandleMode::Scale) {
-                return Drag::ResizeSelectionBox {
-                    view: index,
-                    start,
-                    bounds,
-                    handle,
-                };
-            }
-            if box_contains(view.axis, &bounds, start) {
-                return Drag::MoveSelectionBox {
-                    view: index,
-                    start,
-                    bounds,
-                };
-            }
+        let select = select_3d::select_mode(modifiers);
+        if modifiers.ctrl && editor.tool == Tool::Select {
+            return Drag::Marquee {
+                view: index,
+                start,
+                mode: select,
+            };
         }
         let target = editor.handle_box();
         let mode = editor.display_overlay().handle_mode;
@@ -1696,12 +1790,12 @@ impl MalletApp {
                 bounds,
                 handle,
             },
-            (Tool::Select, Some(_), None, true) => Drag::Move {
+            (Tool::Select, Some(_), None, true) => Drag::Move { view: index },
+            (Tool::Select, ..) => Drag::Marquee {
                 view: index,
                 start,
-                anchor: editor.scene.selection_anchor(),
+                mode: select,
             },
-            (Tool::Select, ..) => Drag::Marquee { view: index, start, add },
             (Tool::Block, Some(bounds), Some(handle), _) => Drag::ResizeBlock {
                 view: index,
                 start,
@@ -1723,7 +1817,11 @@ impl MalletApp {
                 | Tool::Camera
                 | Tool::Magnify,
                 ..,
-            ) => Drag::Marquee { view: index, start, add },
+            ) => Drag::Marquee {
+                view: index,
+                start,
+                mode: select,
+            },
             (Tool::Block, ..) => Drag::NewBlock {
                 view: index,
                 start: snap(start, editor.snap_step()),
@@ -1745,28 +1843,16 @@ impl MalletApp {
             return None;
         }
         match self.drag.filter(|drag| drag.view() == index) {
-            Some(
-                Drag::Resize { handle, .. }
-                | Drag::ResizeBlock { handle, .. }
-                | Drag::ResizeSelectionBox { handle, .. },
-            ) => return Some(handle.cursor()),
+            Some(Drag::Resize { handle, .. } | Drag::ResizeBlock { handle, .. }) => return Some(handle.cursor()),
             Some(Drag::Skew { handle, .. }) => return Some(handle.skew_cursor()),
             Some(Drag::Rotate { .. }) => return Some(egui::CursorIcon::Grabbing),
-            Some(Drag::Move { .. } | Drag::MoveBlock { .. } | Drag::MoveSelectionBox { .. } | Drag::Pivot { .. }) => {
+            Some(Drag::Move { .. } | Drag::MoveBlock { .. } | Drag::Pivot { .. }) => {
                 return Some(egui::CursorIcon::Move)
             }
             Some(_) => return None,
             None => {}
         }
         let pointer = response.hover_pos()?;
-        if let Some(bounds) = waiting_box(editor, view.axis) {
-            if let Some(handle) = view.hit_handle(rect, &bounds, pointer, HandleMode::Scale) {
-                return Some(handle.cursor());
-            }
-            if box_contains(view.axis, &bounds, view.to_world(rect, pointer)) {
-                return Some(egui::CursorIcon::Move);
-            }
-        }
         let bounds = editor.handle_box()?;
         let mode = editor.display_overlay().handle_mode;
         if mode == HandleMode::Rotate
@@ -1907,26 +1993,38 @@ impl MalletApp {
         if editor.tool == Tool::Select && self.paint_select_2d(index, view, rect, response, editor, pointer) {
             return;
         }
-        if response.drag_started_by(PointerButton::Primary) {
-            if let Some(origin) = pointer.press_origin {
-                let drag = Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers.ctrl);
-                if matches!(drag, Drag::Marquee { .. }) {
-                    editor.overlay.selection_box = None;
-                }
-                self.drag = Some(drag);
-                self.clone_drag = pointer.modifiers.shift;
+        let gesture = self.gesture_2d(index, response, pointer);
+        if let Some(origin) = gesture.started {
+            let drag = Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers);
+            if let Drag::Move { .. } = drag {
+                let pressed = view.axis.lift(view.to_world(rect, origin));
+                let [horizontal, vertical, _] = view.axis.axes();
+                let mut start = editor.scene.selection_bounds().center();
+                start[horizontal] = pressed[horizontal];
+                start[vertical] = pressed[vertical];
+                let plane = TranslationPlane::for_view(start, view.axis);
+                self.live_move = LiveMove::begin(
+                    editor,
+                    Site::View(index),
+                    plane,
+                    Constraint::Free,
+                    pointer.modifiers.shift,
+                    None,
+                );
             }
+            self.drag = Some(drag);
+            self.clone_drag = pointer.modifiers.shift;
         }
 
         let Some(drag) = self.drag.filter(|drag| drag.view() == index) else {
-            if response.clicked_by(PointerButton::Primary) && editor.tool == Tool::Select {
-                editor.overlay.selection_box = None;
+            if gesture.clicked && editor.tool == Tool::Select {
                 if let Some(position) = pointer.position {
                     let tolerance = pick_tolerance(editor) / view.scale;
                     let world = view.to_world(rect, position);
                     let hit = editor.scene.pick_2d(view.axis, world, tolerance, editor.solid_picks());
+                    let plain = !pointer.modifiers.ctrl && !pointer.modifiers.shift;
                     match hit {
-                        _ if !pointer.modifiers.ctrl && on_selection(editor, view.axis, world, hit) => {
+                        _ if plain && on_selection(editor, view.axis, world, hit) => {
                             editor.overlay.handle_mode = editor.overlay.handle_mode.next();
                             editor.message = format!("{} handles", editor.overlay.handle_mode.label());
                         }
@@ -1945,9 +2043,11 @@ impl MalletApp {
         if let Some(position) = pointer.position {
             let world = view.to_world(rect, position);
             match drag {
-                Drag::Move { start, anchor, .. } => {
-                    let offset = snapped_offset(view.axis, anchor, world - start, grid);
-                    editor.overlay.transform = Some(Remap::translate(offset));
+                Drag::Move { .. } => {
+                    if let Some(live) = self.live_move.as_mut().filter(|live| live.site == Site::View(index)) {
+                        let (origin, direction) = live.plane().view_ray(view.axis.lift(world));
+                        live.follow(editor, origin, direction);
+                    }
                 }
                 Drag::Resize {
                     start, bounds, handle, ..
@@ -1987,21 +2087,6 @@ impl MalletApp {
                     editor.set_pivot(Some(pivot));
                 }
                 Drag::Marquee { start, .. } => editor.overlay.marquee = Some((view.axis, start, world)),
-                Drag::MoveSelectionBox { start, bounds, .. } => {
-                    let offset = snapped_offset(view.axis, bounds.min, world - start, grid);
-                    let moved = Remap::translate(offset).map_bounds(&bounds);
-                    editor.overlay.selection_box =
-                        editor.overlay.selection_box.map(|waiting| waiting.with_bounds(&moved));
-                }
-                Drag::ResizeSelectionBox {
-                    start, bounds, handle, ..
-                } => {
-                    let resized = handle.resize(view.axis, &bounds, world - start, grid);
-                    editor.overlay.selection_box = editor
-                        .overlay
-                        .selection_box
-                        .map(|waiting| waiting.with_bounds(&resized));
-                }
                 Drag::ClipPoint { point, .. } => editor.move_clip_point(point, view.axis, world),
                 Drag::NewBlock { start, .. } => {
                     editor.overlay.block = editor.block_from_drag(view.axis, start, snap(world, grid));
@@ -2018,31 +2103,72 @@ impl MalletApp {
             }
         }
 
-        if response.drag_stopped() {
+        if gesture.released {
             self.drag = None;
-            if let Err(error) = finish_drag(drag, editor, cloning) {
+            if let Drag::Move { .. } = drag {
+                if let Some(live) = self.live_move.take_if(|live| live.site == Site::View(index)) {
+                    live.commit(editor);
+                }
+            } else if let Err(error) = finish_drag(drag, editor, cloning) {
                 editor.message = error;
             }
         }
     }
+
+    /// Follows the left button in a 2D view with the drag threshold: a press becomes a
+    /// drag once the mouse moves more than [`DRAG_THRESHOLD_PIXELS`] from where it went
+    /// down, and a press let go of before that is a click.
+    fn gesture_2d(&mut self, index: usize, response: &Response, pointer: &PointerState) -> Gesture {
+        let pressed = response.ctx.input(|input| input.pointer.primary_pressed());
+        if pressed && response.hovered() {
+            self.press_2d = pointer
+                .press_origin
+                .or(pointer.position)
+                .map(|origin| (index, origin, false));
+        }
+        let Some((at, origin, dragging)) = self.press_2d.filter(|(at, ..)| *at == index) else {
+            return Gesture::default();
+        };
+        if !pointer.primary_down {
+            self.press_2d = None;
+            return Gesture {
+                started: None,
+                clicked: !dragging,
+                released: dragging,
+            };
+        }
+        let moved = pointer
+            .position
+            .is_some_and(|position| position.distance(origin) > DRAG_THRESHOLD_PIXELS);
+        if !dragging && moved {
+            self.press_2d = Some((at, origin, true));
+            return Gesture {
+                started: Some(origin),
+                ..Gesture::default()
+            };
+        }
+        Gesture::default()
+    }
 }
 
-/// Applies a finished drag: moves, resizes, rotates or skews the selection, or with
-/// `cloning` (Shift held) does that to a clone of it, or selects what the marquee covers.
-/// Block drags only change the pending block, which Enter creates.
+/// What the left button did in a 2D view this frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct Gesture {
+    /// A press moved past the drag threshold: where it went down.
+    started: Option<Pos2>,
+    /// A press was let go of without becoming a drag.
+    clicked: bool,
+    /// A drag was let go of.
+    released: bool,
+}
+
+/// Applies a finished drag: resizes, rotates or skews the selection, or with `cloning`
+/// (Shift held) does that to a clone of it, or selects what the marquee touches. Moves
+/// were applied while dragging. Block drags only change the pending block, which Enter
+/// creates.
 fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), String> {
     match drag {
-        Drag::Move { .. } => {
-            let Some(remap) = editor.overlay.transform.take() else {
-                return Ok(());
-            };
-            let offset = remap.offset();
-            match (offset == DVec3::ZERO, cloning) {
-                (true, _) => Ok(()),
-                (false, true) => editor.clone_selection(offset),
-                (false, false) => editor.move_selection(offset),
-            }
-        }
+        Drag::Move { .. } => Ok(()),
         Drag::Resize { bounds, .. } => match editor.overlay.transform.take() {
             Some(remap) if remap.map_bounds(&bounds) != bounds => {
                 let to = remap.map_bounds(&bounds);
@@ -2081,18 +2207,13 @@ fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), Str
             _ => Ok(()),
         },
         Drag::Pivot { .. } | Drag::ClipPoint { .. } => Ok(()),
-        Drag::Marquee { add, .. } => {
+        Drag::Marquee { mode, .. } => {
             if let Some((axis, a, b)) = editor.overlay.marquee.take() {
-                editor.overlay.selection_box = Some(SelectionBox::new(axis, a, b, add));
-                if editor.tool == Tool::Select && !editor.config.view.infinite_selection {
-                    editor.message = "Press Enter to select what the box covers, or Escape to drop it".to_owned();
-                } else {
-                    editor.confirm_selection_box();
-                }
+                let owners = editor.scene.owners_touching(axis, a, b, editor.solid_picks());
+                editor.select_picked(owners, mode);
             }
             Ok(())
         }
-        Drag::MoveSelectionBox { .. } | Drag::ResizeSelectionBox { .. } => Ok(()),
         Drag::NewBlock { .. } | Drag::MoveBlock { .. } | Drag::ResizeBlock { .. } => Ok(()),
     }
 }
@@ -2102,16 +2223,6 @@ fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), Str
 fn snapped_offset(axis: Axis2D, anchor: DVec3, dragged: DVec2, grid: f64) -> DVec3 {
     let corner = axis.project(anchor);
     axis.lift(snap(corner + dragged, grid) - corner)
-}
-
-/// The selection box waiting for Enter, as bounds, when the Selection tool is active and
-/// the box was drawn in the view showing `axis`.
-fn waiting_box(editor: &Editor, axis: Axis2D) -> Option<Bounds> {
-    editor
-        .overlay
-        .selection_box
-        .filter(|waiting| editor.tool == Tool::Select && waiting.axis == axis)
-        .map(|waiting| waiting.bounds())
 }
 
 fn box_contains(axis: Axis2D, bounds: &Bounds, point: DVec2) -> bool {
@@ -2913,14 +3024,13 @@ fn snap(point: DVec2, grid: f64) -> DVec2 {
     (point / grid).round() * grid
 }
 
-/// Applies a click: selects what was hit, or with Ctrl toggles it. Clicking empty space
-/// without Ctrl clears the selection.
+/// Applies a click: selects what was hit, toggles it with Ctrl or adds it with Shift.
+/// Clicking empty space without either clears the selection.
 fn pick(editor: &mut Editor, hit: Option<crate::scene::Owner>, modifiers: Modifiers) {
-    match (hit, modifiers.ctrl) {
-        (Some(owner), true) => editor.select_picked([owner], SelectMode::Toggle),
-        (Some(owner), false) => editor.select_picked([owner], SelectMode::Replace),
-        (None, true) => {}
-        (None, false) => editor.clear_selection(),
+    match hit {
+        Some(owner) => editor.select_picked([owner], select_3d::select_mode(modifiers)),
+        None if modifiers.ctrl || modifiers.shift => {}
+        None => editor.clear_selection(),
     }
 }
 
@@ -3026,7 +3136,6 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()
                 | editor.overlay.entity.take().is_some()
-                | editor.overlay.selection_box.take().is_some()
                 | (editor.tool == Tool::Clip && editor.clear_clip_points());
             if editor.tool == Tool::Texture {
                 editor.clear_face_selection();
@@ -3063,11 +3172,9 @@ fn run(action: Action, editor: &mut Editor) {
                 Tool::Block => editor.commit_block().map(|_| ()),
                 Tool::Entity => editor.commit_entity().map(|_| ()),
                 Tool::Clip => editor.apply_clip().map(|_| ()),
-                Tool::Select => {
-                    editor.confirm_selection_box();
-                    Ok(())
-                }
-                Tool::Texture | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera | Tool::Magnify => Ok(()),
+                Tool::Select
+                | Tool::Texture
+                | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera | Tool::Magnify => Ok(()),
             };
             if let Err(error) = result {
                 editor.message = error;

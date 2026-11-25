@@ -944,9 +944,8 @@ pub struct ViewOptions {
     pub grid_major: f64,
     /// How close, in pixels, a click must be to a brush's outline to select it.
     pub pick_tolerance: f64,
-    /// Hammer's Automatic infinite selection: a box dragged with the Selection tool selects
-    /// what it covers as soon as the mouse is let go, instead of waiting for Enter.
-    pub infinite_selection: bool,
+    /// For debugging: draw the plane a move drag slides the selection along in the 3D view.
+    pub debug_drag_plane: bool,
 }
 
 impl Default for ViewOptions {
@@ -971,7 +970,7 @@ impl Default for ViewOptions {
             grid_highlight: 64.0,
             grid_major: 1024.0,
             pick_tolerance: 4.0,
-            infinite_selection: false,
+            debug_drag_plane: false,
         }
     }
 }

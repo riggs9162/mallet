@@ -777,7 +777,7 @@ impl Editor {
             document: self.document.take(),
             scene: std::mem::take(&mut self.scene),
             views: std::mem::replace(&mut self.views, default_views()),
-            camera: std::mem::replace(&mut self.camera, Camera3D::new()),
+            camera: std::mem::take(&mut self.camera),
             selection: std::mem::take(&mut self.selection),
             overlay: std::mem::take(&mut self.overlay),
             last_block: std::mem::replace(&mut self.last_block, DEFAULT_BLOCK),
@@ -1364,6 +1364,54 @@ impl Editor {
         self.select([], SelectMode::Replace);
     }
 
+    /// Page Down and Page Up: selects the next or previous object of the map after the
+    /// first selected one, in the map's order, going round at the ends. With nothing
+    /// selected it starts at the first or last object.
+    pub fn cycle_selection(&mut self, forward: bool) {
+        let owners: Vec<Owner> = self.scene.owners().into_iter().collect();
+        if owners.is_empty() {
+            return;
+        }
+        let current = self
+            .selection
+            .iter()
+            .next()
+            .and_then(|selected| owners.iter().position(|owner| owner == selected));
+        let next = match (current, forward) {
+            (Some(index), true) => (index + 1) % owners.len(),
+            (Some(index), false) => (index + owners.len() - 1) % owners.len(),
+            (None, true) => 0,
+            (None, false) => owners.len() - 1,
+        };
+        self.select([owners[next]], SelectMode::Replace);
+        self.message = match owners[next] {
+            Owner::Solid(id) => format!("Selected brush {id}"),
+            Owner::Entity(id) => format!("Selected entity {id}"),
+        };
+    }
+
+    /// Ends a drag that changed the map live, one undo step per frame it moved: joins
+    /// those `steps` into a single undo step.
+    pub fn commit_live_steps(&mut self, steps: usize) {
+        if let Some(document) = self.document.as_mut() {
+            document.history.join_latest(steps);
+        }
+    }
+
+    /// Cancels a drag that changed the map live: undoes its `steps` and selects
+    /// `originals` again.
+    pub fn cancel_live_steps(&mut self, steps: usize, originals: BTreeSet<Owner>) {
+        if steps > 0 {
+            self.commit_live_steps(steps);
+            if let Err(error) = self.step_history(false) {
+                self.message = error;
+                return;
+            }
+        }
+        self.select(originals, SelectMode::Replace);
+        self.message = "Drag cancelled".to_owned();
+    }
+
     pub fn select_all(&mut self) {
         let all = self.scene.owners();
         self.select(all, SelectMode::Replace);
@@ -1510,24 +1558,6 @@ impl Editor {
             view_camera: self.view_camera_preview(),
             ..self.overlay.clone()
         }
-    }
-
-    /// Selects what the waiting selection box covers, adding to the selection when the box
-    /// was drawn with Ctrl, and drops the box. Returns false when no box is waiting.
-    pub fn confirm_selection_box(&mut self) -> bool {
-        let Some(waiting) = self.overlay.selection_box.take() else {
-            return false;
-        };
-        let owners = self
-            .scene
-            .owners_inside(waiting.axis, waiting.min, waiting.max, self.solid_picks());
-        let mode = if waiting.add {
-            SelectMode::Add
-        } else {
-            SelectMode::Replace
-        };
-        self.select_picked(owners, mode);
-        true
     }
 
     /// Copies the selection with fresh ids, moves the copies by `offset` and selects them.
@@ -1974,6 +2004,18 @@ impl Editor {
         let mode = self.config.transform.gizmo_mode.next();
         self.config.transform.gizmo_mode = mode;
         self.overlay.handle_mode = crate::transform::HandleMode::for_gizmo(mode);
+        self.message = format!("Gizmo: {}", mode.label());
+        self.save_config();
+    }
+
+    /// Switches the 3D gizmo between moving and scaling, as a click on the selection does,
+    /// then saves the choice. From rotating it goes to moving.
+    pub fn toggle_gizmo_scale(&mut self) {
+        let mode = match self.config.transform.gizmo_mode {
+            crate::transform::GizmoMode::Move => crate::transform::GizmoMode::Scale,
+            crate::transform::GizmoMode::Scale | crate::transform::GizmoMode::Rotate => crate::transform::GizmoMode::Move,
+        };
+        self.config.transform.gizmo_mode = mode;
         self.message = format!("Gizmo: {}", mode.label());
         self.save_config();
     }

@@ -48,6 +48,7 @@ mod sound;
 mod style;
 mod tools;
 mod transform;
+mod translation_plane;
 mod vertex_tool;
 mod view2d;
 mod view3d;

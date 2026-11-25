@@ -2,8 +2,9 @@
 //! it, rings that rotate it and cubes that scale it, depending on its mode.
 //!
 //! The gizmo keeps the same size on screen wherever the selection is. It is drawn with
-//! egui on top of the 3D view's image, and a drag previews its transform through the
-//! overlay, like the 2D handles, before it is applied as one undoable edit.
+//! egui on top of the 3D view's image. Moves are dragged live along a translation plane by
+//! the window; a rotate or scale drag previews its transform through the overlay, like the
+//! 2D handles, before it is applied as one undoable edit.
 
 use std::f64::consts::{PI, TAU};
 
@@ -17,8 +18,11 @@ use crate::view3d::Camera3D;
 
 /// Length of an arm on screen, in pixels.
 const ARM_PIXELS: f64 = 90.0;
-/// How close, in pixels, the mouse has to be to a part to grab it.
-const REACH_PIXELS: f32 = 7.0;
+/// How far beyond a drawn part, in pixels, the mouse still grabs it.
+const GRAB_PIXELS: f32 = 6.0;
+/// How close, in pixels, the mouse has to be to an arm or ring line to grab it: half the
+/// line's width and the grab margin.
+const REACH_PIXELS: f32 = 1.0 + GRAB_PIXELS;
 /// Radius of the rotation rings, as a share of the arm.
 const RING_RADIUS: f64 = 0.85;
 /// Where the plane squares start and end along their two axes, as a share of the arm.
@@ -147,7 +151,7 @@ impl Gizmo {
     /// The part under a screen point, if any.
     pub fn hit(&self, camera: &Camera3D, rect: Rect, pointer: Pos2) -> Option<Part> {
         let center = camera.project(rect, self.center)?;
-        if center.distance(pointer) <= CENTER_PIXELS + 2.0 {
+        if center.distance(pointer) <= CENTER_PIXELS * 0.8 + GRAB_PIXELS {
             return Some(Part::Center);
         }
         match self.mode {
@@ -164,7 +168,7 @@ impl Gizmo {
             GizmoMode::Scale => {
                 let cube = (0..3).find(|axis| {
                     self.arm_on_screen(camera, rect, *axis)
-                        .is_some_and(|(_, end)| end.distance(pointer) <= CUBE_PIXELS + REACH_PIXELS * 0.5)
+                        .is_some_and(|(_, end)| (end - pointer).abs().max_elem() <= CUBE_PIXELS + GRAB_PIXELS)
                 });
                 cube.map(Part::Axis).or_else(|| self.nearest_arm(camera, rect, pointer))
             }
@@ -308,11 +312,9 @@ impl Gizmo {
     }
 }
 
-/// What a finished gizmo drag does to the selection.
+/// What a finished rotate or scale gizmo drag does to the selection.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Change {
-    /// A move by this offset, with texture lock.
-    Move(DVec3),
     /// A rotation: entity angles turn with it.
     Rotate(DMat4),
     /// A scale: entity angles stay.
@@ -323,7 +325,6 @@ impl Change {
     /// The transform to preview while dragging.
     pub fn matrix(&self) -> DMat4 {
         match *self {
-            Self::Move(offset) => DMat4::from_translation(offset),
             Self::Rotate(matrix) | Self::Scale(matrix) => matrix,
         }
     }
@@ -337,12 +338,9 @@ pub struct GizmoDrag {
     pub gizmo: Gizmo,
     /// The selection's bounds when the drag started.
     bounds: Bounds,
-    /// The point moves snap to the grid: a point entity's origin or the bounds' corner.
-    anchor: DVec3,
     start_pointer: Pos2,
-    /// Where the press landed on the dragged axis (units from the centre) or plane.
+    /// Where the press landed on the dragged axis, in units from the centre.
     start_along: f64,
-    start_point: DVec3,
 }
 
 /// Where along the line `center + t * axis` the mouse ray passes closest. `None` when
@@ -354,22 +352,15 @@ fn along_axis(center: DVec3, axis: DVec3, origin: DVec3, direction: DVec3) -> Op
     (denominator > 1e-6).then(|| (facing * direction.dot(between) - axis.dot(between)) / denominator)
 }
 
-/// Where the mouse ray meets the plane through `center` facing `normal`.
-fn on_plane(center: DVec3, normal: DVec3, origin: DVec3, direction: DVec3) -> Option<DVec3> {
-    let facing = direction.dot(normal);
-    if facing.abs() < 1e-6 {
-        return None;
-    }
-    let distance = (center - origin).dot(normal) / facing;
-    (distance > 0.0).then(|| origin + direction * distance)
-}
-
 fn snap(value: f64, grid: f64) -> f64 {
     (value / grid).round() * grid
 }
 
 impl GizmoDrag {
-    /// Starts dragging a part. `None` when the part cannot be dragged from this angle.
+    /// Starts a rotate or scale drag of a part; moves are dragged along a
+    /// [`crate::translation_plane::TranslationPlane`] instead. `None` when the part cannot
+    /// be dragged from this angle.
+    #[allow(clippy::too_many_arguments)]
     pub fn begin(
         slot: usize,
         gizmo: Gizmo,
@@ -378,34 +369,36 @@ impl GizmoDrag {
         rect: Rect,
         pointer: Pos2,
         bounds: Bounds,
-        anchor: DVec3,
     ) -> Option<Self> {
         let (origin, direction) = camera.build_ray(rect, pointer);
-        let (start_along, start_point) = match (gizmo.mode, part) {
-            (GizmoMode::Rotate, Part::Center) => return None,
-            (_, Part::Axis(axis)) => (along_axis(gizmo.center, AXES[axis], origin, direction)?, DVec3::ZERO),
-            (_, Part::Plane(axis)) => (0.0, on_plane(gizmo.center, AXES[axis], origin, direction)?),
-            (GizmoMode::Move, Part::Center) => (0.0, on_plane(gizmo.center, camera.forward(), origin, direction)?),
-            _ => (0.0, DVec3::ZERO),
+        let start_along = match (gizmo.mode, part) {
+            (GizmoMode::Move, _) | (GizmoMode::Rotate, Part::Center) => return None,
+            (_, Part::Axis(axis)) => along_axis(gizmo.center, AXES[axis], origin, direction)?,
+            _ => 0.0,
         };
-        if gizmo.mode == GizmoMode::Scale && matches!(part, Part::Axis(_)) && start_along.abs() < 1e-6 {
-            return None;
-        }
         Some(Self {
             slot,
             part,
             gizmo,
             bounds,
-            anchor,
             start_pointer: pointer,
             start_along,
-            start_point,
         })
     }
 
-    /// What the drag does with the mouse at `pointer`. Moves snap the selection's anchor
-    /// to the grid, scales snap its size to the grid, and rotations snap to `angle_step`
-    /// degrees when it is given.
+    /// The point a finished rotation or scale holds still: the gizmo's centre, except that
+    /// stretching along an axis holds the selection's opposite face, the one at its
+    /// minimum along that axis.
+    pub fn pivot(&self) -> DVec3 {
+        let mut pivot = self.gizmo.center;
+        if let (GizmoMode::Scale, Part::Axis(axis)) = (self.gizmo.mode, self.part) {
+            pivot[axis] = self.bounds.min[axis];
+        }
+        pivot
+    }
+
+    /// What the drag does with the mouse at `pointer`. Scales snap the selection's size to
+    /// the grid, and rotations snap to `angle_step` degrees when it is given.
     pub fn change(
         &self,
         camera: &Camera3D,
@@ -416,31 +409,7 @@ impl GizmoDrag {
     ) -> Option<Change> {
         let (origin, direction) = camera.build_ray(rect, pointer);
         let center = self.gizmo.center;
-        let min = self.anchor;
-        let snap_offset = |delta: DVec3, axes: &[usize]| {
-            let mut offset = DVec3::ZERO;
-            for &axis in axes {
-                offset[axis] = snap(min[axis] + delta[axis], grid) - min[axis];
-            }
-            offset
-        };
         match (self.gizmo.mode, self.part) {
-            (GizmoMode::Move, Part::Axis(axis)) => {
-                let along = along_axis(center, AXES[axis], origin, direction)?;
-                Some(Change::Move(snap_offset(
-                    AXES[axis] * (along - self.start_along),
-                    &[axis],
-                )))
-            }
-            (GizmoMode::Move, Part::Plane(axis)) => {
-                let point = on_plane(center, AXES[axis], origin, direction)?;
-                let (u, v) = others(axis);
-                Some(Change::Move(snap_offset(point - self.start_point, &[u, v])))
-            }
-            (GizmoMode::Move, Part::Center) => {
-                let point = on_plane(center, camera.forward(), origin, direction)?;
-                Some(Change::Move(snap_offset(point - self.start_point, &[0, 1, 2])))
-            }
             (GizmoMode::Rotate, Part::Ring(axis)) => {
                 let middle = camera.project(rect, center)?;
                 let angle = |at: Pos2| f64::from(-(at.y - middle.y)).atan2(f64::from(at.x - middle.x));
@@ -462,10 +431,10 @@ impl GizmoDrag {
                 if size <= 0.0 {
                     return None;
                 }
-                let wanted = size * along / self.start_along;
+                let wanted = size + along - self.start_along;
                 let mut factors = DVec3::ONE;
                 factors[axis] = snap(wanted, grid).max(grid) / size;
-                Some(Change::Scale(around(center, DMat3::from_diagonal(factors))))
+                Some(Change::Scale(around(self.pivot(), DMat3::from_diagonal(factors))))
             }
             (GizmoMode::Scale, Part::Center) => {
                 let size = self.bounds.size();

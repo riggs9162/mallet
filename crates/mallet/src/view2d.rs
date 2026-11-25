@@ -7,7 +7,7 @@ use mallet_vmf::geometry::Bounds;
 use crate::canvas::Canvas;
 use crate::clipper::{ClipOverlay, CLIP_PLANE_COLOR};
 use crate::scene::{
-    box_edges, entity_marker_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR, HANDLE_HALF_SIZE,
+    box_edges, entity_marker_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR, HANDLE_GRAB_PIXELS, HANDLE_HALF_SIZE,
 };
 use crate::style;
 use crate::transform::HandleMode;
@@ -433,9 +433,6 @@ impl View2D {
                 canvas.lines(&segments, style.tool);
             }
         }
-        if let Some(waiting) = overlay.selection_box.filter(|waiting| waiting.axis == self.axis) {
-            self.draw_selection_box(canvas, rect, &waiting.bounds(), style.tool);
-        }
         if let Some(clip) = &overlay.clip {
             self.draw_clip_points(canvas, rect, clip);
         }
@@ -509,20 +506,6 @@ impl View2D {
         canvas.label(height_at, &height, color);
     }
 
-    /// Draws a selection box waiting for Enter: its outline and the eight handles that
-    /// resize it.
-    fn draw_selection_box(&self, canvas: &mut dyn Canvas, rect: Rect, bounds: &Bounds, color: Color32) {
-        let outline: Vec<[Pos2; 2]> = self
-            .handle_outline(bounds)
-            .iter()
-            .map(|[a, b]| [self.to_screen(rect, *a), self.to_screen(rect, *b)])
-            .collect();
-        canvas.lines(&outline, color);
-        for (_, at) in self.handle_positions(rect, bounds) {
-            canvas.fill(Rect::from_center_size(at, egui::Vec2::splat(HANDLE_HALF_SIZE * 2.0)), color);
-        }
-    }
-
     /// Screen positions of the eight resize handles of a box in this view.
     pub fn handle_positions(&self, rect: Rect, bounds: &Bounds) -> [(Handle, Pos2); 8] {
         Handle::ALL.map(|handle| (handle, self.to_screen(rect, handle.world_position(self.axis, bounds))))
@@ -530,7 +513,7 @@ impl View2D {
 
     /// The handle of a box under a screen position, among those a handle mode shows.
     pub fn hit_handle(&self, rect: Rect, bounds: &Bounds, pointer: Pos2, mode: HandleMode) -> Option<Handle> {
-        let reach = HANDLE_HALF_SIZE + 2.0;
+        let reach = HANDLE_HALF_SIZE + HANDLE_GRAB_PIXELS;
         self.handle_positions(rect, bounds)
             .into_iter()
             .filter(|(handle, _)| handle.shown(mode))

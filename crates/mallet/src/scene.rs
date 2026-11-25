@@ -235,6 +235,8 @@ pub enum Owner {
 
 /// Half the side length, in pixels, of a selection handle.
 pub const HANDLE_HALF_SIZE: f32 = 3.5;
+/// How far beyond a drawn handle, in pixels, a press still grabs it.
+pub const HANDLE_GRAB_PIXELS: f32 = 6.0;
 
 /// An affine transform previewed on the selection while it is dragged: a move, a resize
 /// from the handles, or a rotation, skew or gizmo drag.
@@ -289,11 +291,6 @@ impl Remap {
         }
         mapped
     }
-
-    /// How far the transform moves the origin, which is the whole of a plain move.
-    pub fn offset(&self) -> DVec3 {
-        self.matrix.w_axis.truncate()
-    }
 }
 
 /// Temporary shapes drawn on top of the map while a tool is in use.
@@ -308,8 +305,6 @@ pub struct Overlay {
     pub block: Option<Bounds>,
     /// A selection rectangle being dragged in one 2D view, as two world corners.
     pub marquee: Option<(Axis2D, DVec2, DVec2)>,
-    /// A selection box let go of in a 2D view, waiting for Enter to select what it covers.
-    pub selection_box: Option<SelectionBox>,
     /// The box that gets resize handles in the 2D views: the selection or the pending block.
     pub handles: Option<Bounds>,
     /// The entity tool's position for a new entity, waiting for Enter.
@@ -348,47 +343,6 @@ impl CameraPreview {
     /// The edges of the camera's view pyramid.
     pub fn edges(&self) -> Vec<[DVec3; 2]> {
         camera_frustum_edges(self.position, self.forward, self.fov, self.aspect, self.length)
-    }
-}
-
-/// A selection box drawn with the Selection tool and left on screen, as Hammer leaves it:
-/// its handles resize it, dragging inside moves it, Enter selects what it covers and Escape
-/// drops it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SelectionBox {
-    /// The view the box was drawn in.
-    pub axis: Axis2D,
-    /// Smallest corner, in the view's 2D world coordinates.
-    pub min: DVec2,
-    /// Largest corner, in the view's 2D world coordinates.
-    pub max: DVec2,
-    /// Whether what the box covers joins the selection instead of replacing it.
-    pub add: bool,
-}
-
-impl SelectionBox {
-    /// A box between two dragged corners, given in any order.
-    pub fn new(axis: Axis2D, corner_a: DVec2, corner_b: DVec2, add: bool) -> Self {
-        Self {
-            axis,
-            min: corner_a.min(corner_b),
-            max: corner_a.max(corner_b),
-            add,
-        }
-    }
-
-    /// The box as bounds that are flat along the view's depth, so the 2D handle code can
-    /// resize and draw it like any other box.
-    pub fn bounds(&self) -> Bounds {
-        Bounds {
-            min: self.axis.lift(self.min),
-            max: self.axis.lift(self.max),
-        }
-    }
-
-    /// The same box moved or resized to `bounds` in its own view.
-    pub fn with_bounds(self, bounds: &Bounds) -> Self {
-        Self::new(self.axis, self.axis.project(bounds.min), self.axis.project(bounds.max), self.add)
     }
 }
 
@@ -1169,6 +1123,38 @@ impl Scene {
         })
     }
 
+    /// Every owner a ray hits with how far along the ray it is, nearest first and each
+    /// once, for stepping through objects stacked behind one another. Props count where
+    /// the ray meets their triangles; only when nothing at all is hit do their boxes
+    /// count, as in [`Scene::pick_ray`].
+    pub fn pick_ray_all(&self, origin: DVec3, direction: DVec3, models: &ModelCache, solids: bool) -> Vec<(Owner, f64)> {
+        let in_order = |hits: Vec<(Owner, f64)>| {
+            let mut hits = hits;
+            hits.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let mut seen = HashSet::new();
+            hits.into_iter()
+                .filter(|(owner, _)| seen.insert(*owner))
+                .collect::<Vec<(Owner, f64)>>()
+        };
+        let hits = in_order(
+            self.meshes
+                .iter()
+                .filter(|mesh| !mesh.decal)
+                .filter_map(|mesh| Some((picked(mesh, solids)?, mesh_hit(mesh, origin, direction, models)?)))
+                .collect(),
+        );
+        if !hits.is_empty() {
+            return hits;
+        }
+        in_order(
+            self.meshes
+                .iter()
+                .filter(|mesh| mesh.model.is_some())
+                .filter_map(|mesh| Some((picked(mesh, solids)?, ray_box(origin, direction, &mesh.bounds)?)))
+                .collect(),
+        )
+    }
+
     /// Whether something drawn in the game stands between `from` and `to`, as for a glow
     /// sprite's visibility test: a brush whose face the line enters through is
     /// `drawn`, or a prop's triangles. Point entity boxes and decals do not count.
@@ -1436,22 +1422,44 @@ impl Scene {
             .collect()
     }
 
-    /// Owners with a centre cross inside a 2D rectangle, the way Hammer's selection
-    /// rectangle picks brushes. For an entity made of several brushes, any one of their
-    /// centres counts.
+    /// Every owner whose bounds touch the rectangle between two corners in a 2D view, as
+    /// a marquee selects.
     /// With `solids`, brushes of entities count as their own solids rather than entities.
-    pub fn owners_inside(&self, axis: Axis2D, corner_a: DVec2, corner_b: DVec2, solids: bool) -> BTreeSet<Owner> {
+    pub fn owners_touching(&self, axis: Axis2D, corner_a: DVec2, corner_b: DVec2, solids: bool) -> BTreeSet<Owner> {
         let (min, max) = (corner_a.min(corner_b), corner_a.max(corner_b));
         self.meshes
             .iter()
-            .filter(|mesh| !mesh.decal)
+            .filter(|mesh| !mesh.decal && !mesh.geometry_bounds.is_empty())
             .filter(|mesh| {
-                let centre = axis.project(mesh.geometry_bounds.center());
-                centre.cmpge(min).all() && centre.cmple(max).all()
+                let (low, high) = (
+                    axis.project(mesh.geometry_bounds.min),
+                    axis.project(mesh.geometry_bounds.max),
+                );
+                low.cmple(max).all() && high.cmpge(min).all()
             })
             .filter_map(|mesh| picked(mesh, solids))
             .collect()
     }
+
+    /// Every owner whose bounds reach into a convex volume, given as planes whose normals
+    /// point inwards: `(normal, distance)` keeps the points where `normal · point >=
+    /// distance`. A box is out only when it lies wholly behind one plane, which is how a
+    /// rectangle dragged in the 3D view selects through its frustum.
+    pub fn owners_in_volume(&self, planes: &[(DVec3, f64)], solids: bool) -> BTreeSet<Owner> {
+        self.meshes
+            .iter()
+            .filter(|mesh| !mesh.decal && !mesh.geometry_bounds.is_empty())
+            .filter(|mesh| {
+                let bounds = &mesh.geometry_bounds;
+                planes.iter().all(|(normal, distance)| {
+                    let farthest = DVec3::select(normal.cmpge(DVec3::ZERO), bounds.max, bounds.min);
+                    normal.dot(farthest) >= *distance
+                })
+            })
+            .filter_map(|mesh| picked(mesh, solids))
+            .collect()
+    }
+
 }
 
 #[cfg(test)]

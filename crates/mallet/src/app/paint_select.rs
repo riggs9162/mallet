@@ -94,7 +94,7 @@ impl MalletApp {
         let start = pointer.press_origin.filter(|origin| {
             self.drag.is_none()
                 && pointer.modifiers.ctrl
-                && matches!(Self::begin_drag(slot, view, rect, *origin, editor, false), Drag::Marquee { .. })
+                && matches!(Self::begin_drag(slot, view, rect, *origin, editor, eframe::egui::Modifiers::NONE), Drag::Marquee { .. })
                 && pick(editor, *origin).is_some()
         });
         let frame = StrokeFrame {
@@ -108,7 +108,9 @@ impl MalletApp {
     }
 
     /// Runs paint select in a 3D view for one frame. A stroke starts when the left button
-    /// goes down with Ctrl held anywhere but on the gizmo, which `on_gizmo` tells. Returns
+    /// goes down with Ctrl held on an object, anywhere but on the gizmo, which `on_gizmo`
+    /// tells; in mouselook it starts wherever the crosshair is. A Ctrl drag from empty
+    /// space draws a rubber band that toggles instead. Returns
     /// whether a stroke is going on in this view, so the view's own clicks leave it alone
     /// until the button comes up.
     pub(super) fn paint_select_3d(
@@ -127,11 +129,23 @@ impl MalletApp {
             response.is_pointer_button_down_on() && response.ctx.input(|input| input.pointer.primary_down())
         };
         let cursor = if looking { Some(rect.center()) } else { pointer.position };
-        let free = !on_gizmo && self.drag.is_none() && self.gizmo_drag.is_none();
+        let free = !on_gizmo
+            && self.drag.is_none()
+            && self.gizmo_drag.is_none()
+            && self.press_3d.is_none()
+            && self.live_move.is_none();
         let frame = StrokeFrame {
             held,
             ctrl: pointer.modifiers.ctrl,
-            start: cursor.filter(|_| free && editor.tool == Tool::Select),
+            start: cursor.filter(|point| {
+                free && editor.tool == Tool::Select && held && pointer.modifiers.ctrl && (looking || {
+                    let (origin, direction) = editor.camera.build_ray(rect, *point);
+                    editor
+                        .scene
+                        .pick_ray(origin, direction, &editor.models, editor.solid_picks())
+                        .is_some()
+                })
+            }),
             cursor,
             sampling: SAMPLING_3D,
         };

@@ -648,15 +648,11 @@ fn viewports_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
                 .add(egui::Slider::new(&mut view.pick_tolerance, 1.0..=16.0).suffix(" px"))
                 .changed();
             ui.end_row();
-            ui.label("Automatic infinite selection").on_hover_text(
-                "Off, as in Hammer, a box dragged with the Selection tool stays on screen until Enter \
-                 selects what it covers. On, it selects as soon as the mouse is let go.",
+            ui.label("Show the drag plane").on_hover_text(
+                "For debugging: while a move is dragged in the 3D view, draw the plane the selection slides along.",
             );
             *dirty |= ui
-                .checkbox(
-                    &mut view.infinite_selection,
-                    "Select as soon as a selection box is let go",
-                )
+                .checkbox(&mut view.debug_drag_plane, "Draw it faintly while dragging")
                 .changed();
             ui.end_row();
             ui.label("Grid for new maps");
