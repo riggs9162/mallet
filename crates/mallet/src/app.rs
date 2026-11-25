@@ -87,6 +87,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::GridSmaller,
     Action::GridLarger,
     Action::ToggleSnapToGrid,
+    Action::ToggleHalfGridSnap,
     Action::ToggleShowGrid,
     Action::SelectionTool,
     Action::CameraTool,
@@ -579,6 +580,8 @@ impl MalletApp {
                 ui.menu_button("Map", |ui| {
                     let keymap = &self.keymap;
                     menu_toggle(ui, keymap, "Snap to Grid", editor.snap_to_grid, Action::ToggleSnapToGrid, &mut chosen);
+                    let half = editor.config.transform.half_grid_snap;
+                    menu_toggle(ui, keymap, "Snap to Half Grid", half, Action::ToggleHalfGridSnap, &mut chosen);
                     menu_toggle(ui, keymap, "Show Grid", editor.show_grid, Action::ToggleShowGrid, &mut chosen);
                     ui.menu_button("Grid Settings", |ui| {
                         menu_item(ui, keymap, "Smaller Grid", Action::GridSmaller, &mut chosen);
@@ -2950,6 +2953,7 @@ fn run(action: Action, editor: &mut Editor) {
             editor.snap_to_grid = !editor.snap_to_grid;
             editor.message = format!("Snap to grid {}", on_off(editor.snap_to_grid));
         }
+        Action::ToggleHalfGridSnap => editor.toggle_half_grid_snap(),
         Action::ToggleShowGrid => {
             editor.show_grid = !editor.show_grid;
             editor.message = format!("Grid {}", if editor.show_grid { "shown" } else { "hidden" });

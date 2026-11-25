@@ -1824,13 +1824,26 @@ impl Editor {
     }
 
     /// The step drags and new points snap to: the grid while Snap to Grid is on and Alt
-    /// is not held, as in Hammer, and otherwise a step too fine to notice.
+    /// is not held, as in Hammer, or half of it with half-grid snapping, and otherwise a
+    /// step too fine to notice. Without a usable grid size, snapping goes to whole units.
     pub fn snap_step(&self) -> f64 {
-        if self.snap_to_grid && !self.snap_suspended {
-            self.grid
-        } else {
-            FREE_STEP
+        if !self.snap_to_grid || self.snap_suspended {
+            return FREE_STEP;
         }
+        let grid = if self.grid.is_finite() && self.grid > 0.0 { self.grid } else { 1.0 };
+        if self.config.transform.half_grid_snap {
+            grid * 0.5
+        } else {
+            grid
+        }
+    }
+
+    /// Turns half-grid snapping on or off and saves the choice.
+    pub fn toggle_half_grid_snap(&mut self) {
+        let on = !self.config.transform.half_grid_snap;
+        self.config.transform.half_grid_snap = on;
+        self.message = format!("Half-grid snap {}", if on { "on" } else { "off" });
+        self.save_config();
     }
 
     /// The grid size the 2D views draw, or 0 when Show Grid is off.

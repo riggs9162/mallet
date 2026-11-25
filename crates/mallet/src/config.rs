@@ -303,6 +303,8 @@ pub struct TransformOptions {
     pub gizmo_mode: crate::transform::GizmoMode,
     /// Arrow keys over a 2D view nudge the selection by one grid step (Ctrl: one unit).
     pub arrow_nudge: bool,
+    /// Snap to half the grid size, for finer control than the grid gives.
+    pub half_grid_snap: bool,
 }
 
 impl TransformOptions {
@@ -332,6 +334,7 @@ impl Default for TransformOptions {
             gizmo: true,
             gizmo_mode: crate::transform::GizmoMode::Move,
             arrow_nudge: true,
+            half_grid_snap: false,
         }
     }
 }

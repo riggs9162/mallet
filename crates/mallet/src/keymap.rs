@@ -30,6 +30,8 @@ pub enum Action {
     GridLarger,
     /// Turn snapping to the grid on or off, as Hammer's Map > Snap to Grid does.
     ToggleSnapToGrid,
+    /// Snap to half the grid size instead of the whole of it, for finer control.
+    ToggleHalfGridSnap,
     /// Show or hide the grid in the 2D views, as Hammer's Map > Show Grid does.
     ToggleShowGrid,
     /// Show the displacement vertices the compiler collapses where a displacement meets a
