@@ -11,6 +11,20 @@ in the order they are planned. Each item says where the feature comes from:
 Tick an item off when it ships, and move it to [Already in Mallet](#already-in-mallet) once
 its milestone is done. Last compared against both sources on 2026-11-09.
 
+## Milestone 0: Hammer muscle memory
+
+Small differences in how Mallet answers the mouse and keyboard, which a mapper coming from
+Hammer trips over on every edit. Keys and behaviour follow the
+[Hammer Hotkey Reference](https://developer.valvesoftware.com/wiki/Hammer_Hotkey_Reference)
+and the [Selection Tool](https://developer.valvesoftware.com/wiki/Hammer_Selection_Tool) page.
+
+- [ ] A box dragged with the Selection tool stays on screen with handles to resize or move it; Enter selects what it covers and Escape drops it. Automatic infinite selection, in Mallet Options, selects as soon as the mouse is let go. Hammer
+- [ ] Shift+arrow keys clone and nudge the selection. Hammer
+- [ ] Alt held while rotating turns freely, whatever the rotation snapping. Hammer
+- [ ] Page Up and Page Down step through the objects under the last click, outside the Camera tool. Hammer
+- [ ] Escape leaves the current tool for the Selection tool, as Hammer's does for every tool except Magnify, Texture Application and Overlay. Hammer
+
+
 ## Milestone 1: everyday brush editing
 
 The tools a mapper reaches for every few minutes.
@@ -65,7 +79,6 @@ The tools a mapper reaches for every few minutes.
 - [x] `[` and `]` (and Alt+A, Alt+S) for the grid size. Hammer
 - [ ] Microgrid sizes 0.125, 0.25 and 0.5, and a custom grid size (View > Set Grid Size). H++
 - [ ] 3D grid on brush faces (P). Hammer, overhauled in H++
-- [ ] Shift+arrow keys clone and nudge the selection. Hammer
 - [x] Maximise and restore a viewport (Shift+Z). Hammer
 - [ ] Resizable viewports and Autosize 4 Views (Ctrl+A). Hammer
 - [x] F2 to F5 switch the active viewport's type; Tab cycles 2D views. Hammer
