@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use eframe::egui::Color32;
 use glam::{DMat3, DMat4, DVec2, DVec3};
+use mallet_content::model::ModelVariant;
 use mallet_content::{parallel_map, EntityClass, GameData, Model};
 use mallet_vmf::displacement::Surface;
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds, Plane};
@@ -591,6 +592,50 @@ pub type ModelCache = HashMap<String, Option<Arc<Model>>>;
 /// The cache key for a model path: lower case with forward slashes.
 pub fn model_key(path: &str) -> String {
     path.trim().replace('\\', "/").to_ascii_lowercase()
+}
+
+/// The look of its model an entity shows, as the game shows it: the skin family its
+/// `skin` key picks, and the body groups its `body` (or `SetBodyGroup`) key packs, which
+/// is the first choice of every group when it has none.
+pub fn entity_variant(entity: &Entity) -> ModelVariant {
+    let number = |key: &str| entity.get(key).and_then(|value| value.trim().parse::<u32>().ok());
+    ModelVariant {
+        skin: number("skin").unwrap_or(0) as usize,
+        body: Some(number("body").or_else(|| number("SetBodyGroup")).unwrap_or(0)),
+    }
+}
+
+/// The cache key for a model in one look: the path's [`model_key`], followed by
+/// `#skin=N` and `#body=N` when they are not the default.
+pub fn variant_key(path: &str, variant: ModelVariant) -> String {
+    let mut key = model_key(path);
+    if variant.skin != 0 {
+        key.push_str(&format!("#skin={}", variant.skin));
+    }
+    if let Some(body) = variant.body.filter(|body| *body != 0) {
+        key.push_str(&format!("#body={body}"));
+    }
+    key
+}
+
+/// The model path and look a [`variant_key`] names.
+pub fn split_variant_key(key: &str) -> (&str, ModelVariant) {
+    let mut parts = key.split('#');
+    let path = parts.next().unwrap_or_default();
+    let mut variant = ModelVariant { skin: 0, body: Some(0) };
+    for part in parts {
+        match part.split_once('=') {
+            Some(("skin", value)) => variant.skin = value.parse().unwrap_or(0),
+            Some(("body", value)) => variant.body = Some(value.parse().unwrap_or(0)),
+            _ => {}
+        }
+    }
+    (path, variant)
+}
+
+/// The cache key of the model an entity shows, in the look it shows it in.
+pub fn entity_model_key(entity: &Entity, class: Option<&EntityClass>) -> Option<String> {
+    entity_model(entity, class).map(|path| variant_key(path, entity_variant(entity)))
 }
 
 /// A prop entity's model placed in the world.
@@ -1730,9 +1775,7 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
     if let Some(text) = WorldText::read(entity, class, origin) {
         return Some(text_mesh(text, color, owner));
     }
-    let loaded = entity_model(entity, class)
-        .map(model_key)
-        .and_then(|key| Some((models.get(&key)?.clone()?, key)));
+    let loaded = entity_model_key(entity, class).and_then(|key| Some((models.get(&key)?.clone()?, key)));
     let Some((model, key)) = loaded else {
         let (min, max) = match class.and_then(|class| class.size) {
             Some((min, max)) => (DVec3::from_array(min), DVec3::from_array(max)),

@@ -29,7 +29,9 @@ use crate::document::Document;
 use crate::input::InputFrame;
 use crate::lighting::{load_texture_lights, TextureLights};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
-use crate::scene::{decal_key, entity_model, model_key, CameraPreview, DecalSizes, ModelCache, Overlay, Owner, Scene};
+use crate::scene::{
+    decal_key, entity_model_key, split_variant_key, CameraPreview, DecalSizes, ModelCache, Overlay, Owner, Scene,
+};
 use crate::view2d::{Axis2D, View2D};
 use crate::view3d::Camera3D;
 
@@ -1988,8 +1990,7 @@ impl Editor {
         };
         let game_data = self.game_data.as_deref();
         let mut missing: Vec<String> = entities
-            .filter_map(|entity| entity_model(entity, game_data.and_then(|data| data.class(entity.classname()))))
-            .map(model_key)
+            .filter_map(|entity| entity_model_key(entity, game_data.and_then(|data| data.class(entity.classname()))))
             .filter(|key| !self.models.contains_key(key))
             .collect();
         missing.sort();
@@ -1998,7 +1999,10 @@ impl Editor {
             return;
         }
         let loader = materials.loader();
-        let loaded = parallel_map(&missing, |key| loader.model(key));
+        let loaded = parallel_map(&missing, |key| {
+            let (path, variant) = split_variant_key(key);
+            loader.model_variant(path, variant).map(|(model, _)| model)
+        });
         for (key, result) in missing.into_iter().zip(loaded) {
             match result {
                 Ok(model) => {

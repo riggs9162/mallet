@@ -146,7 +146,7 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 
 - [x] Model browser: thumbnails, folder tree, search with wildcards and `!` negation, model preview with skins and bodygroups. Hammer, improved in H++
 - [ ] Model browser: several panels, and attachments in the preview. H++
-- [ ] Draw props in the 3D views with their `skin` and `body` keys.
+- [x] Draw props in the 3D views with their `skin` and `body` keys (or `SetBodyGroup`), showing only the first choice of each body group by default, as the game does.
 - [x] Soundscape browser: the game's soundscapes by script file, what each plays, a listen button and a way to give one to the selected `env_soundscape`.
 - [ ] Room effects (`dsp`) in the sound preview.
 - [ ] Sound browser (Ctrl+Shift+S) with playback of WAV, MP3 and OGG, a volume slider and Reload Sounds. Hammer, improved in H++

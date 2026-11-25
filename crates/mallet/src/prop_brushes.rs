@@ -13,7 +13,7 @@ use mallet_vmf::hull::{convex_hull, convex_parts, Hull};
 use mallet_vmf::{Entity, EntityItem, IdAllocator, Solid};
 
 use crate::editor::{find_entity, Editor, SelectMode};
-use crate::scene::{entity_transform, model_key, Owner};
+use crate::scene::{entity_transform, entity_variant, variant_key, Owner};
 
 /// The most sides a generated brush gets; curved surfaces are flattened to fit.
 const MAX_BRUSH_SIDES: usize = 32;
@@ -194,7 +194,7 @@ impl Editor {
             PropShape::Mesh => {
                 let model = self
                     .models
-                    .get(&model_key(path))
+                    .get(&variant_key(path, entity_variant(entity)))
                     .cloned()
                     .flatten()
                     .ok_or_else(|| format!("{path} is not loaded"))?;
