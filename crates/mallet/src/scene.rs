@@ -647,8 +647,9 @@ pub struct WireMesh {
     /// mesh, so a renderer can keep data for each face; `None` for meshes made outside
     /// [`Scene::build`].
     pub first_face: Option<u32>,
-    /// The picture of an overlay or decal on brush faces. It is picked like any mesh,
-    /// but the texture tool and tools that look for a surface see through it.
+    /// The picture of an overlay or decal on brush faces. As in Hammer++, clicks and
+    /// boxes pick the entity by its node, not its picture, except with the Overlay and
+    /// Decal tools; the texture tool and tools that look for a surface see through it too.
     pub decal: bool,
 }
 
@@ -1074,8 +1075,8 @@ impl Scene {
                     .iter()
                     .any(|[a, b]| segment_distance(point, axis.project(*a), axis.project(*b)) <= tolerance)
         };
-        smallest(&mut self.meshes.iter().filter(on_centre))
-            .or_else(|| smallest(&mut self.meshes.iter().filter(on_outline)))
+        let pickable = || self.meshes.iter().filter(|mesh| !mesh.decal);
+        smallest(&mut pickable().filter(on_centre)).or_else(|| smallest(&mut pickable().filter(on_outline)))
     }
 
     /// Picks the nearest mesh hit by a ray, the way Hammer does: a prop counts where the
@@ -1084,6 +1085,24 @@ impl Scene {
     /// box, so thin or hollow models can still be clicked.
     /// With `solids`, a brush of an entity picks its own solid rather than the entity.
     pub fn pick_ray(&self, origin: DVec3, direction: DVec3, models: &ModelCache, solids: bool) -> Option<Owner> {
+        self.pick_ray_through(origin, direction, models, solids, false)
+    }
+
+    /// [`Scene::pick_ray`] that also picks overlays and decals by their pictures, as the
+    /// Overlay and Decal tools do to select one already placed.
+    pub fn pick_ray_pictures(&self, origin: DVec3, direction: DVec3, models: &ModelCache) -> Option<Owner> {
+        self.pick_ray_through(origin, direction, models, false, true)
+    }
+
+    /// The nearest mesh a ray picks; overlay and decal pictures only when `pictures` is set.
+    fn pick_ray_through(
+        &self,
+        origin: DVec3,
+        direction: DVec3,
+        models: &ModelCache,
+        solids: bool,
+        pictures: bool,
+    ) -> Option<Owner> {
         let nearest = |hits: &mut dyn Iterator<Item = (Owner, f64)>| {
             hits.min_by(|a, b| a.1.total_cmp(&b.1)).map(|(owner, _)| owner)
         };
@@ -1091,6 +1110,7 @@ impl Scene {
             &mut self
                 .meshes
                 .iter()
+                .filter(|mesh| pictures || !mesh.decal)
                 .filter_map(|mesh| Some((picked(mesh, solids)?, mesh_hit(mesh, origin, direction, models)?))),
         )
         .or_else(|| {
@@ -1379,6 +1399,7 @@ impl Scene {
         let (min, max) = (corner_a.min(corner_b), corner_a.max(corner_b));
         self.meshes
             .iter()
+            .filter(|mesh| !mesh.decal)
             .filter(|mesh| {
                 let centre = axis.project(mesh.geometry_bounds.center());
                 centre.cmpge(min).all() && centre.cmple(max).all()
@@ -1465,7 +1486,7 @@ fn mesh_hit(mesh: &WireMesh, origin: DVec3, direction: DVec3, models: &ModelCach
         .as_ref()
         .and_then(|instance| Some((instance, models.get(&instance.key)?.as_deref()?)));
     match loaded {
-        Some((instance, model)) => ray_model(origin, direction, &mesh.bounds, instance, model),
+        Some((instance, model)) => ray_model(origin, direction, instance, model),
         None => displacement_hit(mesh, origin, direction)
             .map(|(distance, _)| distance)
             .or_else(|| ray_convex(origin, direction, &mesh.planes)),
@@ -1483,8 +1504,7 @@ fn displacement_hit(mesh: &WireMesh, origin: DVec3, direction: DVec3) -> Option<
 }
 
 /// Distance along a ray to the nearest triangle of a placed model, from either side.
-fn ray_model(origin: DVec3, direction: DVec3, bounds: &Bounds, instance: &ModelInstance, model: &Model) -> Option<f64> {
-    ray_box(origin, direction, bounds)?;
+fn ray_model(origin: DVec3, direction: DVec3, instance: &ModelInstance, model: &Model) -> Option<f64> {
     if instance.transform.determinant().abs() < 1e-12 {
         return None;
     }
@@ -1493,6 +1513,11 @@ fn ray_model(origin: DVec3, direction: DVec3, bounds: &Bounds, instance: &ModelI
     let inverse = instance.transform.inverse();
     let local_origin = inverse.transform_point3(origin);
     let local_direction = inverse.transform_vector3(direction);
+    let local_bounds = Bounds {
+        min: DVec3::from_array(model.min.map(f64::from)),
+        max: DVec3::from_array(model.max.map(f64::from)),
+    };
+    ray_box(local_origin, local_direction, &local_bounds)?;
     let corner = |index: u32| {
         model
             .vertices
@@ -1672,6 +1697,17 @@ fn is_decal(entity: &Entity) -> bool {
     entity.classname().eq_ignore_ascii_case(overlay::DECAL_CLASS)
 }
 
+/// The box a click in 3D picks an overlay's or decal's node by: its own box, grown to at
+/// least an ordinary point entity's, as the picture no longer picks it and its FGD box
+/// is far smaller than the icon drawn there.
+fn node_pick_bounds(origin: DVec3, bounds: &Bounds) -> Bounds {
+    let half = DVec3::splat(POINT_ENTITY_HALF_SIZE);
+    Bounds {
+        min: bounds.min.min(origin - half),
+        max: bounds.max.max(origin + half),
+    }
+}
+
 /// The mesh of one brush of `entity`. A world brush has its own editor colour and is
 /// selected by itself; a brush of an entity has the entity's colour and selects it.
 fn owned_brush_mesh(entity: &Entity, solid: &Solid, class: Option<&EntityClass>) -> Option<WireMesh> {
@@ -1706,13 +1742,18 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
             min: origin + min,
             max: origin + max,
         };
+        let picked = if is_overlay(entity) || is_decal(entity) {
+            node_pick_bounds(origin, &bounds)
+        } else {
+            bounds
+        };
         return Some(WireMesh {
             color,
             edges: box_edges(&bounds),
             faces: box_faces(&bounds),
             bounds,
             geometry_bounds: bounds,
-            planes: box_planes(&bounds),
+            planes: box_planes(&picked),
             owner,
             solid: None,
             selected: false,

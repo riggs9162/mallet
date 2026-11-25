@@ -211,6 +211,9 @@ the texture browser. Moving, rotating, flipping, resizing, cloning and pasting a
 all carry its picture along. An overlay only shows on the faces it lists, as in Hammer, so
 after moving one onto another brush, Ctrl+click that face with the Overlay tool to add it.
 Copying an overlay together with its wall keeps it on the copied wall.
+As in Hammer++, the Selection tool picks an overlay or decal only by its node (the
+OVERLAY sign or the decal's box), not by its picture, so clicking a wall selects the
+wall; the Overlay and Decal tools still select one by clicking its picture.
 
 Any keyvalue that lists brush faces, such as an overlay's Brush faces, the faces an
 `env_cubemap` applies to, or both sides of an `info_overlay_transition`, has a Pick button
