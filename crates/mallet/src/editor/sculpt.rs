@@ -146,7 +146,7 @@ impl Editor {
             return Err("select the displacements to sculpt first".to_owned());
         }
         let camera = &self.camera;
-        let (origin, ray) = camera.ray(rect, Pos2::new(center.x as f32, center.y as f32));
+        let (origin, ray) = camera.build_ray(rect, Pos2::new(center.x as f32, center.y as f32));
         let hit = self.displacement_hit(sides, origin, ray);
         let mode = match (smooth, settings.tool) {
             (true, _) => SculptMode::Smooth,

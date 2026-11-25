@@ -589,7 +589,7 @@ impl MalletApp {
             .or(pointer.position.filter(|_| response.is_pointer_button_down_on()));
         if response.secondary_clicked() && pointer.modifiers.alt {
             if let Some(position) = hovered {
-                let (origin, direction) = editor.camera.ray(rect, position);
+                let (origin, direction) = editor.camera.build_ray(rect, position);
                 match editor.scene.surface_face(origin, direction) {
                     Some((_, normal)) => {
                         editor.displacement.sculpt.direction = SculptDirection::Selected;
@@ -715,7 +715,7 @@ impl MalletApp {
             .hover_pos()
             .or(pointer.position.filter(|_| response.is_pointer_button_down_on()));
         let spot = hovered.and_then(|position| {
-            let (origin, direction) = editor.camera.ray(rect, position);
+            let (origin, direction) = editor.camera.build_ray(rect, position);
             editor.displacement_hit(&sides, origin, direction)
         });
         if let Some((point, normal)) = spot {

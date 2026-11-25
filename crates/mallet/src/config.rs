@@ -923,17 +923,14 @@ pub struct ViewOptions {
     /// How far one mouse wheel notch scrolls the texture browser, as a share of a card's
     /// height, from 0.25 to 2.
     pub texture_scroll: f64,
-    /// Degrees per second the turn keys turn the 3D camera. Hammer++ binds none by default.
+    /// Degrees per second the arrow keys turn the 3D camera.
     pub turn_speed: f64,
-    /// How quickly the 3D camera reaches its speed and stops, per second; higher is
-    /// snappier.
-    pub camera_acceleration: f64,
+    /// How fast the movement keys speed the 3D camera up, in units per second squared.
+    pub flight_acceleration: f64,
     /// Units one mouse wheel notch moves the 3D camera.
     pub wheel_step: f64,
     /// The share of the camera speed flown while holding Alt in mouselook.
     pub crouch_speed: f64,
-    /// Frames of mouse movement mouselook averages over; 1 turns smoothing off.
-    pub look_smoothing: usize,
     /// How much one mouse wheel notch zooms a 2D view.
     pub zoom_step: f64,
     /// Grid lines closer than this many pixels are thinned out.
@@ -963,10 +960,9 @@ impl Default for ViewOptions {
             default_grid: 64.0,
             texture_scroll: 1.0,
             turn_speed: crate::view3d::DEFAULT_TURN_SPEED,
-            camera_acceleration: crate::view3d::DEFAULT_ACCELERATION,
+            flight_acceleration: crate::view3d::DEFAULT_ACCELERATION,
             wheel_step: crate::view3d::DEFAULT_WHEEL_STEP,
             crouch_speed: crate::view3d::DEFAULT_CROUCH_SPEED,
-            look_smoothing: crate::view3d::DEFAULT_LOOK_FRAMES,
             zoom_step: crate::view2d::DEFAULT_ZOOM_STEP,
             grid_min_pixels: 4.0,
             grid_highlight: 64.0,

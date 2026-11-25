@@ -164,9 +164,9 @@ pub enum Action {
     MoveBack,
     StrafeLeft,
     StrafeRight,
-    /// Fly the 3D camera along its own up direction.
+    /// Fly the 3D camera straight up the world's Z axis.
     StrafeUp,
-    /// Fly the 3D camera along its own down direction.
+    /// Fly the 3D camera straight down the world's Z axis.
     StrafeDown,
     TurnLeft,
     TurnRight,
@@ -307,8 +307,8 @@ impl KeyMap {
     /// Hammer++'s bindings for the actions Mallet supports so far, as its keybindings
     /// file sets them. Actions Hammer++ has no key for keep Mallet's own, unless that key
     /// does something else in Hammer++: closing a tab uses Ctrl+F4 because Hammer++ puts
-    /// group ignore on Ctrl+W. The camera turns with the mouse only, since Hammer++'s
-    /// arrow keys strafe. Stock Hammer's keys that the Valve Developer Community tutorials
+    /// group ignore on Ctrl+W. In the 3D view the arrow keys turn the camera and R and
+    /// F fly it straight up and down. Stock Hammer's keys that the Valve Developer Community tutorials
     /// teach work as well where nothing else uses them: `[` and `]` (or Alt+A and Alt+S)
     /// for the grid size and Shift+R to show or hide the grid.
     pub fn hammer_plus_plus_defaults() -> Self {
@@ -395,10 +395,12 @@ impl KeyMap {
                 (Action::MoveBack, Chord::key(Key::S)),
                 (Action::StrafeLeft, Chord::key(Key::A)),
                 (Action::StrafeRight, Chord::key(Key::D)),
-                (Action::StrafeLeft, Chord::key(Key::ArrowLeft)),
-                (Action::StrafeRight, Chord::key(Key::ArrowRight)),
-                (Action::StrafeUp, Chord::key(Key::ArrowUp)),
-                (Action::StrafeDown, Chord::key(Key::ArrowDown)),
+                (Action::StrafeUp, Chord::key(Key::R)),
+                (Action::StrafeDown, Chord::key(Key::F)),
+                (Action::TurnLeft, Chord::key(Key::ArrowLeft)),
+                (Action::TurnRight, Chord::key(Key::ArrowRight)),
+                (Action::LookUp, Chord::key(Key::ArrowUp)),
+                (Action::LookDown, Chord::key(Key::ArrowDown)),
             ],
         }
     }

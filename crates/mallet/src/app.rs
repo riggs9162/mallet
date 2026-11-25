@@ -1106,7 +1106,7 @@ impl MalletApp {
         let looking = editor.camera.mouse_look();
         let aim = if looking { Some(rect.center()) } else { pointer.position };
         if let (Some(aim), true) = (aim, response.hovered()) {
-            let (origin, direction) = editor.camera.ray(rect, aim);
+            let (origin, direction) = editor.camera.build_ray(rect, aim);
             editor.paste_cursor = Some(PasteCursor::Ray { origin, direction });
         }
         let placing = editor.follow_paste_cursor();
@@ -1134,13 +1134,13 @@ impl MalletApp {
                 editor.drop_paste();
             }
         } else if let (true, Some(aim), true) = (clicked, aim, picking) {
-            let (origin, direction) = editor.camera.ray(rect, aim);
+            let (origin, direction) = editor.camera.build_ray(rect, aim);
             editor.face_pick_click(origin, direction, pointer.modifiers.ctrl);
         } else if let (true, Some(aim), true) = (clicked, aim, positioning) {
-            let (origin, direction) = editor.camera.ray(rect, aim);
+            let (origin, direction) = editor.camera.build_ray(rect, aim);
             editor.position_pick_click(origin, direction);
         } else if let (true, Some(aim), false) = (clicked, aim, gizmo_hot) {
-            let (origin, direction) = editor.camera.ray(rect, aim);
+            let (origin, direction) = editor.camera.build_ray(rect, aim);
             match editor.tool {
                 Tool::Select if selecting => {}
                 Tool::Select => {
@@ -1192,7 +1192,7 @@ impl MalletApp {
         if editor.tool == Tool::Select && !looking {
             let hit = match (response.secondary_clicked(), pointer.position) {
                 (true, Some(position)) => {
-                    let (origin, direction) = editor.camera.ray(rect, position);
+                    let (origin, direction) = editor.camera.build_ray(rect, position);
                     editor.scene.pick_ray(origin, direction, &editor.models, editor.solid_picks())
                 }
                 _ => None,
@@ -1206,7 +1206,7 @@ impl MalletApp {
                 response.clicked_by(PointerButton::Secondary)
             };
             if let (true, Some(aim)) = (applied, aim) {
-                let (origin, direction) = editor.camera.ray(rect, aim);
+                let (origin, direction) = editor.camera.build_ray(rect, aim);
                 let hit = editor.scene.pick_face(origin, direction, &editor.models);
                 editor.texture_apply_click(hit, crate::faces::ApplyHow::from_modifiers(pointer.modifiers));
             }
@@ -2291,10 +2291,9 @@ fn apply_view_options(editor: &mut Editor) {
     editor.camera.move_speed = view.camera_speed;
     editor.camera.look_sensitivity = view.look_sensitivity;
     editor.camera.turn_speed = view.turn_speed;
-    editor.camera.acceleration = view.camera_acceleration;
+    editor.camera.acceleration = view.flight_acceleration;
     editor.camera.wheel_step = view.wheel_step;
     editor.camera.crouch_speed = view.crouch_speed;
-    editor.camera.look_frames = view.look_smoothing;
     crate::style::set(crate::style::ViewStyle::from_options(&editor.config.colors, view));
 }
 

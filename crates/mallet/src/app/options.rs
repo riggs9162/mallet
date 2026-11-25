@@ -15,7 +15,6 @@ use crate::keymap::KeyMap;
 use crate::lighting::{HelperMode, LightingDetail, SkyMode, Tonemap};
 #[cfg(windows)]
 use crate::shell;
-use crate::view3d::MAX_LOOK_FRAMES;
 
 const GOOD: Color32 = Color32::from_rgb(90, 190, 110);
 const ERROR: Color32 = Color32::from_rgb(235, 90, 80);
@@ -597,13 +596,15 @@ fn viewports_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
                 )
                 .changed();
             ui.end_row();
-            ui.label("Camera acceleration")
-                .on_hover_text("How quickly the camera speeds up and stops.");
+            ui.label("Camera acceleration").on_hover_text(
+                "How quickly the movement keys bring the camera up to speed. It stops as soon as you let go.",
+            );
             *dirty |= ui
                 .add(
-                    egui::Slider::new(&mut view.camera_acceleration, 1.0..=60.0)
+                    egui::Slider::new(&mut view.flight_acceleration, 100.0..=20000.0)
                         .logarithmic(true)
-                        .suffix(" /s"),
+                        .integer()
+                        .suffix(" units/s²"),
                 )
                 .changed();
             ui.end_row();
@@ -631,12 +632,6 @@ fn viewports_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
             ui.label("Mouselook sensitivity");
             *dirty |= ui
                 .add(egui::Slider::new(&mut view.look_sensitivity, 0.02..=1.0).logarithmic(true))
-                .changed();
-            ui.end_row();
-            ui.label("Mouselook smoothing")
-                .on_hover_text("Averages mouse movement over this many frames. 1 turns smoothing off.");
-            *dirty |= ui
-                .add(egui::Slider::new(&mut view.look_smoothing, 1..=MAX_LOOK_FRAMES).suffix(" frames"))
                 .changed();
             ui.end_row();
             ui.label("2D zoom per wheel notch");

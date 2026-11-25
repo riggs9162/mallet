@@ -92,7 +92,7 @@ impl MalletApp {
         {
             response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             if let Some(position) = pointer.position {
-                let (origin, direction) = editor.camera.ray(rect, position);
+                let (origin, direction) = editor.camera.build_ray(rect, position);
                 if let Some(point) = on_plane(&placed, origin, direction) {
                     let how = if drag.free {
                         CornerDrag::Free

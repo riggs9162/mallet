@@ -43,7 +43,6 @@ use crate::world_text;
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const NEAR: f32 = 1.0;
 /// Texture size assumed for texture coordinates when a material cannot be found.
 const MISSING_TEXTURE_SIZE: f32 = 128.0;
 /// How strongly selected props, sprites and text are tinted red.
@@ -3039,12 +3038,7 @@ fn view_uniform(matrix: Mat4, eye: Option<Vec3>) -> [f32; VIEW_UNIFORM_LEN] {
 /// field of view. Nothing beyond the camera's draw distance is drawn, and the frustum's
 /// far plane makes culling skip it too.
 fn view_projection(camera: &Camera3D, aspect: f32) -> Mat4 {
-    let far = (camera.far as f32).max(NEAR * 2.0);
-    let horizontal = (camera.fov as f32).to_radians();
-    let vertical = 2.0 * ((horizontal * 0.5).tan() / aspect).atan();
-    let projection = Mat4::perspective_rh(vertical, aspect, NEAR, far);
-    let view = Mat4::look_to_rh(camera.position.as_vec3(), camera.forward().as_vec3(), Vec3::Z);
-    projection * view
+    camera.view_projection(f64::from(aspect)).as_mat4()
 }
 
 /// The chunk a mesh's faces go into, by where its centre falls.

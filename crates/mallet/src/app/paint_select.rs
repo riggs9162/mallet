@@ -136,7 +136,7 @@ impl MalletApp {
             sampling: SAMPLING_3D,
         };
         self.paint_select(slot, editor, frame, |editor, point| {
-            let (origin, direction) = editor.camera.ray(rect, point);
+            let (origin, direction) = editor.camera.build_ray(rect, point);
             editor
                 .scene
                 .pick_ray(origin, direction, &editor.models, editor.solid_picks())

@@ -182,7 +182,7 @@ impl MalletApp {
             if dragged == slot {
                 response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                 if let Some(position) = pointer.position {
-                    let (origin, direction) = editor.camera.ray(rect, position);
+                    let (origin, direction) = editor.camera.build_ray(rect, position);
                     let target = drag_target(&editor.camera, origin, direction, anchor, vertical, editor.snap_step());
                     if let Some(target) = target {
                         editor.drag_vertices(target - anchor);

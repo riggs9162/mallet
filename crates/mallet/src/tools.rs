@@ -1709,7 +1709,7 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             let slot = editor.slot_for(ShotTarget::Camera)?;
             let rect = editor.viewport_rects[slot];
             let at = editor.viewport_point(ShotTarget::Camera, DVec2::new(x, y))?;
-            let (origin, direction) = editor.camera.ray(rect, at);
+            let (origin, direction) = editor.camera.build_ray(rect, at);
             let entities = id_list(args, "entities")?;
             let hit = if entities.is_empty() {
                 editor.scene.pick_face(origin, direction, &editor.models)

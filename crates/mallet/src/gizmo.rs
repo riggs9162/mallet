@@ -380,7 +380,7 @@ impl GizmoDrag {
         bounds: Bounds,
         anchor: DVec3,
     ) -> Option<Self> {
-        let (origin, direction) = camera.ray(rect, pointer);
+        let (origin, direction) = camera.build_ray(rect, pointer);
         let (start_along, start_point) = match (gizmo.mode, part) {
             (GizmoMode::Rotate, Part::Center) => return None,
             (_, Part::Axis(axis)) => (along_axis(gizmo.center, AXES[axis], origin, direction)?, DVec3::ZERO),
@@ -414,7 +414,7 @@ impl GizmoDrag {
         grid: f64,
         angle_step: Option<f64>,
     ) -> Option<Change> {
-        let (origin, direction) = camera.ray(rect, pointer);
+        let (origin, direction) = camera.build_ray(rect, pointer);
         let center = self.gizmo.center;
         let min = self.anchor;
         let snap_offset = |delta: DVec3, axes: &[usize]| {
