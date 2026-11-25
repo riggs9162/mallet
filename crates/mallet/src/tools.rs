@@ -37,7 +37,6 @@ mod soundscapes;
 
 /// How many entities `list_entities` returns when no limit is given.
 const DEFAULT_LIST_LIMIT: u64 = 200;
-const MAX_PITCH: f64 = 89.0;
 
 /// What a tool says when it needs the game's files and no game folder is set.
 const NO_GAME: &str = "choose a game folder first, with set_game_dir or in Mallet Options";
@@ -1102,9 +1101,9 @@ fn editor_definitions() -> Value {
             json!({
                 "position": vec3,
                 "yaw": { "type": "number", "description": "Degrees." },
-                "pitch": { "type": "number", "description": "Degrees, clamped to -89..89." },
+                "pitch": { "type": "number", "description": "Degrees, clamped to -90..90." },
                 "look_at": { "allOf": [vec3], "description": "Aim at this point after moving; overrides yaw and pitch." },
-                "draw_distance": { "type": "number", "description": "How far the 3D view draws, like Hammer's back clipping plane; default 8192." }
+                "draw_distance": { "type": "number", "description": "How far the 3D view draws, like Hammer's back clipping plane; default 5000." }
             }),
             &[],
         ),
@@ -2813,7 +2812,7 @@ fn set_camera(editor: &mut Editor, args: &Value) -> Result<ToolResult, String> {
         camera.yaw = yaw.rem_euclid(360.0);
     }
     if let Some(pitch) = optional_number(args, "pitch")? {
-        camera.pitch = pitch.clamp(-MAX_PITCH, MAX_PITCH);
+        camera.set_pitch(pitch);
     }
     if let Some(distance) = optional_number(args, "draw_distance")? {
         camera.far = distance.clamp(256.0, 1_048_576.0);
@@ -2821,12 +2820,8 @@ fn set_camera(editor: &mut Editor, args: &Value) -> Result<ToolResult, String> {
     if let Some(target) = optional_numbers::<3>(args, "look_at")? {
         let direction = DVec3::from_array(target) - camera.position;
         if direction.length_squared() > 0.0 {
-            camera.yaw = direction.y.atan2(direction.x).to_degrees().rem_euclid(360.0);
-            camera.pitch = direction
-                .z
-                .atan2(direction.truncate().length())
-                .to_degrees()
-                .clamp(-MAX_PITCH, MAX_PITCH);
+            let target = DVec3::from_array(target);
+            camera.set_view(camera.position, target);
         }
     }
     Ok(ToolResult::json(&json!({
