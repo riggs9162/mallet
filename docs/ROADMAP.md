@@ -18,7 +18,7 @@ Hammer trips over on every edit. Keys and behaviour follow the
 [Hammer Hotkey Reference](https://developer.valvesoftware.com/wiki/Hammer_Hotkey_Reference)
 and the [Selection Tool](https://developer.valvesoftware.com/wiki/Hammer_Selection_Tool) page.
 
-- [ ] A box dragged with the Selection tool stays on screen with handles to resize or move it; Enter selects what it covers and Escape drops it. Automatic infinite selection, in Mallet Options, selects as soon as the mouse is let go. Hammer
+- [x] A box dragged with the Selection tool stays on screen with handles to resize or move it; Enter selects what it covers and Escape drops it. Automatic infinite selection, in Mallet Options, selects as soon as the mouse is let go. Hammer
 - [ ] Shift+arrow keys clone and nudge the selection. Hammer
 - [ ] Alt held while rotating turns freely, whatever the rotation snapping. Hammer
 - [ ] Page Up and Page Down step through the objects under the last click, outside the Camera tool. Hammer

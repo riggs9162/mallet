@@ -307,6 +307,8 @@ pub struct Overlay {
     pub block: Option<Bounds>,
     /// A selection rectangle being dragged in one 2D view, as two world corners.
     pub marquee: Option<(Axis2D, DVec2, DVec2)>,
+    /// A selection box let go of in a 2D view, waiting for Enter to select what it covers.
+    pub selection_box: Option<SelectionBox>,
     /// The box that gets resize handles in the 2D views: the selection or the pending block.
     pub handles: Option<Bounds>,
     /// The entity tool's position for a new entity, waiting for Enter.
@@ -345,6 +347,47 @@ impl CameraPreview {
     /// The edges of the camera's view pyramid.
     pub fn edges(&self) -> Vec<[DVec3; 2]> {
         camera_frustum_edges(self.position, self.forward, self.fov, self.aspect, self.length)
+    }
+}
+
+/// A selection box drawn with the Selection tool and left on screen, as Hammer leaves it:
+/// its handles resize it, dragging inside moves it, Enter selects what it covers and Escape
+/// drops it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionBox {
+    /// The view the box was drawn in.
+    pub axis: Axis2D,
+    /// Smallest corner, in the view's 2D world coordinates.
+    pub min: DVec2,
+    /// Largest corner, in the view's 2D world coordinates.
+    pub max: DVec2,
+    /// Whether what the box covers joins the selection instead of replacing it.
+    pub add: bool,
+}
+
+impl SelectionBox {
+    /// A box between two dragged corners, given in any order.
+    pub fn new(axis: Axis2D, corner_a: DVec2, corner_b: DVec2, add: bool) -> Self {
+        Self {
+            axis,
+            min: corner_a.min(corner_b),
+            max: corner_a.max(corner_b),
+            add,
+        }
+    }
+
+    /// The box as bounds that are flat along the view's depth, so the 2D handle code can
+    /// resize and draw it like any other box.
+    pub fn bounds(&self) -> Bounds {
+        Bounds {
+            min: self.axis.lift(self.min),
+            max: self.axis.lift(self.max),
+        }
+    }
+
+    /// The same box moved or resized to `bounds` in its own view.
+    pub fn with_bounds(self, bounds: &Bounds) -> Self {
+        Self::new(self.axis, self.axis.project(bounds.min), self.axis.project(bounds.max), self.add)
     }
 }
 

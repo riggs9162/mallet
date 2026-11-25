@@ -405,6 +405,9 @@ impl View2D {
                 canvas.lines(&segments, style.tool);
             }
         }
+        if let Some(waiting) = overlay.selection_box.filter(|waiting| waiting.axis == self.axis) {
+            self.draw_selection_box(canvas, rect, &waiting.bounds(), style.tool);
+        }
         if let Some(clip) = &overlay.clip {
             self.draw_clip_points(canvas, rect, clip);
         }
@@ -476,6 +479,20 @@ impl View2D {
         );
         canvas.label(width_at, &width, color);
         canvas.label(height_at, &height, color);
+    }
+
+    /// Draws a selection box waiting for Enter: its outline and the eight handles that
+    /// resize it.
+    fn draw_selection_box(&self, canvas: &mut dyn Canvas, rect: Rect, bounds: &Bounds, color: Color32) {
+        let outline: Vec<[Pos2; 2]> = self
+            .handle_outline(bounds)
+            .iter()
+            .map(|[a, b]| [self.to_screen(rect, *a), self.to_screen(rect, *b)])
+            .collect();
+        canvas.lines(&outline, color);
+        for (_, at) in self.handle_positions(rect, bounds) {
+            canvas.fill(Rect::from_center_size(at, egui::Vec2::splat(HANDLE_HALF_SIZE * 2.0)), color);
+        }
     }
 
     /// Screen positions of the eight resize handles of a box in this view.

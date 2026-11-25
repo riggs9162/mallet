@@ -1510,6 +1510,24 @@ impl Editor {
         }
     }
 
+    /// Selects what the waiting selection box covers, adding to the selection when the box
+    /// was drawn with Ctrl, and drops the box. Returns false when no box is waiting.
+    pub fn confirm_selection_box(&mut self) -> bool {
+        let Some(waiting) = self.overlay.selection_box.take() else {
+            return false;
+        };
+        let owners = self
+            .scene
+            .owners_inside(waiting.axis, waiting.min, waiting.max, self.solid_picks());
+        let mode = if waiting.add {
+            SelectMode::Add
+        } else {
+            SelectMode::Replace
+        };
+        self.select_picked(owners, mode);
+        true
+    }
+
     /// Copies the selection with fresh ids, moves the copies by `offset` and selects them.
     ///
     /// A cloned overlay, or other entity that lists brush faces, names the clones of the

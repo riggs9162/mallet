@@ -184,6 +184,13 @@ hidden, read from the members' flags. `editor/visgroups.rs` holds the operations
 step, and `app/visgroups.rs` the side panel section, the Move Selection to VisGroup dialog and the
 Edit VisGroups window. A group's members take its colour in the 2D views, as in Hammer.
 
+A box dragged with the Selection tool does not select when the mouse is let go. It
+becomes `Overlay::selection_box`, a `SelectionBox` in the view it was drawn in, flat along
+that view's depth so the 2D handle code resizes and draws it like any other box.
+`Editor::confirm_selection_box` selects what it covers when Enter is pressed, and Escape,
+a click or a tool change drops it. With `ViewOptions::infinite_selection`, Hammer's
+Automatic infinite selection, the box is confirmed as soon as it is let go.
+
 ## Map tabs
 
 Several maps can be open at once, one per tab. The active tab's map state (document and

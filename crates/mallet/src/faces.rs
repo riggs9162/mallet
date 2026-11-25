@@ -296,6 +296,7 @@ impl Editor {
         self.tool = tool;
         self.overlay.block = None;
         self.overlay.entity = None;
+        self.overlay.selection_box = None;
         if let Some(sides) = sides {
             self.select_faces(sides, SelectMode::Replace);
         }

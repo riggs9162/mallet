@@ -52,7 +52,7 @@ use crate::look_buttons::{self, LookButtons};
 use crate::netgraph::{NetGraph, NetGraphExtra};
 use crate::presence::{Presence, Status};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
-use crate::scene::Remap;
+use crate::scene::{Remap, SelectionBox};
 use crate::transform::{self, HandleMode};
 use crate::view2d::{Axis2D, Handle, View2D};
 use crate::view3d::Camera3D;
@@ -166,6 +166,15 @@ enum Drag {
     /// Drawing a selection rectangle; with `add`, set when Ctrl was held at the press,
     /// what it covers joins the selection instead of replacing it.
     Marquee { view: usize, start: DVec2, add: bool },
+    /// Moving the selection box that waits for Enter.
+    MoveSelectionBox { view: usize, start: DVec2, bounds: Bounds },
+    /// Resizing the selection box that waits for Enter with one of its handles.
+    ResizeSelectionBox {
+        view: usize,
+        start: DVec2,
+        bounds: Bounds,
+        handle: Handle,
+    },
     /// Drawing a new block, from a grid-snapped corner.
     NewBlock { view: usize, start: DVec2 },
     /// Moving the pending block.
@@ -201,6 +210,8 @@ impl Drag {
             | Self::Skew { view, .. }
             | Self::Pivot { view }
             | Self::Marquee { view, .. }
+            | Self::MoveSelectionBox { view, .. }
+            | Self::ResizeSelectionBox { view, .. }
             | Self::NewBlock { view, .. }
             | Self::MoveBlock { view, .. }
             | Self::ResizeBlock { view, .. }
@@ -1547,11 +1558,29 @@ impl MalletApp {
     /// Chooses the drag that a left-button press at `origin` starts with the active tool:
     /// resizing from a handle, moving from inside the box, or starting a new marquee or block.
     /// With the selection tool, Ctrl always starts a marquee that adds to the selection, as in
-    /// Hammer, even over the selected objects or their handles.
+    /// Hammer, even over the selected objects or their handles. A selection box waiting for
+    /// Enter in this view comes first: its handles resize it and its inside moves it.
     fn begin_drag(index: usize, view: &View2D, rect: Rect, origin: Pos2, editor: &Editor, add: bool) -> Drag {
         let start = view.to_world(rect, origin);
         if add && editor.tool == Tool::Select {
             return Drag::Marquee { view: index, start, add };
+        }
+        if let Some(bounds) = waiting_box(editor, view.axis) {
+            if let Some(handle) = view.hit_handle(rect, &bounds, origin, HandleMode::Scale) {
+                return Drag::ResizeSelectionBox {
+                    view: index,
+                    start,
+                    bounds,
+                    handle,
+                };
+            }
+            if box_contains(view.axis, &bounds, start) {
+                return Drag::MoveSelectionBox {
+                    view: index,
+                    start,
+                    bounds,
+                };
+            }
         }
         let target = editor.handle_box();
         let mode = editor.display_overlay().handle_mode;
@@ -1628,16 +1657,28 @@ impl MalletApp {
             return None;
         }
         match self.drag.filter(|drag| drag.view() == index) {
-            Some(Drag::Resize { handle, .. } | Drag::ResizeBlock { handle, .. }) => return Some(handle.cursor()),
+            Some(
+                Drag::Resize { handle, .. }
+                | Drag::ResizeBlock { handle, .. }
+                | Drag::ResizeSelectionBox { handle, .. },
+            ) => return Some(handle.cursor()),
             Some(Drag::Skew { handle, .. }) => return Some(handle.skew_cursor()),
             Some(Drag::Rotate { .. }) => return Some(egui::CursorIcon::Grabbing),
-            Some(Drag::Move { .. } | Drag::MoveBlock { .. } | Drag::Pivot { .. }) => {
+            Some(Drag::Move { .. } | Drag::MoveBlock { .. } | Drag::MoveSelectionBox { .. } | Drag::Pivot { .. }) => {
                 return Some(egui::CursorIcon::Move)
             }
             Some(_) => return None,
             None => {}
         }
         let pointer = response.hover_pos()?;
+        if let Some(bounds) = waiting_box(editor, view.axis) {
+            if let Some(handle) = view.hit_handle(rect, &bounds, pointer, HandleMode::Scale) {
+                return Some(handle.cursor());
+            }
+            if box_contains(view.axis, &bounds, view.to_world(rect, pointer)) {
+                return Some(egui::CursorIcon::Move);
+            }
+        }
         let bounds = editor.handle_box()?;
         let mode = editor.display_overlay().handle_mode;
         if mode == HandleMode::Rotate
@@ -1780,13 +1821,18 @@ impl MalletApp {
         }
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(origin) = pointer.press_origin {
-                self.drag = Some(Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers.ctrl));
+                let drag = Self::begin_drag(index, view, rect, origin, editor, pointer.modifiers.ctrl);
+                if matches!(drag, Drag::Marquee { .. }) {
+                    editor.overlay.selection_box = None;
+                }
+                self.drag = Some(drag);
                 self.clone_drag = pointer.modifiers.shift;
             }
         }
 
         let Some(drag) = self.drag.filter(|drag| drag.view() == index) else {
             if response.clicked_by(PointerButton::Primary) && editor.tool == Tool::Select {
+                editor.overlay.selection_box = None;
                 if let Some(position) = pointer.position {
                     let tolerance = pick_tolerance(editor) / view.scale;
                     let world = view.to_world(rect, position);
@@ -1853,6 +1899,21 @@ impl MalletApp {
                     editor.set_pivot(Some(pivot));
                 }
                 Drag::Marquee { start, .. } => editor.overlay.marquee = Some((view.axis, start, world)),
+                Drag::MoveSelectionBox { start, bounds, .. } => {
+                    let offset = snapped_offset(view.axis, bounds.min, world - start, grid);
+                    let moved = Remap::translate(offset).map_bounds(&bounds);
+                    editor.overlay.selection_box =
+                        editor.overlay.selection_box.map(|waiting| waiting.with_bounds(&moved));
+                }
+                Drag::ResizeSelectionBox {
+                    start, bounds, handle, ..
+                } => {
+                    let resized = handle.resize(view.axis, &bounds, world - start, grid);
+                    editor.overlay.selection_box = editor
+                        .overlay
+                        .selection_box
+                        .map(|waiting| waiting.with_bounds(&resized));
+                }
                 Drag::ClipPoint { point, .. } => editor.move_clip_point(point, view.axis, world),
                 Drag::NewBlock { start, .. } => {
                     editor.overlay.block = editor.block_from_drag(view.axis, start, snap(world, grid));
@@ -1934,16 +1995,16 @@ fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), Str
         Drag::Pivot { .. } | Drag::ClipPoint { .. } => Ok(()),
         Drag::Marquee { add, .. } => {
             if let Some((axis, a, b)) = editor.overlay.marquee.take() {
-                let owners = editor.scene.owners_inside(axis, a, b, editor.solid_picks());
-                let mode = if add {
-                    SelectMode::Add
+                editor.overlay.selection_box = Some(SelectionBox::new(axis, a, b, add));
+                if editor.tool == Tool::Select && !editor.config.view.infinite_selection {
+                    editor.message = "Press Enter to select what the box covers, or Escape to drop it".to_owned();
                 } else {
-                    SelectMode::Replace
-                };
-                editor.select_picked(owners, mode);
+                    editor.confirm_selection_box();
+                }
             }
             Ok(())
         }
+        Drag::MoveSelectionBox { .. } | Drag::ResizeSelectionBox { .. } => Ok(()),
         Drag::NewBlock { .. } | Drag::MoveBlock { .. } | Drag::ResizeBlock { .. } => Ok(()),
     }
 }
@@ -1953,6 +2014,16 @@ fn finish_drag(drag: Drag, editor: &mut Editor, cloning: bool) -> Result<(), Str
 fn snapped_offset(axis: Axis2D, anchor: DVec3, dragged: DVec2, grid: f64) -> DVec3 {
     let corner = axis.project(anchor);
     axis.lift(snap(corner + dragged, grid) - corner)
+}
+
+/// The selection box waiting for Enter, as bounds, when the Selection tool is active and
+/// the box was drawn in the view showing `axis`.
+fn waiting_box(editor: &Editor, axis: Axis2D) -> Option<Bounds> {
+    editor
+        .overlay
+        .selection_box
+        .filter(|waiting| editor.tool == Tool::Select && waiting.axis == axis)
+        .map(|waiting| waiting.bounds())
 }
 
 fn box_contains(axis: Axis2D, bounds: &Bounds, point: DVec2) -> bool {
@@ -2867,6 +2938,7 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ClearSelection => {
             let pending = editor.overlay.block.take().is_some()
                 | editor.overlay.entity.take().is_some()
+                | editor.overlay.selection_box.take().is_some()
                 | (editor.tool == Tool::Clip && editor.clear_clip_points());
             if editor.tool == Tool::Texture {
                 editor.clear_face_selection();
@@ -2903,13 +2975,11 @@ fn run(action: Action, editor: &mut Editor) {
                 Tool::Block => editor.commit_block().map(|_| ()),
                 Tool::Entity => editor.commit_entity().map(|_| ()),
                 Tool::Clip => editor.apply_clip().map(|_| ()),
-                Tool::Select
-                | Tool::Texture
-                | Tool::Vertex
-                | Tool::Overlay
-                | Tool::Decal
-                | Tool::Camera
-                | Tool::Magnify => Ok(()),
+                Tool::Select => {
+                    editor.confirm_selection_box();
+                    Ok(())
+                }
+                Tool::Texture | Tool::Vertex | Tool::Overlay | Tool::Decal | Tool::Camera | Tool::Magnify => Ok(()),
             };
             if let Err(error) = result {
                 editor.message = error;
