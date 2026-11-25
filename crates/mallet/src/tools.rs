@@ -804,7 +804,7 @@ fn editor_definitions() -> Value {
         tool(
             "select_faces",
             "Select brush faces for the texture tool, by side id or every face of some brushes. Switches to the \
-             texture tool (Shift+A).",
+             texture tool (Shift+A), which a tool that selects or works on objects leaves again.",
             json!({
                 "sides": { "type": "array", "items": { "type": "integer" } },
                 "solids": { "type": "array", "items": { "type": "integer" } },
@@ -1368,7 +1368,46 @@ fn check_discard(editor: &Editor, index: usize, args: &Value) -> Result<(), Stri
     Ok(())
 }
 
+/// Tools that select objects or work on the selected ones. The texture tool selects faces
+/// in place of objects, so a call to one of these leaves it for the selection tool.
+const OBJECT_TOOLS: [&str; 31] = [
+    "select",
+    "select_visgroup",
+    "move_selection",
+    "clone_selection",
+    "props_to_brushes",
+    "copy_selection",
+    "cut_selection",
+    "paste",
+    "insert_map",
+    "resize_selection",
+    "transform_selection",
+    "flip_selection",
+    "snap_selection_to_grid",
+    "align_selection",
+    "tie_to_entity",
+    "group_selection",
+    "ungroup_selection",
+    "carve",
+    "make_hollow",
+    "move_to_world",
+    "delete_selection",
+    "hide_selection",
+    "hide_unselected",
+    "create_visgroup",
+    "move_selection_to_visgroup",
+    "clip_selection",
+    "create_block",
+    "create_arch",
+    "create_entity",
+    "create_overlay",
+    "create_decal",
+];
+
 fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, String> {
+    if editor.tool == Tool::Texture && OBJECT_TOOLS.contains(&name) {
+        editor.set_tool(Tool::Select);
+    }
     match name {
         "get_status" => Ok(ToolResult::json(&status_json(editor))),
         "set_game_dir" => {
@@ -3965,6 +4004,17 @@ mod tests {
         editor
             .create_block(DVec3::new(x, 0.0, 0.0), DVec3::new(x + 32.0, 32.0, 32.0))
             .unwrap()
+    }
+
+    #[test]
+    fn selecting_objects_leaves_the_texture_tool() {
+        let mut editor = editor();
+        let solid = block(&mut editor, 0.0);
+        run(&mut editor, "select_faces", &json!({ "solids": [solid] }));
+        assert_eq!(json_of(&run(&mut editor, "get_status", &json!({})))["tool"], "texture");
+        let selected = json_of(&run(&mut editor, "select", &json!({ "solids": [solid] })));
+        assert_eq!(selected["solid_count"], 1, "the brush is selected, not its faces");
+        assert_eq!(json_of(&run(&mut editor, "get_status", &json!({})))["tool"], "selection");
     }
 
     #[test]
