@@ -1175,7 +1175,7 @@ fn colors_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         "The colours the viewports are drawn with. The defaults are Hammer's.",
     );
     let colors = &mut editor.config.colors;
-    let rows: [(&str, &mut config::Rgb); 10] = [
+    let rows: [(&str, &mut config::Rgb); 12] = [
         ("Background", &mut colors.background),
         ("Grid", &mut colors.grid),
         ("Highlighted grid lines", &mut colors.grid_highlight),
@@ -1186,6 +1186,8 @@ fn colors_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         ("Selection handles", &mut colors.handles),
         ("Faces picked for texturing", &mut colors.selected_faces),
         ("3D camera in the 2D views", &mut colors.camera),
+        ("Selection in the 3D view", &mut colors.selection_3d),
+        ("Selected prop boxes in the 3D view", &mut colors.prop_box_3d),
     ];
     egui::Grid::new("color_options")
         .num_columns(2)

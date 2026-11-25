@@ -227,3 +227,17 @@ fn vs_line(input: LineIn) -> LineOut {
 fn fs_line(input: LineOut) -> @location(0) vec4<f32> {
     return input.color;
 }
+
+// Marks where a selected prop covers the image, for the selection glow. Cut-out and
+// see-through texels are left out so foliage keeps its shape.
+@fragment
+fn fs_mask(input: FaceOut) -> @location(0) vec4<f32> {
+    let coverage = textureSample(face_texture, face_sampler, input.uv).a;
+    if (input.alpha.x > 0.0 && coverage < input.alpha.x) {
+        discard;
+    }
+    if (input.alpha.x >= 0.0 && input.alpha.y != 0.0 && coverage < 0.3) {
+        discard;
+    }
+    return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+}

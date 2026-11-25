@@ -700,10 +700,14 @@ changes, never for selection changes or camera moves:
   black outline the first time a map shows text (about 10 MB on the graphics card), and
   are built every frame as translucent faces tinted with the entity's `color`, from
   both sides. An entity with no text to show keeps its box.
-- The selection's red outline and, in 3D, its faces drawn again over the cached geometry
-  at equal depth, tinted red, are kept until the selection, the map, a drag or a texture
-  changes, so looking around a large selection builds nothing. Tool previews are small
-  and rebuilt every frame.
+- The selection's outline (red in 2D; in 3D yellow, with blue boxes around props) and, in
+  3D, its faces drawn again over the cached geometry at equal depth, tinted red, are kept
+  until the selection, the map, a drag or a texture changes, so looking around a large
+  selection builds nothing. Tool previews are small and rebuilt every frame.
+- Selected props are not tinted but glow, as in Hammer++ (`render3d/glow.rs`): they are
+  drawn into a one-channel mask the size of the viewport, with cut-out texels left out so
+  foliage keeps its shape, and a full-screen pass paints a fading band in the 3D selection
+  colour within three pixels outside the mask.
 
 `get_status` reports per-frame timings and how many chunks and triangles the camera drew,
 and View > Net Graph shows the same numbers in the camera view's bottom-right corner.

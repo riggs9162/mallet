@@ -764,6 +764,11 @@ pub struct ColorOptions {
     pub selected_faces: Rgb,
     /// The 3D view's camera drawn in the 2D views.
     pub camera: Rgb,
+    /// Outlines of selected brushes and displacements, and the glow around selected props,
+    /// in the 3D view.
+    pub selection_3d: Rgb,
+    /// Boxes around selected props in the 3D view.
+    pub prop_box_3d: Rgb,
 }
 
 impl Default for ColorOptions {
@@ -779,6 +784,8 @@ impl Default for ColorOptions {
             handles: [255, 255, 255],
             selected_faces: [255, 210, 60],
             camera: [255, 40, 40],
+            selection_3d: [255, 255, 0],
+            prop_box_3d: [64, 192, 255],
         }
     }
 }

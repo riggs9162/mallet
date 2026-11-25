@@ -3,11 +3,14 @@
 //!
 //! The camera image is shown in the window and read back for MCP screenshots, so both
 //! always match. Faces are shaded by direction like Hammer's textured mode, or lit by
-//! the map's lights in the lighting preview (`lit`); selected brushes are tinted red with
-//! red outlines, and tool previews are drawn as lines on top. Geometry is cached on the
+//! the map's lights in the lighting preview (`lit`). As in Hammer++, selected brushes and
+//! displacements are tinted red with yellow outlines in the 3D view and red ones in 2D,
+//! selected props glow yellow inside a blue box (`glow`), and tool previews are drawn as
+//! lines on top. Geometry is cached on the
 //! GPU until it changes, so moving the camera or panning a 2D view costs almost nothing
 //! on the CPU.
 
+mod glow;
 mod lit;
 mod sprites;
 
@@ -43,8 +46,11 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const NEAR: f32 = 1.0;
 /// Texture size assumed for texture coordinates when a material cannot be found.
 const MISSING_TEXTURE_SIZE: f32 = 128.0;
-/// How strongly selected faces are tinted red.
+/// How strongly selected props, sprites and text are tinted red.
 const SELECTION_TINT: f32 = 0.4;
+/// How strongly selected brush faces are tinted red in the 3D view: lighter than other
+/// selected objects, as in Hammer++, so the texture stays readable under the yellow outline.
+const FACE_SELECTION_TINT: f32 = 0.3;
 /// Key for the plain white texture used by point entity boxes.
 const WHITE_KEY: &str = "";
 /// Side length of the world cubes faces are grouped into for culling.
@@ -562,6 +568,12 @@ pub struct Renderer3D {
     /// The selection's outline where a drag has taken it, kept while the views move;
     /// shared by the camera and the 2D views. Keyed by [`selection_key`].
     selection_edges: Option<(u64, Option<LineMesh>)>,
+    /// The selection's outline in the 3D view, drawn in the 3D selection colours.
+    selection_edges_3d: Option<(u64, Option<LineMesh>)>,
+    /// The pipelines of the glow around selected props.
+    glow: glow::GlowPipelines,
+    /// Each viewport slot's mask for the glow, made when a prop is first selected there.
+    glow_targets: [Option<glow::GlowTarget>; 4],
     /// The geometry generation whose materials have been loaded.
     textures_checked: u64,
     /// One image per viewport slot.
@@ -702,6 +714,7 @@ impl Renderer3D {
         let line_pipeline = lines(Depth::Ignore);
         let flat_line_pipeline = lines(Depth::None);
         let sprite_pipelines = sprites::SpritePipelines::new(device, &face_layout, &shader, gamma_view);
+        let glow = glow::GlowPipelines::new(device, &face_layout, &shader);
 
         let upload = |mips: Mips, facts| upload(device, queue, &texture_layout, &sampler, &mips, facts, None);
         let missing = upload(checkerboard(), MaterialFacts::opaque());
@@ -752,6 +765,9 @@ impl Renderer3D {
             drag_faces: None,
             selection_faces: None,
             selection_edges: None,
+            selection_edges_3d: None,
+            glow,
+            glow_targets: [None, None, None, None],
             textures_checked: 0,
             targets: [None, None, None, None],
             stats: RenderStats::default(),
@@ -1027,15 +1043,16 @@ impl Renderer3D {
         } else {
             self.update_edges(scene, overlay);
         }
-        self.update_selection_edges(scene, overlay, look.selection);
+        self.update_selection_edges_3d(scene, overlay, &look);
         if textured {
+            self.ensure_glow_target(slot, size);
             self.update_selection_faces(scene, overlay, look.selection);
         } else {
             self.selection_faces = None;
         }
         let selection = self.selection_faces.as_ref();
         let tinted = selection.map(|selection| &selection.opaque);
-        let selection_edges = self.selection_edges.as_ref().and_then(|(_, mesh)| mesh.as_ref());
+        let selection_edges = self.selection_edges_3d.as_ref().and_then(|(_, mesh)| mesh.as_ref());
         let selected_faces = selected_face_meshes(scene);
         // Faces picked with the texture tool get a lighter tint, so the texture being
         // lined up stays easy to see.
@@ -1142,6 +1159,11 @@ impl Renderer3D {
                 (buffer, (bytes.len() / lit::GLOW_VERTEX_SIZE) as u32)
             });
         }
+        let glow_props = if textured {
+            self.selected_model_instances(scene, overlay, helpers)
+        } else {
+            None
+        };
         let outline = self.line_mesh(&outline);
         let target = self.targets[slot].as_ref().expect("target was just created");
         self.queue.write_buffer(
@@ -1241,6 +1263,9 @@ impl Renderer3D {
             self.draw_lines(&mut pass, selection_edges);
             self.draw_lines(&mut pass, outline.as_ref());
         }
+        if let Some(props) = &glow_props {
+            self.draw_selection_glow(&mut encoder, slot, props, look.selection_3d);
+        }
         self.queue.submit([encoder.finish()]);
         if textured {
             self.stats = stats;
@@ -1252,6 +1277,28 @@ impl Renderer3D {
             &self.targets[slot].as_ref().expect("target exists").color_view,
             recreated,
         )
+    }
+
+    /// Keeps [`Self::selection_edges_3d`] matching the selection and the drag it is in, as
+    /// Hammer++ outlines it: brushes and displacements in the 3D selection colour, and the
+    /// boxes of props, whose models glow instead, in the prop box colour.
+    fn update_selection_edges_3d(&mut self, scene: &Scene, overlay: &Overlay, look: &ViewStyle) {
+        let key = signature(|hasher| {
+            (selection_key(scene, overlay, look.selection_3d), look.prop_box_3d).hash(hasher);
+        });
+        if self.selection_edges_3d.as_ref().is_some_and(|(built, _)| *built == key) {
+            return;
+        }
+        let mut vertices = Vec::new();
+        for mesh in scene.meshes.iter().filter(|mesh| mesh.selected) {
+            let color = if mesh.model.is_some() {
+                look.prop_box_3d
+            } else {
+                look.selection_3d
+            };
+            push_edges(&mut vertices, &mesh.edges, overlay.transform.as_ref(), color);
+        }
+        self.selection_edges_3d = Some((key, self.line_mesh(&vertices)));
     }
 
     /// Keeps [`Self::selection_edges`] matching the selection and the drag it is in.
@@ -1275,7 +1322,7 @@ impl Renderer3D {
             return;
         }
         let selected = || scene.meshes.iter().filter(|mesh| mesh.selected);
-        let (opaque, translucent) = self.face_mesh(selected(), overlay.transform.as_ref(), SELECTION_TINT, false);
+        let (opaque, translucent) = self.face_mesh(selected(), overlay.transform.as_ref(), FACE_SELECTION_TINT, false);
         self.selection_faces = Some(SelectionFaces {
             key,
             opaque,
@@ -1482,11 +1529,10 @@ impl Renderer3D {
             }
             stats.models_drawn += 1;
             let transform = remap.map_or(instance.transform, |remap| remap.matrix() * instance.transform);
-            let highlight = if mesh.selected { SELECTION_TINT } else { 0.0 };
             by_model.entry(instance.key.as_str()).or_default().push((
                 ModelInstanceData {
                     transform: transform.as_mat4().to_cols_array(),
-                    tint: [1.0, 1.0, 1.0, highlight],
+                    tint: [1.0, 1.0, 1.0, 0.0],
                 },
                 bounds.center().as_vec3(),
             ));

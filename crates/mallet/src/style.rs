@@ -25,6 +25,11 @@ pub struct ViewStyle {
     pub selected_faces: Color32,
     /// The 3D view's camera drawn in the 2D views.
     pub camera: Color32,
+    /// Outlines of selected brushes and displacements, and the glow around selected props,
+    /// in the 3D view.
+    pub selection_3d: Color32,
+    /// Boxes around selected props in the 3D view.
+    pub prop_box_3d: Color32,
     /// Grid lines closer than this many pixels are thinned out by doubling their spacing.
     pub grid_min_pixels: u32,
     /// Units between highlighted grid lines; 0 for none.
@@ -46,6 +51,8 @@ impl ViewStyle {
         handles: Color32::WHITE,
         selected_faces: Color32::from_rgb(255, 210, 60),
         camera: Color32::from_rgb(255, 40, 40),
+        selection_3d: Color32::from_rgb(255, 255, 0),
+        prop_box_3d: Color32::from_rgb(64, 192, 255),
         grid_min_pixels: 4,
         grid_highlight_every: 64,
         grid_major_every: 1024,
@@ -77,6 +84,8 @@ impl ViewStyle {
             handles: color(colors.handles),
             selected_faces: color(colors.selected_faces),
             camera: color(colors.camera),
+            selection_3d: color(colors.selection_3d),
+            prop_box_3d: color(colors.prop_box_3d),
             grid_min_pixels: min_pixels,
             grid_highlight_every: spacing(view.grid_highlight),
             grid_major_every: spacing(view.grid_major),
