@@ -196,7 +196,7 @@ impl MalletApp {
                                 response.scroll_to_me(Some(egui::Align::Center));
                             }
                             if response.clicked() {
-                                let modifiers = ui.input(|input| input.modifiers);
+                                let modifiers = click_modifiers(ui);
                                 click = Some(match (modifiers.shift, modifiers.command) {
                                     (true, add) => RowClick::Range(row.id, add),
                                     (false, true) => RowClick::Toggle(row.id),
@@ -337,6 +337,25 @@ impl EntityReport {
         editor.select(ids.iter().map(|id| Owner::Entity(*id)), SelectMode::Replace);
         ids
     }
+}
+
+/// The modifier keys held for this frame's click: those the button's release carries,
+/// along with those still held. A key pressed and let go within the same frame as the
+/// click is gone from the held keys by the end of the frame, but the release still
+/// carries it.
+fn click_modifiers(ui: &egui::Ui) -> egui::Modifiers {
+    ui.input(|input| {
+        let released = input.events.iter().rev().find_map(|event| match event {
+            egui::Event::PointerButton {
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers,
+                ..
+            } => Some(*modifiers),
+            _ => None,
+        });
+        released.map_or(input.modifiers, |modifiers| modifiers | input.modifiers)
+    })
 }
 
 /// What Check for Problems says about each entity, by id.
