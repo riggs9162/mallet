@@ -45,6 +45,8 @@ pub enum ProblemKind {
     BadLightmapScale,
     DuplicateId,
     WrongPropClass,
+    UnknownClass,
+    MissingParent,
 }
 
 impl ProblemKind {
@@ -60,6 +62,8 @@ impl ProblemKind {
             Self::BadLightmapScale => "Invalid lightmap scale",
             Self::DuplicateId => "Duplicate id",
             Self::WrongPropClass => "Wrong prop class",
+            Self::UnknownClass => "Unknown class",
+            Self::MissingParent => "Missing parent",
         }
     }
 }
@@ -86,7 +90,11 @@ impl Problem {
             | ProblemKind::UnusedKeys
             | ProblemKind::BadLightmapScale => true,
             ProblemKind::WrongPropClass => !self.items.is_empty(),
-            ProblemKind::NoPlayerStart | ProblemKind::MissingTarget | ProblemKind::DuplicateId => false,
+            ProblemKind::NoPlayerStart
+            | ProblemKind::MissingTarget
+            | ProblemKind::DuplicateId
+            | ProblemKind::UnknownClass
+            | ProblemKind::MissingParent => false,
         }
     }
 
@@ -255,6 +263,14 @@ impl Editor {
             return;
         }
         let class = self.entity_class(classname);
+        if class.is_none() && self.game_data.is_some() {
+            problems.push(Problem {
+                kind: ProblemKind::UnknownClass,
+                object: owner,
+                detail: format!("{classname} {} is not a class the game data knows", entity.id().unwrap_or(0)),
+                items: Vec::new(),
+            });
+        }
         if class.is_some_and(|class| class.kind == ClassKind::Solid) && entity.solids().next().is_none() {
             problems.push(Problem {
                 kind: ProblemKind::EmptyBrushEntity,
@@ -284,6 +300,21 @@ impl Editor {
                     items: Vec::new(),
                 });
             }
+        }
+        let parent = entity
+            .get("parentname")
+            .map(|parent| parent.split(',').next().unwrap_or("").trim())
+            .filter(|parent| !exists(parent));
+        if let Some(parent) = parent {
+            problems.push(Problem {
+                kind: ProblemKind::MissingParent,
+                object: owner,
+                detail: format!(
+                    "{classname} {}'s parent is \"{parent}\", which nothing is called",
+                    entity.id().unwrap_or(0)
+                ),
+                items: Vec::new(),
+            });
         }
         let Some(class) = class else { return };
         for property in class.properties.iter().filter(|property| property.kind == "target_destination") {
