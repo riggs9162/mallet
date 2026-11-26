@@ -29,7 +29,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use eframe::wgpu::{self, util::DeviceExt};
 use glam::{DVec3, Mat4, Vec3, Vec4};
 use mallet_content::vtf::{Encoding, Level, Mips};
-use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, Water};
+use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, TextureTransform, Water};
 use mallet_vmf::displacement::Surface as DisplacementSurface;
 
 use crate::lighting::TextureLights;
@@ -236,6 +236,8 @@ struct MaterialFacts {
     water: Option<Water>,
     /// Blends four textures on displacements by their painted weights.
     four_way: bool,
+    /// `$basetexturetransform`, applied to face texture coordinates.
+    base_transform: TextureTransform,
 }
 
 impl MaterialFacts {
@@ -249,6 +251,7 @@ impl MaterialFacts {
             frames: 1,
             water: None,
             four_way: false,
+            base_transform: TextureTransform::IDENTITY,
         }
     }
 
@@ -1899,6 +1902,7 @@ impl Renderer3D {
                                     frames: mips.as_ref().map_or(1, |mips| mips.frames.max(1)),
                                     water: material.water,
                                     four_way: material.four_way,
+                                    base_transform: material.base_transform,
                                 };
                                 mips.map(|mips| (mips, facts))
                             }
@@ -2877,7 +2881,8 @@ fn checkerboard() -> Mips {
 /// Fans a convex face into triangles wound counter-clockwise as seen from outside, so
 /// back-face culling hides faces seen from behind, as in Hammer. Texture coordinates follow
 /// Source:
-/// `u = (point · axis / scale + offset) / texture width`, and likewise for `v`. The normal
+/// `u = (point · axis / scale + offset) / texture width`, and likewise for `v`, then the
+/// material's `$basetexturetransform` moves them as the game's shader does. The normal
 /// turns with a remap, so a rotated preview is lit the way it faces. Every vertex carries
 /// the face's number `id`. The pieces of overlays and decals have axes that already run
 /// from 0 to 1 across the picture, and are lifted a little off the face they lie on.
@@ -2916,10 +2921,10 @@ fn triangulate(
             .as_vec3()
             .to_array(),
         normal,
-        uv: [
+        uv: texture.facts.base_transform.apply([
             coordinate(point, &face.uaxis, texture.width),
             coordinate(point, &face.vaxis, texture.height),
-        ],
+        ]),
         color,
         highlight,
         alpha: alpha_uniform(texture.alpha),
@@ -2962,7 +2967,8 @@ struct Layer<'a> {
 
 /// The triangles of a displacement, as [`triangulate`] makes those of a flat face: each
 /// vertex is shaded by its own normal and takes its texture coordinates from where it
-/// sits on the flat face. A layer over the first texture gives every vertex its opacity,
+/// sits on the flat face, moved by the layer texture's own transform. A layer over the
+/// first texture gives every vertex its opacity,
 /// ignores the texture's own alpha, and leaves out triangles that do not show at all.
 fn displacement_triangles(
     face: &SceneFace,
@@ -2995,10 +3001,10 @@ fn displacement_triangles(
         FaceVertex {
             position: remap.map_or(point, |remap| remap.apply(point)).as_vec3().to_array(),
             normal: normal.as_vec3().to_array(),
-            uv: [
+            uv: layer.texture.facts.base_transform.apply([
                 coordinate(surface.flat[index], &face.uaxis, layer.size[0]),
                 coordinate(surface.flat[index], &face.vaxis, layer.size[1]),
-            ],
+            ]),
             color,
             highlight,
             alpha,

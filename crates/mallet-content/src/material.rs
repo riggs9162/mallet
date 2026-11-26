@@ -173,6 +173,111 @@ pub struct Water {
     pub reflectivity: f32,
 }
 
+/// A transform the shader applies to a texture's coordinates after they are worked out
+/// from a face's axes, as `$basetexturetransform` sets it: an affine map of the
+/// normalised coordinates, `uv' = matrix * uv + offset`.
+///
+/// The VMT writes it as `center cx cy scale sx sy rotate degrees translate tx ty`, which
+/// is `uv' = Rotate(degrees) * (Scale(sx, sy) * (uv - center)) + center + translate`, the
+/// matrix the Source SDK's texture transform builds. A keyword left out takes its default:
+/// center `0.5 0.5`, scale `1 1`, rotate `0` and translate `0 0`. The VMT may instead
+/// write the whole matrix as sixteen numbers in brackets, row by row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextureTransform {
+    /// Rows of the 2 by 2 matrix.
+    pub matrix: [[f32; 2]; 2],
+    pub offset: [f32; 2],
+}
+
+impl Default for TextureTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl TextureTransform {
+    /// Leaves coordinates as they are.
+    pub const IDENTITY: Self = Self {
+        matrix: [[1.0, 0.0], [0.0, 1.0]],
+        offset: [0.0, 0.0],
+    };
+
+    /// The transform built from its parts: scale about `center`, rotate about it by
+    /// `degrees` around Z, then move by `translate`.
+    pub fn from_parts(center: [f32; 2], scale: [f32; 2], degrees: f32, translate: [f32; 2]) -> Self {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let matrix = [[cos * scale[0], -sin * scale[1]], [sin * scale[0], cos * scale[1]]];
+        let offset = std::array::from_fn(|row| {
+            center[row] + translate[row] - matrix[row][0] * center[0] - matrix[row][1] * center[1]
+        });
+        Self { matrix, offset }
+    }
+
+    /// Reads a transform as a VMT writes it. Tabs, extra spaces, letter case and missing
+    /// keywords are tolerated; `None` when the text says nothing usable.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.starts_with('[') {
+            return Self::parse_matrix(text);
+        }
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        let numbers_after = |index: usize, most: usize| -> Vec<f32> {
+            tokens[index + 1..]
+                .iter()
+                .take(most)
+                .map_while(|token| token.parse::<f32>().ok().filter(|value| value.is_finite()))
+                .collect()
+        };
+        let pair = |numbers: Vec<f32>, default: [f32; 2]| match numbers.as_slice() {
+            [x, y, ..] => [*x, *y],
+            [both] => [*both, *both],
+            [] => default,
+        };
+        let mut center = [0.5, 0.5];
+        let mut scale = [1.0, 1.0];
+        let mut degrees = 0.0;
+        let mut translate = [0.0, 0.0];
+        let mut found = false;
+        for (index, token) in tokens.iter().enumerate() {
+            match token.to_ascii_lowercase().as_str() {
+                "center" => center = pair(numbers_after(index, 2), center),
+                "scale" => scale = pair(numbers_after(index, 2), scale),
+                "rotate" => degrees = numbers_after(index, 1).first().copied().unwrap_or(degrees),
+                "translate" => translate = pair(numbers_after(index, 2), translate),
+                _ => continue,
+            }
+            found = true;
+        }
+        found.then(|| Self::from_parts(center, scale, degrees, translate))
+    }
+
+    /// Reads the bracketed form: sixteen numbers, a 4 by 4 matrix row by row, of which the
+    /// rows and columns for u and v and the translation column count.
+    fn parse_matrix(text: &str) -> Option<Self> {
+        let values: Vec<f32> = text
+            .trim_matches(|c: char| c == '[' || c == ']' || c.is_whitespace())
+            .split_whitespace()
+            .map(|part| part.parse::<f32>().ok().filter(|value| value.is_finite()))
+            .collect::<Option<_>>()?;
+        if values.len() != 16 {
+            return None;
+        }
+        Some(Self {
+            matrix: [[values[0], values[1]], [values[4], values[5]]],
+            offset: [values[3], values[7]],
+        })
+    }
+
+    pub fn is_identity(&self) -> bool {
+        *self == Self::IDENTITY
+    }
+
+    /// Transforms normalised texture coordinates.
+    pub fn apply(&self, uv: [f32; 2]) -> [f32; 2] {
+        std::array::from_fn(|row| self.matrix[row][0] * uv[0] + self.matrix[row][1] * uv[1] + self.offset[row])
+    }
+}
+
 /// What the editor needs to draw a material.
 #[derive(Debug, Clone)]
 pub struct Material {
@@ -200,6 +305,10 @@ pub struct Material {
     /// paints, as the `Lightmapped_4WayBlend` and `MultiBlend` shaders do; other blended
     /// materials fade into their second texture by the displacement's alpha.
     pub four_way: bool,
+    /// `$basetexturetransform`, which the game applies to the texture coordinates of
+    /// `$basetexture` after working them out from a face's axes in its own pixels. Not
+    /// applied when the editor shows a `%tooltexture` instead.
+    pub base_transform: TextureTransform,
 }
 
 impl Material {
@@ -215,6 +324,7 @@ impl Material {
             sprite: SpriteLook::default(),
             water: None,
             four_way: false,
+            base_transform: TextureTransform::IDENTITY,
         }
     }
 }
@@ -241,6 +351,10 @@ pub struct MaterialLoader {
 #[derive(Debug, Default, Clone)]
 struct Properties {
     texture: Option<String>,
+    /// Set with `texture`: whether it is the `%tooltexture` rather than `$basetexture`.
+    tool_texture: Option<bool>,
+    /// `$basetexturetransform`.
+    base_transform: Option<TextureTransform>,
     /// The second texture of a blended material (`$basetexture2`), which displacements
     /// fade into by their vertex alpha.
     second_texture: Option<String>,
@@ -446,6 +560,9 @@ impl Properties {
                 .get("%tooltexture")
                 .or_else(|| block.get("$basetexture"))
                 .map(|name| normalize(name).trim_end_matches(".vtf").to_owned()),
+            tool_texture: (block.get("%tooltexture").is_some() || block.get("$basetexture").is_some())
+                .then(|| block.get("%tooltexture").is_some()),
+            base_transform: block.get("$basetexturetransform").and_then(TextureTransform::parse),
             second_texture: texture_key(block, "$basetexture2"),
             third_texture: texture_key(block, "$basetexture3"),
             fourth_texture: texture_key(block, "$basetexture4"),
@@ -503,7 +620,13 @@ impl Properties {
     /// Takes every key `other` sets, keeping the rest.
     fn overridden_by(self, other: Self) -> Self {
         Self {
+            tool_texture: if other.texture.is_some() {
+                other.tool_texture
+            } else {
+                self.tool_texture
+            },
             texture: other.texture.or(self.texture),
+            base_transform: other.base_transform.or(self.base_transform),
             second_texture: other.second_texture.or(self.second_texture),
             third_texture: other.third_texture.or(self.third_texture),
             fourth_texture: other.fourth_texture.or(self.fourth_texture),
@@ -580,6 +703,11 @@ impl Properties {
                 .shader
                 .as_deref()
                 .is_some_and(|shader| matches!(shader, "lightmapped_4wayblend" | "multiblend")),
+            base_transform: if self.tool_texture == Some(true) {
+                TextureTransform::IDENTITY
+            } else {
+                self.base_transform.unwrap_or_default()
+            },
         }
     }
 
