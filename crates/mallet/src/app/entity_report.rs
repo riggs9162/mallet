@@ -1,13 +1,16 @@
 //! Hammer's Entity Report (Map menu), which Edit > Find Entities (Ctrl+Shift+F) opens with
 //! the name filter ready: the map's entities, narrowed by class, name and keyvalue, with
 //! Go to, Select All, Properties and Delete. Its rows follow the editor's selection, so
-//! Ctrl and Shift pick several and every button acts on all of them.
+//! Ctrl and Shift pick several and every button acts on all of them. With one picked, it
+//! lists what that entity's outputs fire and what fires its inputs, each a link to the
+//! entities at the other end.
 
 use eframe::egui::{self, RichText};
 
 use super::MalletApp;
 use crate::editor::{Editor, SelectMode};
 use crate::scene::Owner;
+use mallet_vmf::{Connection, Entity};
 
 /// Most rows the report lists at once; the filters narrow it.
 const MAX_ROWS: usize = 2000;
@@ -50,6 +53,25 @@ struct Row {
     id: u32,
     class: String,
     name: String,
+}
+
+/// Height of the outputs and inputs list under the rows.
+const LINKS_HEIGHT: f32 = 150.0;
+
+/// One output that fires from or into the picked entity, and the entities at its other
+/// end: its targets for an output, its source for an input.
+struct Link {
+    connection: Connection,
+    /// The entities at the other end, empty when nothing matches.
+    others: Vec<u32>,
+    /// How the other end is shown: the target as written, or the source's name and class.
+    label: String,
+}
+
+/// The picked entity's outputs and the outputs that target it.
+struct Links {
+    outputs: Vec<Link>,
+    inputs: Vec<Link>,
 }
 
 /// What a click on a row asks for.
@@ -96,6 +118,11 @@ impl MalletApp {
         let mut select_all = false;
         let mut properties = false;
         let mut delete = false;
+        let mut jump: Option<Vec<u32>> = None;
+        let links = match picked.as_slice() {
+            [id] => links(editor, *id),
+            _ => None,
+        };
         egui::Window::new("Entity Report")
             .open(&mut open)
             .default_size([520.0, 440.0])
@@ -121,7 +148,10 @@ impl MalletApp {
                 });
                 ui.label(RichText::new(count_text(rows.len(), picked.len())).small().weak());
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(ui.available_height() - 36.0).auto_shrink([false, false]).show(ui, |ui| {
+                let links_height = if links.is_some() { LINKS_HEIGHT } else { 0.0 };
+                egui::ScrollArea::vertical()
+                    .id_salt("entity_report_list")
+                    .max_height(ui.available_height() - 36.0 - links_height).auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("entity_report_rows").num_columns(2).striped(true).spacing([16.0, 2.0]).show(ui, |ui| {
                         for row in rows.iter().take(MAX_ROWS) {
                             let response = ui.selectable_label(picked.contains(&row.id), &row.class);
@@ -145,6 +175,10 @@ impl MalletApp {
                         }
                     });
                 });
+                if let Some(links) = &links {
+                    ui.separator();
+                    jump = links_view(ui, links);
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     let any = !picked.is_empty();
@@ -170,6 +204,12 @@ impl MalletApp {
         if select_all {
             editor.select(rows.iter().map(|row| Owner::Entity(row.id)), SelectMode::Replace);
             editor.message = format!("Selected {} entities", rows.len());
+        }
+        if let Some(ids) = jump {
+            editor.select(ids.iter().map(|id| Owner::Entity(*id)), SelectMode::Replace);
+            editor.center_2d_on_selection();
+            editor.center_3d_on_selection();
+            report.anchor = ids.first().copied();
         }
         if go_to || properties || delete {
             editor.select(targets.iter().map(|id| Owner::Entity(*id)), SelectMode::Replace);
@@ -242,6 +282,137 @@ impl EntityReport {
         editor.select(ids.iter().map(|id| Owner::Entity(*id)), SelectMode::Replace);
         ids
     }
+}
+
+/// Whether an output aimed at `target` reaches `entity`: by its name or its class, ignoring
+/// case, or by the start of its name when `target` ends in `*`. Names starting with `!`,
+/// such as `!activator`, are only known while the game runs, so they match nothing here.
+fn targets(target: &str, entity: &Entity) -> bool {
+    let target = target.trim().to_ascii_lowercase();
+    if target.is_empty() || target.starts_with('!') {
+        return false;
+    }
+    let name = entity.get("targetname").unwrap_or("").to_ascii_lowercase();
+    match target.strip_suffix('*') {
+        Some(prefix) => !name.is_empty() && name.starts_with(prefix),
+        None => name == target || entity.classname().eq_ignore_ascii_case(&target),
+    }
+}
+
+/// The outputs of entity `id` with the entities each one reaches, and every output in the
+/// map that reaches it with the entity it comes from.
+fn links(editor: &Editor, id: u32) -> Option<Links> {
+    let vmf = &editor.document.as_ref()?.vmf;
+    let entity = vmf.entities().find(|entity| entity.id() == Some(id))?;
+    let outputs = entity
+        .connections()
+        .into_iter()
+        .map(|connection| Link {
+            others: vmf
+                .entities()
+                .filter(|other| targets(&connection.target, other))
+                .filter_map(Entity::id)
+                .collect(),
+            label: connection.target.clone(),
+            connection,
+        })
+        .collect();
+    let inputs = vmf
+        .entities()
+        .filter_map(|source| Some((source, source.id()?)))
+        .flat_map(|(source, source_id)| {
+            let label = match source.get("targetname").filter(|name| !name.is_empty()) {
+                Some(name) => format!("{name} ({})", source.classname()),
+                None => format!("{} {source_id}", source.classname()),
+            };
+            source
+                .connections()
+                .into_iter()
+                .filter(|connection| targets(&connection.target, entity))
+                .map(move |connection| Link {
+                    connection,
+                    others: vec![source_id],
+                    label: label.clone(),
+                })
+        })
+        .collect();
+    Some(Links { outputs, inputs })
+}
+
+/// Draws the picked entity's outputs and inputs, and returns the entities to go to when
+/// the other end of one is clicked.
+fn links_view(ui: &mut egui::Ui, links: &Links) -> Option<Vec<u32>> {
+    let mut jump = None;
+    egui::ScrollArea::vertical()
+        .id_salt("entity_report_links")
+        .max_height(LINKS_HEIGHT - 8.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (heading, list, outgoing) in [("Outputs", &links.outputs, true), ("Inputs", &links.inputs, false)] {
+                ui.label(RichText::new(format!("{heading} ({})", list.len())).strong());
+                if list.is_empty() {
+                    ui.label(RichText::new("None").weak());
+                }
+                for link in list {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let connection = &link.connection;
+                        if !outgoing {
+                            jump = jump.take().or(link_button(ui, link));
+                        }
+                        ui.label(&connection.output);
+                        ui.label(RichText::new("to").weak());
+                        if outgoing {
+                            jump = jump.take().or(link_button(ui, link));
+                        }
+                        ui.label(&connection.input);
+                        let extra = connection_details(connection);
+                        if !extra.is_empty() {
+                            ui.label(RichText::new(extra).weak());
+                        }
+                    });
+                }
+            }
+        });
+    jump
+}
+
+/// A connection's parameter, delay and refire limit, as words, leaving out the defaults.
+fn connection_details(connection: &Connection) -> String {
+    let mut details = Vec::new();
+    if !connection.parameter.is_empty() {
+        details.push(format!("\"{}\"", connection.parameter));
+    }
+    if connection.delay > 0.0 {
+        details.push(format!("after {}s", connection.delay));
+    }
+    match connection.refires {
+        1 => details.push("once".to_owned()),
+        count if count > 1 => details.push(format!("{count} times")),
+        _ => {}
+    }
+    details.join(", ")
+}
+
+/// The other end of a link as a button that goes to it, shown as an error when nothing
+/// in the map matches. A name only known while the game runs, such as `!activator`, is
+/// plain text.
+fn link_button(ui: &mut egui::Ui, link: &Link) -> Option<Vec<u32>> {
+    if link.label.trim().starts_with('!') {
+        ui.label(RichText::new(&link.label).italics());
+        return None;
+    }
+    if link.others.is_empty() {
+        let color = ui.visuals().error_fg_color;
+        ui.label(RichText::new(&link.label).color(color))
+            .on_hover_text("Nothing in the map has this name or class");
+        return None;
+    }
+    let hover = match link.others.len() {
+        1 => "Go to this entity".to_owned(),
+        count => format!("Go to these {count} entities"),
+    };
+    ui.link(&link.label).on_hover_text(hover).clicked().then(|| link.others.clone())
 }
 
 /// The line under the filters: how many entities match, how many are listed when the
