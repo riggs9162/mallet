@@ -428,8 +428,9 @@ fn editor_definitions() -> Value {
         ),
         tool(
             "check_for_problems",
-            "Hammer's Check for Problems (Alt+P): a missing player start, entities with no class, brush entities \
-             with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused \
+            "Hammer's Check for Problems (Alt+P): a missing player start, entities with no class or a class the \
+             game data does not know, brush entities with no brushes, invalid brushes, outputs, keys and \
+             parents naming entities that do not exist, unused \
              keyvalues, lightmap scales of 0 and duplicate ids. It also finds props whose class loses their \
              model in the map compiler or in game, such as a model with prop data on a prop_static, and says \
              why. With fix, also fixes the ones that can be fixed (as one undo step) and checks again; a prop \

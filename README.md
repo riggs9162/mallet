@@ -182,7 +182,7 @@ These follow Hammer++'s default keybindings.
 | 1 to 9 and 0 over a 2D view | Preset zooms: 5 is one pixel per unit, each key below halves it and each above doubles it |
 | 1 / 2 over the 3D view | Draw less / more of the map, like Hammer's far clipping plane |
 | Ctrl+Shift+F | Find Entities: the Entity Report with its name filter ready. Map > Entity Report lists the map's entities by class, name or keyvalue (a trailing `*` matches the start), with Go to, Select All, Properties and Delete |
-| Alt+P | Check for Problems: a missing player start, entities with no class, brush entities with no brushes, invalid brushes, outputs and keys naming entities that do not exist, unused keyvalues, lightmap scales of 0, duplicate ids and props whose class loses their model, with Go to Error, Fix and Fix All (Map menu) |
+| Alt+P | Check for Problems: a missing player start, entities with no class or a class the game data does not know, brush entities with no brushes, invalid brushes, outputs, keys and parents naming entities that do not exist, unused keyvalues, lightmap scales of 0, duplicate ids and props whose class loses their model, with Go to Error, Fix and Fix All (Map menu) |
 | Ctrl+Shift+G | Go to Brush Number: select a brush by its number and centre the views on it; View > Go to Coordinates centres them on a point |
 | Mouse wheel | Zoom a 2D view around the cursor (with Ctrl, every 2D view zooms to match), or move the 3D camera along its view, 60 units a notch |
 | Arrow keys over a 2D view with nothing to nudge | Pan the view |
