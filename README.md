@@ -661,3 +661,10 @@ objects in bulk, by class, material or place, trace lines to find floors and wal
 map again after a generator has rewritten its file, and paste another map file in. An
 agent may send many steps as one batch, and everything a batch changes undoes with a
 single Ctrl+Z.
+
+[skills/mallet-mapping](skills/mallet-mapping/SKILL.md) is a skill that teaches an agent to
+build maps the way experienced mappers do: in stages with a quality gate each, from a
+dev-texture blockout through gameplay, architecture, lighting, detail and optimisation to
+a release build, with the measurements, lighting and visibility rules each stage needs.
+Copy or link the folder into your agent's skills folder (`~/.claude/skills` for Claude
+Code) to use it.
