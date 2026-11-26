@@ -572,15 +572,30 @@ fn launch(command: &CommandLine) -> Result<Option<String>, String> {
         .map_err(|error| format!("Could not start {}: {error}", command.program.display()))
 }
 
+/// Copies a compiled file into place, or does nothing when it is already there.
+///
+/// A map saved in the game's `maps` folder compiles straight to its destination, and copying
+/// a file onto itself fails on Windows because the source is open.
 fn copy(from: &Path, to: &Path) -> Result<Option<String>, String> {
     if !from.is_file() {
         return Err(format!("{} does not exist; did VBSP run?", from.display()));
+    }
+    if same_file(from, to) {
+        return Ok(Some("BSP is already in the game's maps folder; nothing to copy".to_owned()));
     }
     if let Some(folder) = to.parent() {
         fs::create_dir_all(folder).map_err(|error| format!("Could not create {}: {error}", folder.display()))?;
     }
     let bytes = fs::copy(from, to).map_err(|error| format!("Could not copy to {}: {error}", to.display()))?;
     Ok(Some(format!("Copied {:.1} MB to {}", bytes as f64 / 1e6, to.display())))
+}
+
+/// Whether two paths name the same existing file.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// How a line of compiler output reads.
@@ -701,6 +716,25 @@ mod tests {
             position_in("Entity info_player_start (-128.00 64.00 0.00) leaked!"),
             Some(DVec3::new(-128.0, 64.0, 0.0))
         );
+    }
+
+    #[test]
+    fn copying_a_file_onto_itself_is_skipped() {
+        let folder = std::env::temp_dir().join(format!("mallet-copy-{}", std::process::id()));
+        let maps = folder.join("maps");
+        fs::create_dir_all(&maps).unwrap();
+        let bsp = maps.join("foo.bsp");
+        fs::write(&bsp, b"bsp").unwrap();
+        let held = fs::File::open(&bsp).unwrap();
+        let roundabout = folder.join("maps").join("..").join("maps").join("foo.bsp");
+        let message = copy(&bsp, &roundabout).unwrap().unwrap();
+        assert!(message.contains("nothing to copy"), "{message}");
+        let elsewhere = folder.join("game").join("foo.bsp");
+        let message = copy(&bsp, &elsewhere).unwrap().unwrap();
+        assert!(message.starts_with("Copied"), "{message}");
+        assert_eq!(fs::read(&elsewhere).unwrap(), b"bsp");
+        drop(held);
+        fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]
