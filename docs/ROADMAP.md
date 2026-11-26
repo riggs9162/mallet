@@ -159,6 +159,7 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 - [x] Find Entities (Ctrl+Shift+F). Hammer
 - [ ] Replace (Ctrl+Shift+R) for keyvalues. Hammer
 - [x] Entity Report: filter by class, name or keyvalue; go to, select, properties and delete. Hammer
+- [x] Entity Report: pick several rows, follow the editor's selection, list an entity's outputs and inputs, and flag entities with problems
 - [ ] Show Connections: lines between entities that send each other outputs. Hammer
 - [ ] Overlays on displacements following the displaced surface. Hammer
 - [ ] Overlay handles in the 2D views, and rotating an overlay from a handle. Hammer
