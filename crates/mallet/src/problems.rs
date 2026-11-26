@@ -30,6 +30,10 @@ const ALWAYS_USED: &[&str] = &["id", "classname", "origin", "angles", "spawnflag
 /// Names outputs may target that are not entity names.
 const SPECIAL_TARGETS_PREFIX: char = '!';
 
+/// Classes the map compiler handles itself, so no game data lists them: VBSP++ turns
+/// `func_detail_illusionary` into detail brushes that nothing collides with.
+const COMPILER_CLASSES: &[&str] = &["func_detail_illusionary"];
+
 /// The lightmap scale a fix gives faces with none.
 const DEFAULT_LIGHTMAP_SCALE: u32 = 16;
 
@@ -263,7 +267,8 @@ impl Editor {
             return;
         }
         let class = self.entity_class(classname);
-        if class.is_none() && self.game_data.is_some() {
+        let compiler_class = COMPILER_CLASSES.iter().any(|known| known.eq_ignore_ascii_case(classname.trim()));
+        if class.is_none() && self.game_data.is_some() && !compiler_class {
             problems.push(Problem {
                 kind: ProblemKind::UnknownClass,
                 object: owner,
