@@ -3,9 +3,14 @@
 //! Go to, Select All, Properties and Delete. Its rows follow the editor's selection, so
 //! Ctrl and Shift pick several and every button acts on all of them. With one picked, it
 //! lists what that entity's outputs fire and what fires its inputs, each a link to the
-//! entities at the other end.
+//! entities at the other end. Rows with something Check for Problems would report carry a
+//! warning, and the report can list only those.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use eframe::egui::{self, RichText};
+use egui_phosphor::regular as icon;
 
 use super::MalletApp;
 use crate::editor::{Editor, SelectMode};
@@ -30,8 +35,28 @@ pub(super) struct EntityReport {
     /// The editor's selection generation the report last saw, so a selection made in the
     /// viewports scrolls its first row into view.
     seen_selection: u64,
+    /// Whether only entities with problems are listed.
+    problems_only: bool,
     /// The rows of the last filtering, kept until the map or a filter changes.
     cache: Option<Cache>,
+    /// The problems of each entity, kept until the map or the game changes.
+    problems: Option<ProblemCache>,
+}
+
+/// What Check for Problems found about each entity, by id, and what that depends on.
+struct ProblemCache {
+    key: ProblemKey,
+    by_entity: HashMap<u32, Vec<String>>,
+}
+
+/// What the problems found depend on: the map's edits, the map itself, the game data and
+/// whether a game's files are mounted.
+#[derive(PartialEq)]
+struct ProblemKey {
+    changes: u64,
+    geometry: u64,
+    game_data: Option<usize>,
+    materials: bool,
 }
 
 /// The rows one filtering produced and what they were produced from.
@@ -46,13 +71,16 @@ struct CacheKey {
     changes: u64,
     geometry: u64,
     filters: [String; 4],
+    problems_only: bool,
 }
 
-/// One listed entity: its id, class and name.
+/// One listed entity: its id, class, name and problems.
 struct Row {
     id: u32,
     class: String,
     name: String,
+    /// What Check for Problems says about it, each as its kind and detail.
+    problems: Vec<String>,
 }
 
 /// Height of the outputs and inputs list under the rows.
@@ -146,16 +174,23 @@ impl MalletApp {
                     });
                     ui.end_row();
                 });
-                ui.label(RichText::new(count_text(rows.len(), picked.len())).small().weak());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(count_text(rows.len(), picked.len())).small().weak());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.checkbox(&mut report.problems_only, "Only with problems")
+                            .on_hover_text("List only the entities Check for Problems has something to say about");
+                    });
+                });
                 ui.separator();
                 let links_height = if links.is_some() { LINKS_HEIGHT } else { 0.0 };
                 egui::ScrollArea::vertical()
                     .id_salt("entity_report_list")
                     .max_height(ui.available_height() - 36.0 - links_height).auto_shrink([false, false]).show(ui, |ui| {
-                    egui::Grid::new("entity_report_rows").num_columns(2).striped(true).spacing([16.0, 2.0]).show(ui, |ui| {
+                    egui::Grid::new("entity_report_rows").num_columns(3).striped(true).spacing([16.0, 2.0]).show(ui, |ui| {
                         for row in rows.iter().take(MAX_ROWS) {
                             let response = ui.selectable_label(picked.contains(&row.id), &row.class);
                             ui.label(&row.name);
+                            problem_badge(ui, &row.problems);
                             ui.end_row();
                             if scroll_to == Some(row.id) {
                                 response.scroll_to_me(Some(egui::Align::Center));
@@ -234,17 +269,37 @@ impl MalletApp {
 }
 
 impl EntityReport {
-    /// Filters the map again when it or a filter changed since the last filtering.
+    /// Checks the map for problems again when it or the game changed since the last check,
+    /// and filters it again when it, the problems or a filter changed since the last
+    /// filtering.
     fn refresh(&mut self, editor: &Editor) {
+        let changes = editor.document.as_ref().map_or(0, |document| document.history.changes());
+        let geometry = editor.scene.geometry_generation;
+        let problem_key = ProblemKey {
+            changes,
+            geometry,
+            game_data: editor.game_data.as_ref().map(|data| Arc::as_ptr(data) as usize),
+            materials: editor.materials.is_some(),
+        };
+        if self.problems.as_ref().is_none_or(|problems| problems.key != problem_key) {
+            self.problems = Some(ProblemCache {
+                key: problem_key,
+                by_entity: entity_problems(editor),
+            });
+            self.cache = None;
+        }
         let key = CacheKey {
-            changes: editor.document.as_ref().map_or(0, |document| document.history.changes()),
-            geometry: editor.scene.geometry_generation,
+            changes,
+            geometry,
             filters: [self.class.clone(), self.name.clone(), self.key.clone(), self.value.clone()],
+            problems_only: self.problems_only,
         };
         if self.cache.as_ref().is_some_and(|cache| cache.key == key) {
             return;
         }
-        let rows = matching_rows(editor, &key.filters);
+        let empty = HashMap::new();
+        let problems = self.problems.as_ref().map_or(&empty, |problems| &problems.by_entity);
+        let rows = matching_rows(editor, &key.filters, key.problems_only, problems);
         self.cache = Some(Cache { key, rows });
     }
 
@@ -282,6 +337,32 @@ impl EntityReport {
         editor.select(ids.iter().map(|id| Owner::Entity(*id)), SelectMode::Replace);
         ids
     }
+}
+
+/// What Check for Problems says about each entity, by id.
+fn entity_problems(editor: &Editor) -> HashMap<u32, Vec<String>> {
+    let mut by_entity: HashMap<u32, Vec<String>> = HashMap::new();
+    for problem in editor.check_for_problems() {
+        if let Some(Owner::Entity(id)) = problem.object {
+            by_entity
+                .entry(id)
+                .or_default()
+                .push(format!("{}: {}", problem.kind.label(), problem.detail));
+        }
+    }
+    by_entity
+}
+
+/// A warning with the number of problems a row has, listing them when hovered, or an empty
+/// cell when it has none.
+fn problem_badge(ui: &mut egui::Ui, problems: &[String]) {
+    if problems.is_empty() {
+        ui.label("");
+        return;
+    }
+    let color = ui.visuals().warn_fg_color;
+    ui.label(RichText::new(format!("{} {}", icon::WARNING, problems.len())).color(color))
+        .on_hover_text(problems.join("\n"));
 }
 
 /// Whether an output aimed at `target` reaches `entity`: by its name or its class, ignoring
@@ -430,9 +511,15 @@ fn count_text(matching: usize, picked: usize) -> String {
 }
 
 /// The map's entities that pass the report's filters (class, name, key and value), by
-/// class and then name. A class or name ending in `*` matches everything starting with
-/// what comes before it; otherwise the filter matches anywhere in it, ignoring case.
-fn matching_rows(editor: &Editor, filters: &[String; 4]) -> Vec<Row> {
+/// class and then name, with their problems. A class or name ending in `*` matches
+/// everything starting with what comes before it; otherwise the filter matches anywhere in
+/// it, ignoring case. With `problems_only`, entities with no problems are left out.
+fn matching_rows(
+    editor: &Editor,
+    filters: &[String; 4],
+    problems_only: bool,
+    problems: &HashMap<u32, Vec<String>>,
+) -> Vec<Row> {
     let Some(document) = &editor.document else {
         return Vec::new();
     };
@@ -457,10 +544,16 @@ fn matching_rows(editor: &Editor, filters: &[String; 4]) -> Vec<Row> {
                 || entity
                     .get(key_filter.trim())
                     .is_some_and(|value| matches(value_filter, value));
-            (matches(class_filter, class) && matches(name_filter, name) && keyvalue).then(|| Row {
+            let found = problems.get(&id);
+            let listed = matches(class_filter, class)
+                && matches(name_filter, name)
+                && keyvalue
+                && (!problems_only || found.is_some());
+            listed.then(|| Row {
                 id,
                 class: class.to_owned(),
                 name: name.to_owned(),
+                problems: found.cloned().unwrap_or_default(),
             })
         })
         .collect();
