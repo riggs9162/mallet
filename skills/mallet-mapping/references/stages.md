@@ -199,13 +199,22 @@ entity count balloons with physics and dynamic props.
 
 ## Stage 7: Optimisation and clip pass
 
-**Goal:** it runs well and plays cleanly. See `optimization.md`.
+**Goal:** it runs well and plays cleanly. See `optimization.md`, and
+`hints-and-skips.md` before placing any hint.
 
-- Audit: nodraw on unseen faces, `func_detail` on everything non-structural, prop
-  classes and fade distances, lightmap scales, entity count.
-- Hints, areaportals, occluders, `farz`, where measurement shows a need.
-- Full clip pass for the gamemode. Navigation mesh or AI nodes.
-- Full compile, then measure in game at the worst views.
+Work in this order; each step makes the next one cheaper and easier to judge.
+
+1. Audit what earlier stages should have done: nodraw on unseen faces, `func_detail` on
+   everything non-structural, a nodraw world core in each detailed building, prop classes
+   and fade distances, lightmap scales, entity count. Fix these first.
+2. Full compile with no hints. Record `numportals` and the VVIS time as the baseline.
+3. Measure in game at the worst views and list what draws that should not.
+4. Areaportals: mark the areas, then portal every opening on each boundary.
+5. Hints: the roofline hint outdoors first, then corners and offset doors where the list
+   from step 3 shows a need. One at a time, full compile, keep only what shows a gain.
+6. Open areas: `farz` with fog, occluders, `func_viscluster`.
+7. Full clip pass for the gamemode. Navigation mesh or AI nodes.
+8. Full compile, measure again at the same views, and report before and after.
 
 **Gate:**
 

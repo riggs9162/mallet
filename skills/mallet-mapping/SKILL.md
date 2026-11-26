@@ -1,6 +1,6 @@
 ---
 name: mallet-mapping
-description: "Design, build, review and finish Source engine maps to an exceptional standard using the Mallet editor's MCP tools (mcp__mallet__*). Runs a staged pipeline with quality gates: brief, layout, dev-texture blockout, gameplay, architecture, lighting, detail, optimisation and release. Use whenever the user wants to make, extend, block out, greybox, detail, light, optimise, compile, playtest, critique or release a map or level for Half-Life 2, Garry's Mod (sandbox, roleplay, HL2RP, DarkRP, TTT), Counter-Strike: Source or Team Fortress 2; mentions Mallet, Hammer, a .vmf or .bsp, brushes, dev textures, func_detail, visleaves, areaportals, displacements, lightmaps, cubemaps, soundscapes or a 3D skybox; asks why a map looks bland, runs badly or leaks; or asks for a room, building, street or area to be added to a map, even when they do not name a stage."
+description: "Design, build, review and finish Source engine maps to an exceptional standard using the Mallet editor's MCP tools (mcp__mallet__*). Runs a staged pipeline with quality gates: brief, layout, dev-texture blockout, gameplay, architecture, lighting, detail, optimisation and release. Use whenever the user wants to make, extend, block out, greybox, detail, light, optimise, compile, playtest, critique or release a map or level for Half-Life 2, Garry's Mod (sandbox, roleplay, HL2RP, DarkRP, TTT), Counter-Strike: Source or Team Fortress 2; mentions Mallet, Hammer, a .vmf or .bsp, brushes, dev textures, func_detail, visleaves, hint and skip brushes, areaportals, occluders, vis or VVIS, frame rate, displacements, lightmaps, cubemaps, soundscapes or a 3D skybox; asks why a map looks bland, runs badly or leaks; or asks for a room, building, street or area to be added to a map, even when they do not name a stage."
 ---
 
 # Mapping for Source with Mallet
@@ -76,6 +76,11 @@ These are the faults that are cheap to prevent and costly to repair.
   props and brush entities never seal.
 - **Never box the map in a skybox shell** to hide a leak. Find the gap with
   `load_pointfile` and close it.
+- **Optimise from the layout onward, not at the end.** Decide where sight ends when
+  drawing the plan, keep a nodraw world core inside every detailed building, and set prop
+  class and fade as each prop is placed. Stage 7 only measures and tunes: hints on the
+  limit of sight, areaportals on every opening between areas, each kept only if the game
+  shows a gain.
 - **Place props from a trace**, with the class `describe_model` says the model supports.
   No floating, no sinking, no guessing Z.
 - **Every light has a source and a colour.** No pure white, no flat ambient.
@@ -112,7 +117,8 @@ Read the one for the stage in hand; do not load them all.
 | `references/metrics.md` | Blockout; any question of size, grid, dev textures or engine limits |
 | `references/detailing.md` | Architecture and detail passes; "why does this look bland" |
 | `references/lighting.md` | Lighting, fog, HDR, cubemaps, soundscape placement, 3D skybox |
-| `references/optimization.md` | Sealing, leaks, visibility, props, displacements, compile errors, performance |
+| `references/optimization.md` | Sealing, leaks, visibility, sight blockers, areaportals, props, displacements, compile errors, performance; any request to optimise or "why does it lag" |
+| `references/hints-and-skips.md` | Before placing, moving or reviewing any hint brush; outdoor maps where areas see each other over rooftops; long VVIS times |
 | `references/scripting-and-polish.md` | Entity I/O, doors and lifts, ambience, Garry's Mod needs, playtesting, packing |
 | `references/release-checklist.md` | Scoring a map; Stage 8 |
 | `references/sources.md` | Where this guidance comes from, and where to read further |

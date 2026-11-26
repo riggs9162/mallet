@@ -1,9 +1,18 @@
 # Optimisation, sealing and compiling
 
-Structure for performance from the blockout: seal and world-brush discipline at Stage 2,
-`func_detail` as detail is made at Stage 4, and the dedicated pass (hints, areaportals,
-fades, clips) at Stage 7. Optimisation bolted on at the end of a map built without it is
-mostly rebuilding.
+Optimisation is not a stage that starts at Stage 7. It is decided at every stage:
+
+| Stage | Optimisation decision made there |
+| --- | --- |
+| 1 Layout | Where sight ends: corners, offsets and height changes between areas; which areas become areaportal areas |
+| 2 Blockout | Sealed, on-grid world brushes; nodraw on unseen faces; sky lid at the roofline |
+| 4 Architecture | Everything that is not structure becomes `func_detail`; nodraw world cores kept inside detailed buildings |
+| 6 Detail | Prop class, fade distances and collision set as each prop is placed |
+| 7 Optimisation | Measured pass: hints, areaportals, occluders, `farz`, clips |
+
+A map built without the first four cannot be rescued by the fifth; optimisation bolted on
+at the end is mostly rebuilding. When the user asks to optimise an existing map, check
+the earlier rows first and say which ones fail.
 
 ## Contents
 
@@ -13,7 +22,9 @@ mostly rebuilding.
 - Tool textures
 - func_detail
 - Hints
+- Sight blockers
 - Areaportals and occluders
+- Large open maps
 - Props
 - Displacements
 - Water
@@ -121,36 +132,82 @@ Notes:
 
 ## Hints
 
-A hint brush adds a leaf boundary where VBSP would not put one. Texture the cutting face
-`tools/toolshint` and the other faces `tools/toolsskip`.
+A hint brush adds a leaf boundary where VBSP would not put one: `tools/toolshint` on the
+cutting face, `tools/toolsskip` on every other face, left as a world brush.
+**`hints-and-skips.md` is the full treatment; read it before placing any.** In short:
 
-- **Corner hint**: at an L-shaped corridor, a hint plane running diagonally from the
-  inner corner across to the outer corner stops the two arms seeing each other's far ends.
-- **Doorway hints**: planes level with each face of a thick doorway keep the rooms each
-  side from merging through it.
-- **Height hint**: a horizontal plane at the top of a wall separates a low street from
-  the open space above the rooftops, so players at ground level do not draw everything
-  the sky can see.
-- Hints add leaves and compile time. Place few, where measurement shows two areas see
-  each other needlessly, and check the result with `mat_leafvis`.
+- A hint hides nothing by itself. It reshapes leaves so the leaf-to-leaf test fails.
+- Neighbouring leaves always see each other; a hint works on the third leaf in a chain.
+- Only world brushes block sight. No world brush between two areas, no hint will help.
+- Place the hint on the limit of sight: the line from the far edge of the hidden area's
+  opening through the corner that blocks the view.
+- Outdoors, one horizontal hint at the roofline stops every street seeing every other
+  over the rooftops. It is usually the best single hint on a map.
+- Add one at a time, compile fully, and keep it only if `mat_wireframe` shows a gain.
+
+## Sight blockers
+
+Hints and VVIS only count world brushes. A map detailed properly is mostly `func_detail`,
+displacements and props, so the things that look solid often block nothing.
+
+- Inside every building made of detail brushes and props, keep a simple world brush core
+  in `tools/toolsnodraw`: one box per building, a few units inside the visible walls,
+  floor to roof.
+- Under displacement hills and cliffs that should hide what is behind them, build a
+  nodraw world brush that follows the mass of the hill, kept below the surface.
+- Inside thick walls of detail brushwork, run one plain nodraw world brush.
+- Blockers are big, on grid and few. Their faces cut leaves, so a blocker with many small
+  faces does more harm than good.
+- A window, a gap under a door or a grate in a world wall joins the leaves each side.
+  Close it with an areaportal, or accept that the two sides see each other.
 
 ## Areaportals and occluders
 
-- `func_areaportal`: a brush filling a door or window completely, as thick as the wall or
-  thinner, textured `tools/toolsareaportal`. When open it only draws what is seen
-  **through the opening**; when closed it hides everything beyond.
+An areaportal does what a hint cannot: it culls at run time by the shape of the opening,
+and shuts completely with its door.
+
+- `func_areaportal`: a brush filling a door or window completely, textured
+  `tools/toolsareaportal` on every face, thin (1 to 8 units), a simple rectangle. When
+  open it only draws what is seen **through the opening**; when closed it hides
+  everything beyond.
+- Its edges must sink into **world** brushes all round. A frame of `func_detail`, a
+  displacement or a prop leaves a gap the compiler sees as a leak through the portal.
 - The portal must separate two **areas** that are otherwise sealed from each other. If
   any other path connects the two sides without a portal, the compile reports that the
   portal does not touch two areas, or leaks through it. Every route between two areas
-  needs its own portal.
+  needs its own portal: every door, window, vent and stairwell.
+- Plan areas, not portals. Mark the map into a handful of areas (each building interior,
+  each courtyard, the outdoors) and portal every opening on each boundary. One missed
+  window undoes the whole area.
 - Link a portal to its door by name (`target`) so it closes with the door. Doors that
-  stay shut most of the time make the best portals.
+  stay shut most of the time make the best portals. A portal with no door starts open and
+  still culls by the shape of the opening.
+- A portal named and driven by I/O (`Open`, `Close`) can seal off a whole section of the
+  map while players cannot be there: behind a lift ride, a locked gate, a loading door.
 - `func_areaportalwindow` fades to opaque with distance: use it for windows and openings
-  seen from afar.
-- Keep portals simple rectangles and do not let many be in view at once.
+  seen from afar, with a brush entity as the fade target.
+- Each open portal in view costs a little at run time. A wall of forty small windows wants
+  one portal across the whole bank, or none, not forty.
+- Do not let water or a moving brush cross a portal.
+- Test with `r_portalsopenall 1` (portals ignored) against the default, and
+  `mat_wireframe 1`, to see what each portal earns.
 - `func_occluder` hides props (not world geometry) behind a big solid shape, at run time
   cost. Use it sparingly on open maps, for a hill or a large building that hides many
   props where no portal can go.
+
+## Large open maps
+
+Where sight cannot be blocked, limit distance and cost instead.
+
+- Fog with a far clip plane: `env_fog_controller` with `farz` just beyond full fog, so
+  everything past it is not drawn at all. Match the 3D skybox fog so the cut does not show.
+- Fade distances on every small and medium prop; see "Props".
+- `func_viscluster` over wide open space (a field, a lake, a plaza) tells VVIS to treat
+  the leaves inside as seeing each other without working it out. It saves compile time,
+  not frame rate, and is only right where everything inside does see everything else.
+- Break the view by design: a ridge, a tree line backed by a world blocker, a bend, a
+  building across the end of a street.
+- Keep the sky lid low and stepped to the rooflines.
 
 ## Props
 
