@@ -909,6 +909,8 @@ pub struct ViewOptions {
     /// Show the displacement vertices the compiler collapses, as pink squares in the 3D
     /// views: Hammer's Displacement Edge Collapse.
     pub collapsed_vertices: bool,
+    /// Draw every prop model's triangles as a cyan wireframe in the 2D views.
+    pub model_wireframes: bool,
     /// How far the 3D view draws, in units.
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
@@ -953,6 +955,7 @@ impl Default for ViewOptions {
         Self {
             net_graph: true,
             collapsed_vertices: false,
+            model_wireframes: false,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_preview: true,

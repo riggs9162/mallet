@@ -242,6 +242,12 @@ impl MalletApp {
                         Action::ToggleShowGrid,
                         editor.show_grid,
                     ),
+                    (
+                        icon::GRAPH,
+                        "Show prop models as a cyan wireframe in the 2D views",
+                        Action::ToggleModelWireframes,
+                        editor.config.view.model_wireframes,
+                    ),
                 ];
                 for (glyph, name, action, on) in grid_toggles {
                     if self

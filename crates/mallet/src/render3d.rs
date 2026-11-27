@@ -37,6 +37,7 @@ use crate::scene::{
     box_edges, entity_marker_edges, model_origin_edges, ModelCache, Overlay, Owner, Remap, Scene, SceneFace, WireMesh,
     AGENT_CAMERA_COLOR, MODEL_ORIGIN_COLOR, MODEL_ORIGIN_LENGTH,
 };
+use crate::scene::{ModelWires, MODEL_WIRE_COLOR};
 use crate::style::{self as view_style, ViewStyle};
 use crate::view2d::View2D;
 use crate::view3d::Camera3D;
@@ -478,6 +479,10 @@ struct LineMesh {
     count: u32,
 }
 
+/// Lines kept with the key of what they were built from; `None` inside when there were
+/// none to draw.
+type KeyedLines = Option<(u64, Option<LineMesh>)>;
+
 /// An image a viewport is drawn into, with its own camera matrix.
 struct Target {
     size: [u32; 2],
@@ -573,6 +578,9 @@ pub struct Renderer3D {
     selection_edges: Option<(u64, Option<LineMesh>)>,
     /// The selection's outline in the 3D view, drawn in the 3D selection colours.
     selection_edges_3d: Option<(u64, Option<LineMesh>)>,
+    /// The 2D views' prop model wireframes: the unselected models' and the selected
+    /// ones', each keyed by the [`ModelWires`] key it was built from.
+    model_wires: (KeyedLines, KeyedLines),
     /// The pipelines of the glow around selected props.
     glow: glow::GlowPipelines,
     /// Each viewport slot's mask for the glow, made when a prop is first selected there.
@@ -768,6 +776,7 @@ impl Renderer3D {
             drag_faces: None,
             selection_faces: None,
             selection_edges: None,
+            model_wires: (None, None),
             selection_edges_3d: None,
             glow,
             glow_targets: [None, None, None, None],
@@ -1093,7 +1102,8 @@ impl Renderer3D {
         } else {
             Vec::new()
         };
-        for transform in scene.meshes.iter().filter_map(|mesh| mesh.model_transform(overlay, helpers)) {
+        let selected = scene.meshes.iter().filter(|mesh| mesh.selected);
+        for transform in selected.filter_map(|mesh| mesh.model_transform(overlay, helpers)) {
             let origin = transform.w_axis.truncate().as_vec3();
             if box_visible(&planes, origin, origin) {
                 push_edges(&mut outline, &model_origin_edges(transform, MODEL_ORIGIN_LENGTH), None, MODEL_ORIGIN_COLOR);
@@ -1308,6 +1318,20 @@ impl Renderer3D {
             push_edges(&mut vertices, &mesh.edges, overlay.transform.as_ref(), color);
         }
         self.selection_edges_3d = Some((key, self.line_mesh(&vertices)));
+    }
+
+    /// Keeps [`Self::model_wires`] matching `wires`.
+    fn update_model_wires(&mut self, wires: &ModelWires) {
+        if self.model_wires.0.as_ref().is_none_or(|(built, _)| *built != wires.still_key) {
+            let mut vertices = Vec::new();
+            push_edges(&mut vertices, &wires.still, None, MODEL_WIRE_COLOR);
+            self.model_wires.0 = Some((wires.still_key, self.line_mesh(&vertices)));
+        }
+        if self.model_wires.1.as_ref().is_none_or(|(built, _)| *built != wires.moving_key) {
+            let mut vertices = Vec::new();
+            push_edges(&mut vertices, &wires.moving, None, MODEL_WIRE_COLOR);
+            self.model_wires.1 = Some((wires.moving_key, self.line_mesh(&vertices)));
+        }
     }
 
     /// Keeps [`Self::selection_edges`] matching the selection and the drag it is in.
@@ -1652,8 +1676,8 @@ impl Renderer3D {
     /// and whether it was recreated.
     ///
     /// Brush edges come from a cache shared by all three views, so panning and zooming
-    /// only change a matrix. Handles' squares, the marquee and the label are left for the
-    /// caller to draw on top.
+    /// only change a matrix, as do the prop model wireframes in `wires`, drawn when given.
+    /// Handles' squares, the marquee and the label are left for the caller to draw on top.
     #[allow(clippy::too_many_arguments)]
     pub fn render_2d(
         &mut self,
@@ -1664,6 +1688,7 @@ impl Renderer3D {
         scene: &Scene,
         overlay: &Overlay,
         grid: f64,
+        wires: Option<&ModelWires>,
     ) -> (&wgpu::TextureView, bool) {
         let pixels = [pixels[0].max(1), pixels[1].max(1)];
         let recreated = ensure_target(
@@ -1690,6 +1715,7 @@ impl Renderer3D {
                 value.to_bits().hash(hasher);
             }
             format!("{overlay:?}").hash(hasher);
+            wires.map(|wires| (wires.still_key, wires.moving_key)).hash(hasher);
         });
         self.reused[slot] = !recreated && self.signatures[slot] == Some(signature);
         if self.reused[slot] {
@@ -1698,6 +1724,9 @@ impl Renderer3D {
         self.signatures[slot] = Some(signature);
         self.update_edges(scene, overlay);
         self.update_selection_edges(scene, overlay, look.selection);
+        if let Some(wires) = wires {
+            self.update_model_wires(wires);
+        }
 
         let local = Rect::from_min_size(Pos2::ZERO, points);
         let mut under = Vec::new();
@@ -1733,6 +1762,10 @@ impl Renderer3D {
         let over = self.line_mesh(&over);
         let tools = self.line_mesh(&tools);
         let selection = self.selection_edges.as_ref().and_then(|(_, mesh)| mesh.as_ref());
+        let (still_wires, moving_wires) = match wires {
+            Some(_) => (cached_lines(&self.model_wires.0), cached_lines(&self.model_wires.1)),
+            None => (None, None),
+        };
 
         let target = self.targets[slot].as_ref().expect("target was just created");
         let matrix = orthographic(view, points);
@@ -1748,9 +1781,16 @@ impl Renderer3D {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_pipeline(&self.flat_line_pipeline);
             pass.set_bind_group(0, &target.uniform_group, &[]);
-            for lines in [under.as_ref(), self.static_edges(), over.as_ref(), selection, tools.as_ref()]
-                .into_iter()
-                .flatten()
+            let layers = [
+                under.as_ref(),
+                self.static_edges(),
+                still_wires,
+                moving_wires,
+                over.as_ref(),
+                selection,
+                tools.as_ref(),
+            ];
+            for lines in layers.into_iter().flatten()
             {
                 pass.set_vertex_buffer(0, lines.buffer.slice(..));
                 pass.draw(0..lines.count, 0..1);
@@ -2592,6 +2632,11 @@ fn signature(feed: impl FnOnce(&mut DefaultHasher)) -> u64 {
     let mut hasher = DefaultHasher::new();
     feed(&mut hasher);
     hasher.finish()
+}
+
+/// The lines kept in a cache of lines keyed by what they were built from, if any.
+fn cached_lines(cache: &KeyedLines) -> Option<&LineMesh> {
+    cache.as_ref().and_then(|(_, mesh)| mesh.as_ref())
 }
 
 /// Adds line-list vertices for edges, optionally remapped, in one colour.

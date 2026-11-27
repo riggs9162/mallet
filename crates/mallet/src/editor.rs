@@ -31,7 +31,7 @@ use crate::input::InputFrame;
 use crate::lighting::{load_texture_lights, TextureLights};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
 use crate::scene::{
-    decal_key, entity_model_key, split_variant_key, CameraPreview, DecalSizes, ModelCache, Overlay, Owner, Scene,
+    decal_key, entity_model_key, split_variant_key, CameraPreview, DecalSizes, ModelCache, ModelWires, Overlay, Owner, Scene,
 };
 use crate::view2d::{Axis2D, View2D};
 use crate::view3d::Camera3D;
@@ -404,6 +404,8 @@ pub struct Editor {
     content_watch: Option<ContentWatch>,
     /// Prop models loaded so far, shared by every tab.
     pub models: ModelCache,
+    /// The prop model wireframes the 2D views show while they are turned on.
+    pub model_wires: ModelWires,
     /// The size of the picture each decal texture seen so far projects, shared by every
     /// tab.
     pub decal_sizes: DecalSizes,
@@ -555,6 +557,7 @@ impl Default for Editor {
             materials: None,
             content_watch: None,
             models: ModelCache::new(),
+            model_wires: ModelWires::default(),
             decal_sizes: DecalSizes::new(),
             model_errors: HashMap::new(),
             game_data: None,
@@ -1889,6 +1892,16 @@ impl Editor {
         }
     }
 
+    /// Brings the prop model wireframes up to date with the map and `overlay` while they
+    /// are turned on, and returns whether they are.
+    pub fn refresh_model_wires(&mut self, overlay: &Overlay) -> bool {
+        let shown = self.config.view.model_wireframes;
+        if shown {
+            self.model_wires.update(&self.scene, &self.models, overlay);
+        }
+        shown
+    }
+
     /// Fits the whole map into the three 2D views.
     pub fn fit_2d(&mut self) {
         for index in 0..self.views.len() {
@@ -2247,6 +2260,7 @@ impl Editor {
         let points = self.viewport_rects[slot].size();
         let pixels = [points.x.round().max(1.0) as u32, points.y.round().max(1.0) as u32];
         let grid = self.shown_grid();
+        let wires = self.refresh_model_wires(&overlay).then_some(&self.model_wires);
         let gpu = self.gpu.as_mut()?;
         gpu.render_2d(
             slot,
@@ -2256,6 +2270,7 @@ impl Editor {
             &self.scene,
             &overlay,
             grid,
+            wires,
         );
         let (width, height, rgba) = gpu.read_pixels(slot)?;
         let mut canvas = PixmapCanvas::from_rgba(width, height, rgba)?;
@@ -2311,9 +2326,17 @@ impl Editor {
         let local = Rect::from_min_size(Pos2::ZERO, size);
         let mut canvas = canvas_for(size)?;
         let overlay = self.display_overlay();
+        let mut wires = ModelWires::default();
+        let wires = self.config.view.model_wireframes.then(|| {
+            wires.update(&self.scene, &self.models, &overlay);
+            &wires
+        });
         match self.layout[slot].view_index() {
             None => self.camera.draw(&mut canvas, local, &self.scene, false, &overlay),
-            Some(view) => self.views[view].draw(&mut canvas, local, &self.scene, self.shown_grid(), false, &overlay),
+            Some(view) => {
+                let grid = self.shown_grid();
+                self.views[view].draw(&mut canvas, local, &self.scene, grid, false, &overlay, wires);
+            }
         }
         Ok(canvas)
     }

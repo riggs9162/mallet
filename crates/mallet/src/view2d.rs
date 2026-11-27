@@ -10,6 +10,7 @@ use crate::scene::{
     box_edges, entity_marker_edges, model_origin_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR,
     HANDLE_GRAB_PIXELS, HANDLE_HALF_SIZE, MODEL_ORIGIN_COLOR,
 };
+use crate::scene::{ModelWires, MODEL_WIRE_COLOR};
 use crate::style;
 use crate::transform::HandleMode;
 
@@ -316,8 +317,19 @@ impl View2D {
     /// Draws the grid, every wireframe that overlaps the view, and the corner label.
     ///
     /// Selected meshes are drawn last, in red, where the overlay is moving or resizing them;
-    /// then the block tool's box, the resize handles and this view's selection marquee.
-    pub fn draw(&self, canvas: &mut dyn Canvas, rect: Rect, scene: &Scene, grid: f64, active: bool, overlay: &Overlay) {
+    /// then the prop model wireframes in `wires`, when given, the block tool's box, the
+    /// resize handles and this view's selection marquee.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &self,
+        canvas: &mut dyn Canvas,
+        rect: Rect,
+        scene: &Scene,
+        grid: f64,
+        active: bool,
+        overlay: &Overlay,
+        wires: Option<&ModelWires>,
+    ) {
         let style = style::current();
         canvas.fill(rect, style.background);
         self.draw_grid(canvas, rect, grid);
@@ -337,6 +349,10 @@ impl View2D {
                 continue;
             }
             self.draw_edges(canvas, rect, &mesh.edges, remap.as_ref(), color);
+        }
+        if let Some(wires) = wires {
+            self.draw_edges(canvas, rect, &wires.still, None, MODEL_WIRE_COLOR);
+            self.draw_edges(canvas, rect, &wires.moving, None, MODEL_WIRE_COLOR);
         }
 
         for ([a, b], color) in self.centre_crosses(rect, scene, overlay) {
@@ -385,7 +401,7 @@ impl View2D {
         crosses
     }
 
-    /// The lines of the axis at the origin of every prop model in view, flattened onto
+    /// The lines of the axis at the origin of every selected prop model in view, flattened onto
     /// this view and as long on screen at any zoom.
     pub fn model_origins(&self, rect: Rect, scene: &Scene, overlay: &Overlay) -> Vec<[DVec2; 2]> {
         let view_min = self.to_world(rect, rect.left_bottom());
@@ -394,6 +410,7 @@ impl View2D {
         scene
             .meshes
             .iter()
+            .filter(|mesh| mesh.selected)
             .filter_map(|mesh| mesh.model_transform(overlay, true))
             .filter(|transform| {
                 let origin = self.axis.project(transform.w_axis.truncate());

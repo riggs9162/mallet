@@ -37,6 +37,8 @@ pub enum Action {
     /// Show the displacement vertices the compiler collapses where a displacement meets a
     /// neighbour of a lower power, as Hammer's Displacement Edge Collapse button does.
     ToggleDisplacementEdgeCollapse,
+    /// Show or hide the cyan wireframe of every prop model in the 2D views.
+    ToggleModelWireframes,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,

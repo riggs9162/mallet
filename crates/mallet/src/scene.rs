@@ -2,6 +2,7 @@
 //! plus hit testing for selection.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -358,10 +359,12 @@ impl Overlay {
 const ENTITY_MARKER_HALF_SIZE: f64 = 8.0;
 /// Colour of the marker that shows where an MCP agent's camera is.
 pub const AGENT_CAMERA_COLOR: Color32 = Color32::from_rgb(230, 110, 255);
-/// Colour of the axis drawn at each prop model's origin.
+/// Colour of the axis drawn at each selected prop model's origin.
 pub const MODEL_ORIGIN_COLOR: Color32 = Color32::from_rgb(255, 220, 0);
 /// How far a model origin's axis reaches in the 3D view, in world units.
 pub const MODEL_ORIGIN_LENGTH: f64 = 16.0;
+/// Colour of the prop model wireframes the 2D views can show.
+pub const MODEL_WIRE_COLOR: Color32 = Color32::from_rgb(0, 220, 255);
 /// How far in front of a camera marker its view pyramid reaches, in world units.
 const CAMERA_MARKER_DEPTH: f64 = 64.0;
 /// Half-size of the box drawn where a camera marker stands.
@@ -440,6 +443,113 @@ pub fn model_origin_edges(transform: DMat4, length: f64) -> Vec<[DVec3; 2]> {
         .into_iter()
         .map(|axis| [origin, origin + axis.truncate().normalize_or_zero() * length])
         .collect()
+}
+
+/// Every distinct edge of a model's triangles, in the model's own space. Edges that
+/// several triangles share, or that run along a seam where vertices are split for their
+/// texture coordinates, appear once.
+pub fn model_wire_edges(model: &Model) -> Vec<[DVec3; 2]> {
+    let point = |index: u32| model.vertices.get(index as usize).map(|vertex| vertex.position);
+    let mut seen = HashSet::new();
+    let mut edges = Vec::new();
+    for mesh in &model.meshes {
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+                let (Some(a), Some(b)) = (point(a), point(b)) else {
+                    continue;
+                };
+                let (key_a, key_b) = (a.map(f32::to_bits), b.map(f32::to_bits));
+                if key_a == key_b || !seen.insert(if key_a < key_b { (key_a, key_b) } else { (key_b, key_a) }) {
+                    continue;
+                }
+                edges.push([DVec3::from(a.map(f64::from)), DVec3::from(b.map(f64::from))]);
+            }
+        }
+    }
+    edges
+}
+
+/// A model's own edges, with the address of the model they were made from, so a model
+/// loaded again is read again.
+type LocalWires = (usize, Arc<[[DVec3; 2]]>);
+
+/// The prop model wireframes the 2D views can show, in world space, kept until the
+/// map, the selection, a drag or the loaded models change.
+///
+/// The unselected models' lines and the selected ones' are kept apart, so moving the
+/// selection only rebuilds the lines of the models being moved.
+#[derive(Default)]
+pub struct ModelWires {
+    /// Each loaded model's own edges by model key.
+    local: HashMap<String, LocalWires>,
+    /// What [`Self::still`] was built from; changes whenever it does.
+    pub still_key: u64,
+    /// The lines of every unselected model.
+    pub still: Vec<[DVec3; 2]>,
+    /// What [`Self::moving`] was built from; changes whenever it does.
+    pub moving_key: u64,
+    /// The lines of every selected model, where the current drag puts them.
+    pub moving: Vec<[DVec3; 2]>,
+    /// Whether the lists have been built at least once.
+    built: bool,
+}
+
+impl ModelWires {
+    /// Rebuilds whichever lists no longer match `scene`, `models` and `overlay`.
+    pub fn update(&mut self, scene: &Scene, models: &ModelCache, overlay: &Overlay) {
+        let loaded = models.values().filter(|model| model.is_some()).count();
+        let mut hasher = DefaultHasher::new();
+        (scene.geometry_generation, scene.selection_generation, loaded).hash(&mut hasher);
+        let still_key = hasher.finish();
+        if let Some(remap) = &overlay.transform {
+            for value in remap.matrix.to_cols_array() {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+        let moving_key = hasher.finish();
+        if !self.built || still_key != self.still_key {
+            self.still = self.world_edges(scene.meshes.iter().filter(|mesh| !mesh.selected), models, overlay);
+            self.still_key = still_key;
+        }
+        if !self.built || moving_key != self.moving_key {
+            self.moving = self.world_edges(scene.meshes.iter().filter(|mesh| mesh.selected), models, overlay);
+            self.moving_key = moving_key;
+        }
+        self.built = true;
+    }
+
+    /// The edges of the models `meshes` show, placed in the world.
+    fn world_edges<'a>(
+        &mut self,
+        meshes: impl Iterator<Item = &'a WireMesh>,
+        models: &ModelCache,
+        overlay: &Overlay,
+    ) -> Vec<[DVec3; 2]> {
+        let mut edges = Vec::new();
+        for mesh in meshes {
+            let (Some(instance), Some(transform)) = (&mesh.model, mesh.model_transform(overlay, true)) else {
+                continue;
+            };
+            let Some(Some(model)) = models.get(&instance.key) else {
+                continue;
+            };
+            let address = Arc::as_ptr(model) as usize;
+            let local = match self.local.get(&instance.key) {
+                Some((built, local)) if *built == address => Arc::clone(local),
+                _ => {
+                    let local: Arc<[[DVec3; 2]]> = model_wire_edges(model).into();
+                    self.local.insert(instance.key.clone(), (address, Arc::clone(&local)));
+                    local
+                }
+            };
+            edges.extend(
+                local
+                    .iter()
+                    .map(|[a, b]| [transform.transform_point3(*a), transform.transform_point3(*b)]),
+            );
+        }
+        edges
+    }
 }
 
 impl WireMesh {

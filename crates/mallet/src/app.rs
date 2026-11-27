@@ -94,6 +94,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleSnapToGrid,
     Action::ToggleHalfGridSnap,
     Action::ToggleShowGrid,
+    Action::ToggleModelWireframes,
     Action::SelectionTool,
     Action::CameraTool,
     Action::MagnifyTool,
@@ -617,6 +618,8 @@ impl MalletApp {
                     let half = editor.config.transform.half_grid_snap;
                     menu_toggle(ui, keymap, "Snap to Half Grid", half, Action::ToggleHalfGridSnap, &mut chosen);
                     menu_toggle(ui, keymap, "Show Grid", editor.show_grid, Action::ToggleShowGrid, &mut chosen);
+                    let wires = editor.config.view.model_wireframes;
+                    menu_toggle(ui, keymap, "Model Wireframes in 2D", wires, Action::ToggleModelWireframes, &mut chosen);
                     ui.menu_button("Grid Settings", |ui| {
                         menu_item(ui, keymap, "Smaller Grid", Action::GridSmaller, &mut chosen);
                         menu_item(ui, keymap, "Larger Grid", Action::GridLarger, &mut chosen);
@@ -1685,7 +1688,10 @@ impl MalletApp {
                 view.draw_overlay(canvas, rect, &overlay, response.hovered());
                 vertex_tool::draw_vertex_2d(canvas, &view, rect, editor);
             }
-            None => view.draw(canvas, rect, &editor.scene, editor.shown_grid(), response.hovered(), &overlay),
+            None => {
+                let wires = editor.refresh_model_wires(&overlay).then_some(&editor.model_wires);
+                view.draw(canvas, rect, &editor.scene, editor.shown_grid(), response.hovered(), &overlay, wires);
+            }
         }
         camera_tool::draw_cameras(&painter, &view, rect, editor);
         if let Some(position) = response.hover_pos() {
@@ -1737,6 +1743,7 @@ impl MalletApp {
         let overlay = editor.display_overlay();
         let pixels = editor.slot_pixels(slot);
         let grid = editor.shown_grid();
+        let wires_shown = editor.refresh_model_wires(&overlay);
         let renderer = editor.gpu.get_or_insert_with(|| new_renderer(render_state));
         let (view, recreated) = renderer.render_2d(
             slot,
@@ -1746,6 +1753,7 @@ impl MalletApp {
             &editor.scene,
             &overlay,
             grid,
+            wires_shown.then_some(&editor.model_wires),
         );
         show_texture(render_state, &mut self.slot_textures[slot], view, recreated)
     }
@@ -3088,6 +3096,12 @@ fn run(action: Action, editor: &mut Editor) {
         Action::ToggleShowGrid => {
             editor.show_grid = !editor.show_grid;
             editor.message = format!("Grid {}", if editor.show_grid { "shown" } else { "hidden" });
+        }
+        Action::ToggleModelWireframes => {
+            let shown = !editor.config.view.model_wireframes;
+            editor.config.view.model_wireframes = shown;
+            editor.save_config();
+            editor.message = format!("Model wireframes in the 2D views {}", on_off(shown));
         }
         Action::ToggleDisplacementEdgeCollapse => {
             let shown = !editor.config.view.collapsed_vertices;
