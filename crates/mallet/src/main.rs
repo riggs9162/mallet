@@ -19,6 +19,7 @@ mod canvas;
 mod clipper;
 mod compile;
 mod config;
+mod content_watch;
 mod crash;
 mod cursor_clip;
 mod decals;

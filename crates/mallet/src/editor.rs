@@ -25,6 +25,7 @@ use mallet_content::{default_fgd, parallel_map, GameData, GameFs, Materials};
 use crate::canvas::PixmapCanvas;
 use crate::compile::{CompileJob, Preset};
 use crate::config::Config;
+use crate::content_watch::ContentWatch;
 use crate::document::Document;
 use crate::input::InputFrame;
 use crate::lighting::{load_texture_lights, TextureLights};
@@ -399,6 +400,8 @@ pub struct Editor {
     pub gpu_info: String,
     /// Textures from the configured game, when one is set.
     pub materials: Option<Materials>,
+    /// Watches the game files read so far, so edited materials show without a restart.
+    content_watch: Option<ContentWatch>,
     /// Prop models loaded so far, shared by every tab.
     pub models: ModelCache,
     /// The size of the picture each decal texture seen so far projects, shared by every
@@ -550,6 +553,7 @@ impl Default for Editor {
             timings: FrameTimings::default(),
             gpu_info: String::new(),
             materials: None,
+            content_watch: None,
             models: ModelCache::new(),
             decal_sizes: DecalSizes::new(),
             model_errors: HashMap::new(),
@@ -1944,7 +1948,9 @@ impl Editor {
         })
         .map_err(|error| error.to_string())?;
         let mounts = filesystem.mounts().len();
-        self.materials = Some(Materials::new(filesystem));
+        let materials = Materials::new(filesystem);
+        self.content_watch = Some(ContentWatch::start(&materials.shared_filesystem()));
+        self.materials = Some(materials);
         self.models.clear();
         self.decal_sizes.clear();
         self.model_errors.clear();
@@ -1957,6 +1963,50 @@ impl Editor {
         self.rebuild_scene();
         self.message = format!("Using game content from {} ({mounts} search paths)", game_dir.display());
         Ok(mounts)
+    }
+
+    /// Takes in the game files saved since the last call: the materials that use them are
+    /// read again and the camera view loads their textures again. Returns the keys of the
+    /// materials that changed, such as `brick/brickwall001a`, for the window to drop its
+    /// own pictures of them.
+    pub fn take_content_changes(&mut self) -> Vec<String> {
+        let Some(watch) = &self.content_watch else {
+            return Vec::new();
+        };
+        let changed = watch.take();
+        if changed.is_empty() {
+            return Vec::new();
+        }
+        let Some(materials) = self.materials.as_mut() else {
+            return Vec::new();
+        };
+        let forgotten = materials.forget_changed(&changed);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.reload_changed(&changed, materials);
+        }
+        let mut changed_materials: Vec<String> = changed
+            .iter()
+            .filter_map(|path| path.strip_prefix("materials/")?.strip_suffix(".vmt"))
+            .map(str::to_owned)
+            .chain(forgotten)
+            .collect();
+        changed_materials.sort();
+        changed_materials.dedup();
+        let decals_before = self.decal_sizes.len();
+        self.decal_sizes.retain(|key, _| {
+            let key = key.strip_prefix("materials/").unwrap_or(key);
+            let key = key.strip_suffix(".vmt").unwrap_or(key);
+            changed_materials.binary_search_by(|changed| changed.as_str().cmp(key)).is_err()
+        });
+        if self.decal_sizes.len() != decals_before {
+            self.rebuild_scene();
+        }
+        self.message = match changed_materials.as_slice() {
+            [] => return changed_materials,
+            [only] => format!("Reloaded {only}"),
+            many => format!("Reloaded {} materials", many.len()),
+        };
+        changed_materials
     }
 
     /// Pans every 2D view so a point is in its middle, keeping the zoom.

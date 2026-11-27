@@ -1866,6 +1866,42 @@ impl Renderer3D {
     /// `nature/blendgrass#blend` the second texture of a blended material.
     fn spawn_loads(&mut self, keys: Vec<String>, loader: MaterialLoader) {
         self.loading.extend(keys.iter().cloned());
+        self.spawn_loaders(keys, loader);
+    }
+
+    /// Loads the textures of the materials that use any of the `changed` game files
+    /// again, as [`mallet_content::GameFs::changed_files`] reports them. The textures
+    /// drawn now stay until the new ones arrive.
+    pub fn reload_changed(&mut self, changed: &HashSet<String>, materials: &Materials) {
+        let loader = materials.loader();
+        let keys: Vec<String> = self
+            .textures
+            .keys()
+            .filter(|key| key.as_str() != WHITE_KEY && key.as_str() != world_text::TEXTURE_KEY)
+            .filter(|key| !self.loading.contains(*key))
+            .cloned()
+            .collect();
+        let uses = mallet_content::parallel_map(&keys, |key| {
+            let material = split_layer_key(key)
+                .map(|(material, _)| material)
+                .or_else(|| sprites::split_frame_key(key).map(|(material, _)| material))
+                .unwrap_or(key);
+            loader.uses_any(material, changed)
+        });
+        let mut keys: Vec<String> = keys
+            .into_iter()
+            .zip(uses)
+            .filter_map(|(key, uses)| uses.then_some(key))
+            .collect();
+        if keys.is_empty() {
+            return;
+        }
+        keys.sort();
+        self.spawn_loaders(keys, loader);
+    }
+
+    /// Starts the background threads that load the textures of `keys`.
+    fn spawn_loaders(&mut self, keys: Vec<String>, loader: MaterialLoader) {
         let (sender, receiver) = mpsc::sync_channel(LOADED_QUEUE);
         self.incoming.push(receiver);
         let cores = std::thread::available_parallelism().map_or(4, usize::from);

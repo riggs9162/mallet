@@ -2248,6 +2248,24 @@ const SOUND_UPDATE_INTERVAL: Duration = Duration::from_millis(40);
 
 impl MalletApp {
     /// Handles input and draws the window for one frame.
+    /// Drops the window's own pictures of materials whose files were saved again, and
+    /// looks for such files again about every second while a game is mounted.
+    fn take_content_changes(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        if editor.materials.is_none() {
+            return;
+        }
+        ctx.request_repaint_after(crate::content_watch::POLL_INTERVAL);
+        let changed = editor.take_content_changes();
+        if changed.is_empty() {
+            return;
+        }
+        self.texture_previews.retain(|name, _| {
+            let key = name.replace('\\', "/").to_ascii_lowercase();
+            changed.binary_search(&key).is_err()
+        });
+        self.texture_browser.forget(&changed);
+    }
+
     fn frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame, editor: &mut Editor) {
         let update_started = Instant::now();
         editor.timings.previous_frame_cpu_ms = frame.info().cpu_usage.map_or(0.0, |seconds| seconds * 1000.0);
@@ -2266,6 +2284,7 @@ impl MalletApp {
         editor.timings.recent_intervals_ms = self.net_graph.recent_intervals(40);
         editor.snap_suspended = ctx.input(|input| input.modifiers.alt);
         editor.autosave.pointer_held = ctx.input(|input| input.pointer.any_down());
+        self.take_content_changes(ctx, editor);
         self.handle_input(ctx, editor);
         take_window_shot(ctx, editor);
         self.update_title(ctx, editor);

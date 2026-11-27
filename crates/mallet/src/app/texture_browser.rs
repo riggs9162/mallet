@@ -318,6 +318,19 @@ impl TextureBrowserState {
         }
     }
 
+    /// Loads the thumbnails and descriptions of `materials` again, after their files
+    /// were saved.
+    pub(super) fn forget(&mut self, materials: &[String]) {
+        for name in materials {
+            self.thumbnails.remove(name);
+            if let Some(loader) = &self.index_loader {
+                if self.info.contains_key(name) {
+                    self.info.insert(name.clone(), loader.describe(name));
+                }
+            }
+        }
+    }
+
     /// Takes in the listing, material descriptions and finished thumbnails.
     fn receive(&mut self, ctx: &egui::Context) {
         if let Some((_, receiver)) = &self.list_receiver {
