@@ -480,6 +480,8 @@ pub struct Editor {
     /// Whether the soundscape browser is showing, and a filter an MCP tool asked for.
     pub soundscape_browser_open: bool,
     pub soundscape_browser_filter: Option<String>,
+    pub sky_browser_open: bool,
+    pub sky_browser_filter: Option<String>,
     /// The soundscape the entity tool gives new soundscape entities; empty to keep the
     /// class's own default.
     pub new_soundscape: String,
@@ -594,6 +596,8 @@ impl Default for Editor {
             model_browser_filter: None,
             soundscape_browser_open: false,
             soundscape_browser_filter: None,
+            sky_browser_open: false,
+            sky_browser_filter: None,
             new_soundscape: String::new(),
             prop_model: String::new(),
             model_list: None,

@@ -45,6 +45,7 @@ mod render3d;
 mod scene;
 mod sheet;
 mod shell;
+mod sky_render;
 mod sound;
 mod style;
 mod tools;

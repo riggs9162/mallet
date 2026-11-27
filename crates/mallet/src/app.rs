@@ -24,6 +24,7 @@ mod quit;
 mod recovery;
 mod run_map;
 mod select_3d;
+mod sky_browser;
 mod soundscape_browser;
 mod texture_browser;
 mod texture_tool;
@@ -290,6 +291,7 @@ pub struct MalletApp {
     model_browser: model_browser::ModelBrowserState,
     /// The soundscape browser's list and filters.
     soundscape_browser: soundscape_browser::SoundscapeBrowserState,
+    sky_browser: sky_browser::SkyBrowserState,
     /// The Object Properties window's tab, drafts and other state.
     properties: properties::PropertiesState,
     /// The interface scale last applied from Mallet Options, so the window's own zoom
@@ -387,6 +389,7 @@ impl MalletApp {
             texture_browser: texture_browser::TextureBrowserState::default(),
             model_browser: model_browser::ModelBrowserState::default(),
             soundscape_browser: soundscape_browser::SoundscapeBrowserState::default(),
+            sky_browser: sky_browser::SkyBrowserState::default(),
             options: options::OptionsState::default(),
             properties: properties::PropertiesState::default(),
             applied_scale: None,
@@ -553,6 +556,7 @@ impl MalletApp {
         let mut choose_fgds = false;
         let mut browse_models = false;
         let mut browse_soundscapes = false;
+        let mut browse_skies = false;
         let mut recent = RecentChoice::None;
         let mut show_net_graph = editor.config.view.net_graph;
         let mut sound_preview = editor.config.sound.preview;
@@ -781,6 +785,14 @@ impl MalletApp {
                         browse_soundscapes = true;
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Sky Browser...")
+                        .on_hover_text("Look around in each of the game's skies and pick the map's 2D skybox")
+                        .clicked()
+                    {
+                        browse_skies = true;
+                        ui.close_menu();
+                    }
                     menu_item(ui, &self.keymap, "Transform...", Action::Transform, &mut chosen);
                     menu_item(
                         ui,
@@ -844,6 +856,9 @@ impl MalletApp {
         }
         if browse_soundscapes {
             editor.soundscape_browser_open = true;
+        }
+        if browse_skies {
+            editor.sky_browser_open = true;
         }
         if choose_game {
             choose_game_dir(editor);
@@ -2340,6 +2355,7 @@ impl MalletApp {
         self.texture_browser_window(ctx, editor);
         self.model_browser_window(ctx, editor);
         self.soundscape_browser_window(ctx, editor);
+        self.sky_browser_window(ctx, editor);
         self.options_window(ctx, editor);
         self.about_window(ctx, editor);
         self.transform_window(ctx, editor);

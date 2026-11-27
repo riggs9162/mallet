@@ -735,7 +735,7 @@ impl SoundscapeBrowserState {
 /// How many rows the arrow, page, Home and End keys pressed this frame move the list's
 /// selection down, or up when negative. The keys are used up, so nothing behind the
 /// window acts on them as well.
-fn list_steps(ctx: &egui::Context) -> i32 {
+pub(super) fn list_steps(ctx: &egui::Context) -> i32 {
     const PAGE: i32 = 12;
     const END: i32 = 1_000_000;
     let keys = [

@@ -133,6 +133,15 @@ Behind everything, where no face covers the view, the 3D views show the 2D skybo
 worldspawn's sky name picks (or Garry's Mod's painted sky), as the void past the map
 looks in Hammer++. Hide the sky textures to see it through the map's sky faces.
 
+Tools > Sky Browser lists every 2D skybox among the game's materials, with the same
+search as the other browsers, and shows the clicked one around you in a live 3D preview:
+drag to look around, scroll to zoom, double-click to look ahead again, and tick Turn
+slowly to let it turn by itself. The sun shows where the map's `env_sun` (or the painted
+sky) puts it. Skies with sides missing are marked, and so are those with an HDR version.
+Double-click a sky, or press Use as the map's sky, to make it worldspawn's sky name; the
+3D views show it behind the map at once, and the browser stays open to try others. The
+`skyname` key in Map Properties has a Browse button that opens it too.
+
 The 2D views show the 3D view's camera: a circle where it stands and its view pyramid,
 as wide as the field of view and as tall as the 3D view's picture, so you can see what the
 camera sees from above and the sides. The camera button beside a 3D viewport's label
