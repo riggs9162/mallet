@@ -12,6 +12,7 @@
 
 mod glow;
 mod lit;
+mod sky;
 mod sprites;
 
 pub use lit::{LightingInput, LightingStats};
@@ -32,8 +33,7 @@ use mallet_content::vtf::{Encoding, Level, Mips};
 use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, TextureTransform, Water};
 use mallet_vmf::displacement::Surface as DisplacementSurface;
 
-use crate::config::LightingOptions;
-use crate::lighting::{SkyMode, TextureLights};
+use crate::lighting::TextureLights;
 use crate::scene::{
     box_edges, entity_marker_edges, model_origin_edges, ModelCache, Overlay, Owner, Remap, Scene, SceneFace, WireMesh,
     AGENT_CAMERA_COLOR, MODEL_ORIGIN_COLOR, MODEL_ORIGIN_LENGTH,
@@ -106,8 +106,10 @@ pub struct ViewFilter {
     /// Editor-only helpers: point entity boxes, editor sprites and the editor models some
     /// classes show.
     pub helpers: bool,
-    /// The map's skybox on sky faces in the lighting preview, instead of black.
-    pub skybox: bool,
+    /// Nodraw faces.
+    pub nodraw: bool,
+    /// Sky faces: toolsskybox and the other materials that show the 2D skybox in the game.
+    pub sky_textures: bool,
 }
 
 /// One corner of a brush face on the GPU. The textured view shades it by its normal, as
@@ -279,13 +281,13 @@ impl MaterialFacts {
     }
 
     /// The material uniform the shaders read: the alpha mode as [`alpha_uniform`] puts it,
-    /// lighting flags (1 self-illum, 2 sky, 4 unlit, 8 texture light), the self-illum
-    /// tint, and the colour of the texture light it is, if any.
+    /// lighting flags (1 self-illum, 4 unlit, 8 texture light), the self-illum tint, and
+    /// the colour of the texture light it is, if any. Sky, nodraw and the other tool
+    /// textures are unlit, so the lighting preview draws them full bright as Hammer++ does.
     fn uniform(&self, emissive: Option<DVec3>) -> [f32; 12] {
         let [test, blend] = alpha_uniform(self.alpha);
         let flags = u32::from(self.self_illum.is_some())
-            | (u32::from(self.surface == Surface::Sky) << 1)
-            | (u32::from(self.unlit) << 2)
+            | (u32::from(self.unlit || matches!(self.surface, Surface::Sky | Surface::Tool | Surface::Nodraw)) << 2)
             | (u32::from(emissive.is_some()) << 3);
         let [r, g, b] = self.self_illum.unwrap_or([1.0; 3]);
         let glow = emissive.map_or([0.0; 3], |color| {
@@ -544,6 +546,8 @@ pub struct Renderer3D {
     model_pipeline: wgpu::RenderPipeline,
     translucent_model_pipeline: wgpu::RenderPipeline,
     sprite_pipelines: sprites::SpritePipelines,
+    /// The 2D skybox behind the 3D camera views.
+    sky: sky::SkyBackground,
     /// When the renderer was made, which animated sprites count their time from.
     started: Instant,
     /// Which slots drew sprites that change over time in their latest draw.
@@ -746,6 +750,7 @@ impl Renderer3D {
         let line_pipeline = lines(Depth::Ignore);
         let flat_line_pipeline = lines(Depth::None);
         let sprite_pipelines = sprites::SpritePipelines::new(device, &face_layout, &shader, gamma_view);
+        let sky = sky::SkyBackground::new(device, queue, &uniform_layout);
         let glow = glow::GlowPipelines::new(device, &face_layout, &shader);
 
         let upload = |mips: Mips, facts| upload(device, queue, &texture_layout, &sampler, &mips, facts, None);
@@ -770,6 +775,7 @@ impl Renderer3D {
             model_pipeline,
             translucent_model_pipeline,
             sprite_pipelines,
+            sky,
             started: Instant::now(),
             animating: [false; 4],
             gpu_models: HashMap::new(),
@@ -828,7 +834,7 @@ impl Renderer3D {
     /// How many materials, and skyboxes and projected textures of the lighting preview,
     /// are still loading in the background.
     pub fn textures_loading(&self) -> usize {
-        self.loading.len() + self.lit.as_ref().map_or(0, lit::LitState::loading)
+        self.loading.len() + self.lit.as_ref().map_or(0, lit::LitState::loading) + usize::from(self.sky.loading())
     }
 
     /// Waits for every background texture load and uploads the results, so a screenshot
@@ -847,6 +853,7 @@ impl Renderer3D {
             }
         }
         self.swap_in();
+        self.sky.finish(&self.device, &self.queue);
         if let Some(lit) = &mut self.lit {
             lit.poll(&self.device, &self.queue, true);
             lit.draw_all_shadows();
@@ -1009,11 +1016,10 @@ impl Renderer3D {
             gamma_view,
         );
         self.poll_loading();
-        let options = LightingOptions {
-            sky: if filter.skybox { SkyMode::Skybox } else { SkyMode::Black },
-            ..lighting.options.clone()
-        };
-        let lighting = LightingInput { options: &options, ..lighting };
+        if style != CameraStyle::Wireframe {
+            let loader = materials.as_deref().map(Materials::loader);
+            self.sky.update(&self.device, &self.queue, scene, loader.as_ref());
+        }
         let lit = style == CameraStyle::Lit;
         let textured = style != CameraStyle::Wireframe;
         if lit {
@@ -1036,6 +1042,7 @@ impl Renderer3D {
                 scene.geometry_generation,
                 scene.selection_generation,
                 self.textures_version,
+                self.sky.version(),
                 lit_fingerprint,
             )
                 .hash(hasher);
@@ -1217,9 +1224,15 @@ impl Renderer3D {
             0,
             bytemuck::cast_slice(&view_uniform(matrix, Some(camera.position.as_vec3()))),
         );
+        if textured {
+            self.sky.prepare(&self.queue, scene, lit && lighting.options.glows);
+        }
         {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_bind_group(0, &target.uniform_group, &[]);
+            if textured {
+                self.sky.draw(&mut pass);
+            }
             let hidden = |key: &str| self.hides(key, filter);
             match (style, &self.faces) {
                 (CameraStyle::Textured, Some(faces)) => {
@@ -1636,10 +1649,17 @@ impl Renderer3D {
     /// Draws every visible prop's opaque meshes. Their see-through ones are drawn later,
     /// sorted with the see-through faces.
     /// Whether faces of material `key` are left out of the 3D views: entity boxes while
-    /// helpers are hidden, and tool textures while those are hidden.
+    /// helpers are hidden, and tool, nodraw and sky faces while each of those is hidden.
     fn hides(&self, key: &str, filter: ViewFilter) -> bool {
-        (key == WHITE_KEY && !filter.helpers)
-            || (!filter.tool_textures && matches!(self.texture_for(key).surface, Surface::Tool | Surface::Nodraw))
+        if key == WHITE_KEY {
+            return !filter.helpers;
+        }
+        match self.texture_for(key).surface {
+            Surface::Tool => !filter.tool_textures,
+            Surface::Nodraw => !filter.nodraw,
+            Surface::Sky => !filter.sky_textures,
+            _ => false,
+        }
     }
 
     fn draw_models<'a>(

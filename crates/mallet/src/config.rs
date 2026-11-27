@@ -155,10 +155,6 @@ pub struct LightingOptions {
     pub shadow_softness: f64,
     /// Props cast shadows.
     pub prop_shadows: bool,
-    /// What sky faces show, set for each frame from the toolbar's Skybox toggle and never
-    /// saved.
-    #[serde(skip)]
-    pub sky: crate::lighting::SkyMode,
     /// env_fog_controller's fog.
     pub fog: bool,
     /// Glow sprites, light glows, the sun's glow and spotlight beams.
@@ -198,7 +194,6 @@ impl Default for LightingOptions {
             small_shadow_size: 128,
             shadow_softness: 1.0,
             prop_shadows: true,
-            sky: crate::lighting::SkyMode::Black,
             fog: true,
             glows: true,
             helpers: crate::lighting::HelperMode::Selected,
@@ -906,15 +901,16 @@ pub struct ViewOptions {
     pub collapsed_vertices: bool,
     /// Draw every prop model's triangles as a cyan wireframe in the 2D views.
     pub model_wireframes: bool,
-    /// Draw faces the game never draws in the 3D views: nodraw, clip, trigger, hint, skip
-    /// and the other tool textures.
+    /// Draw tool faces the compilers remove in the 3D views: clip, trigger, hint, skip,
+    /// origin, areaportal and the like.
     pub tool_textures: bool,
+    /// Draw nodraw faces in the 3D views.
+    pub nodraw: bool,
+    /// Draw sky faces in the 3D views; hidden, the 2D skybox behind them shows through.
+    pub sky_textures: bool,
     /// Draw editor-only helpers in the 3D views: point entity boxes, editor sprites and
     /// the editor models some classes show.
     pub helpers: bool,
-    /// Draw the map's skybox, named by worldspawn's sky name, on sky faces in the lighting
-    /// preview; off leaves them black, as the void past the map.
-    pub skybox: bool,
     /// How far the 3D view draws, in units.
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
@@ -962,7 +958,8 @@ impl Default for ViewOptions {
             model_wireframes: false,
             tool_textures: true,
             helpers: true,
-            skybox: false,
+            nodraw: true,
+            sky_textures: true,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_preview: true,

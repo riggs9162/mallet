@@ -122,11 +122,16 @@ grid size with Snap to Grid and Show Grid, the texture and rotation locks, the g
 Check for Problems, Entity Report, Map Properties and Run Map. It wraps onto a second row
 when the window is too narrow for one.
 
-As in Hammer++, two toolbar toggles (also under View) choose what the 3D views draw besides
+As in Hammer++, toolbar toggles (also under View) choose what the 3D views draw besides
 the map as the game shows it, in the textured view and the lighting preview alike: Tool
-Textures (Ctrl+Shift+F2) shows nodraw, clip, trigger, hint, skip and the other faces the
-game never draws, and Editor Helpers (Alt+O) shows point entity boxes, editor sprites and
-the editor models some classes show, such as AI nodes.
+Textures (Ctrl+Shift+F2) shows clip, trigger, hint, skip and the other tool faces the
+compilers remove, Nodraw shows nodraw faces, Sky Textures shows sky faces, and Editor
+Helpers (Alt+O) shows point entity boxes, editor sprites and the editor models some classes
+show, such as AI nodes.
+
+Behind everything, where no face covers the view, the 3D views show the 2D skybox
+worldspawn's sky name picks (or Garry's Mod's painted sky), as the void past the map
+looks in Hammer++. Hide the sky textures to see it through the map's sky faces.
 
 The 2D views show the 3D view's camera: a circle where it stands and its view pyramid,
 as wide as the field of view and as tall as the 3D view's picture, so you can see what the
@@ -313,9 +318,9 @@ hard falloff, `_distance`, spotlight cones and focus, `pitch`, `angles` and aim 
 | `env_sprite`, `env_sprite_oriented` | Their sprite, drawn as the game draws it in both 3D views: render mode, colour, scale, orientation and animation; Glow sprites keep their size on screen, fade past 1200 units and hide behind walls. The preview also fogs them, scales them by the exposure and `HDRColorScale`, and hides named sprites that start off |
 | `env_fog_controller`, `env_skypaint` | Fog, and Garry's Mod's painted sky |
 
-Sky faces are black, as the void past the map; the toolbar's Skybox toggle (also under
-View) shows the skybox worldspawn's sky name picks instead. Tool textures and editor
-helpers follow the toolbar's toggles, as in the textured view. Lights that start dark are
+The preview draws everything the textured view does and only adds light: sky, nodraw
+and the other tool textures stay full bright, as in Hammer++, and follow the toolbar's
+toggles, as do editor helpers. Lights that start dark are
 left off, and flickering or pulsing appearances can play. Shadows come from the sun,
 from sky light and from the lights nearest and brightest around the camera, and many
 more lights past those get small shadow maps, drawn a few each frame; only lights past

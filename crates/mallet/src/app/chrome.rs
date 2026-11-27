@@ -286,21 +286,27 @@ impl MalletApp {
                     ),
                     (
                         icon::TOOLBOX,
-                        "Tool textures: show nodraw, clip, trigger, hint, skip and the other faces the game never draws in the 3D views",
+                        "Tool textures: show clip, trigger, hint, skip and the other tool faces the compilers remove in the 3D views",
                         Action::ToggleToolTextures,
                         editor.config.view.tool_textures,
+                    ),
+                    (
+                        icon::PROHIBIT,
+                        "Nodraw: show nodraw faces in the 3D views",
+                        Action::ToggleNodraw,
+                        editor.config.view.nodraw,
+                    ),
+                    (
+                        icon::CLOUD_SUN,
+                        "Sky textures: show sky faces in the 3D views; hide them to see the 2D skybox behind",
+                        Action::ToggleSkyTextures,
+                        editor.config.view.sky_textures,
                     ),
                     (
                         icon::STICKER,
                         "Editor helpers: show point entity boxes, editor sprites and editor models in the 3D views",
                         Action::ToggleHelpers,
                         editor.config.view.helpers,
-                    ),
-                    (
-                        icon::CLOUD_SUN,
-                        "Skybox: show the map's skybox on sky faces in the lighting preview instead of the black void",
-                        Action::ToggleSkybox,
-                        editor.config.view.skybox,
                     ),
                     (
                         icon::DOTS_NINE,

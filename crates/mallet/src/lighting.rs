@@ -33,17 +33,6 @@ impl Tonemap {
     }
 }
 
-/// What sky faces show in the lighting preview.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkyMode {
-    /// The map's skybox textures, or Garry's Mod's painted sky.
-    Skybox,
-    /// Black, as the void past the map.
-    #[default]
-    Black,
-}
-
 /// How finely brush faces are lit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

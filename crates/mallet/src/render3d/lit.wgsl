@@ -1,6 +1,6 @@
 // Shaders for the lighting preview: every light of the map with Source's colours,
 // falloff and cones, shadow maps, sky light, projected textures, texture lights,
-// self-illumination, the skybox, fog and tone mapping. Also the depth-only shaders that
+// self-illumination, fog and tone mapping. Also the depth-only shaders that
 // draw shadow maps, the passes that bake light into faces' luxels, and the additive
 // glows and spotlight beams.
 
@@ -9,7 +9,7 @@ struct View {
 };
 
 // Per material: x alpha-test reference and y opacity, as `premultiplied` reads them,
-// z flags (1 self-illum, 2 sky, 4 unlit, 8 texture light); then the self-illum tint and
+// z flags (1 self-illum, 4 unlit, 8 texture light); then the self-illum tint and
 // the texture light's colour.
 struct Material {
     alpha: vec4<f32>,
@@ -33,16 +33,6 @@ struct Frame {
     fog_dir: vec4<f32>,
     // x: fog start; y: fog end.
     fog_range: vec4<f32>,
-    // rgb: flat sky colour; w: sky mode (0 black, 1 flat, 2 skybox, 3 painted).
-    sky_color: vec4<f32>,
-    // Painted sky: top colour and fade bias, bottom colour and dusk scale, dusk colour and
-    // intensity.
-    sky_top: vec4<f32>,
-    sky_bottom: vec4<f32>,
-    sky_dusk: vec4<f32>,
-    // xyz: direction towards the sun glow; w: cosine of its radius (2 for none).
-    sun_glow: vec4<f32>,
-    sun_glow_color: vec4<f32>,
     // xyz: the light grid's lowest corner; w: its cell size.
     grid_origin: vec4<f32>,
     // xyz: cells along each axis; w: lights at the start of the list that light everywhere.
@@ -102,7 +92,6 @@ struct LuxelFace {
 const NO_FACE: u32 = 0xffffffffu;
 
 const FLAG_SELF_ILLUM: u32 = 1u;
-const FLAG_SKY: u32 = 2u;
 const FLAG_UNLIT: u32 = 4u;
 const FLAG_EMISSIVE: u32 = 8u;
 
@@ -120,7 +109,6 @@ const FLAG_EMISSIVE: u32 = 8u;
 @group(2) @binding(7) var sky_shadows: texture_depth_2d_array;
 @group(2) @binding(8) var shadow_sampler: sampler_comparison;
 @group(2) @binding(9) var cookies: texture_2d_array<f32>;
-@group(2) @binding(10) var sky_faces: texture_2d_array<f32>;
 @group(2) @binding(11) var clamp_sampler: sampler;
 @group(2) @binding(12) var<storage, read> sky_samples: array<vec4<f32>>;
 @group(2) @binding(13) var atlas_shadows: texture_depth_2d_array;
@@ -459,71 +447,6 @@ fn baked(face: u32, world: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(textureSampleLevel(luxel_light, clamp_sampler, uv, 0.0).rgb, 1.0);
 }
 
-fn skybox(direction: vec3<f32>) -> vec3<f32> {
-    let size = abs(direction);
-    var layer = 0;
-    var s = 0.0;
-    var t = 0.0;
-    if (size.x >= size.y && size.x >= size.z) {
-        if (direction.x > 0.0) {
-            layer = 0;
-            s = -direction.y / size.x;
-        } else {
-            layer = 1;
-            s = direction.y / size.x;
-        }
-        t = direction.z / size.x;
-    } else if (size.y >= size.z) {
-        if (direction.y > 0.0) {
-            layer = 2;
-            s = direction.x / size.y;
-        } else {
-            layer = 3;
-            s = -direction.x / size.y;
-        }
-        t = direction.z / size.y;
-    } else {
-        s = -direction.y / size.z;
-        if (direction.z > 0.0) {
-            layer = 4;
-            t = -direction.x / size.z;
-        } else {
-            layer = 5;
-            t = direction.x / size.z;
-        }
-    }
-    let uv = vec2<f32>((s + 1.0) * 0.5, 1.0 - (t + 1.0) * 0.5);
-    return textureSampleLevel(sky_faces, clamp_sampler, uv, layer, 0.0).rgb;
-}
-
-fn painted(direction: vec3<f32>) -> vec3<f32> {
-    let height = clamp(direction.z, 0.0, 1.0);
-    let fade = pow(height, max(frame.sky_top.w, 0.01));
-    var color = mix(frame.sky_bottom.rgb, frame.sky_top.rgb, fade);
-    let horizon = pow(1.0 - abs(direction.z), max(4.0 / max(frame.sky_bottom.w, 0.05), 0.5));
-    color = color + frame.sky_dusk.rgb * frame.sky_dusk.w * horizon * 0.5;
-    return color;
-}
-
-fn sky(direction: vec3<f32>) -> vec3<f32> {
-    let mode = u32(frame.sky_color.w);
-    var color = frame.sky_color.rgb;
-    if (mode == 0u) {
-        color = vec3<f32>(0.0);
-    } else if (mode == 2u) {
-        color = skybox(direction);
-    } else if (mode == 3u) {
-        color = painted(direction);
-    }
-    if (frame.sun_glow.w < 1.5) {
-        let along = dot(direction, frame.sun_glow.xyz);
-        let core = smoothstep(frame.sun_glow.w, mix(frame.sun_glow.w, 1.0, 0.3), along);
-        let halo = pow(max(along, 0.0), 256.0) * 0.6;
-        color = color + frame.sun_glow_color.rgb * (core + halo);
-    }
-    return color;
-}
-
 fn fogged(color: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     let most = frame.fog_color.w;
     if (most <= 0.0) {
@@ -558,29 +481,25 @@ fn fs_lit(input: LitOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let base = texel.rgb * input.tint.rgb;
     let flags = u32(material.alpha.z);
     var color = base;
-    if ((flags & FLAG_SKY) != 0u) {
-        color = sky(normalize(input.world - frame.eye.xyz));
+    if ((flags & FLAG_UNLIT) == 0u) {
+        var normal = normalize(input.normal);
+        if (!front) {
+            normal = -normal;
+        }
+        let lightmap = baked(input.face, input.world);
+        color = base * (gather(input.world, normal, input.model > 0.5, lightmap.w > 0.5) + lightmap.rgb);
+        if ((flags & FLAG_SELF_ILLUM) != 0u && (frame.options.x & 2u) != 0u) {
+            color = mix(color, base * material.self_illum.rgb, texel.a);
+        }
+        if ((flags & FLAG_EMISSIVE) != 0u && (frame.options.x & 4u) != 0u) {
+            color = max(color, base * material.emissive.rgb);
+        }
+        color = tonemap(color);
+    }
+    if (input.alpha.y < 0.0) {
+        color = fogged(color, input.world) - fogged(vec3<f32>(0.0), input.world);
     } else {
-        if ((flags & FLAG_UNLIT) == 0u) {
-            var normal = normalize(input.normal);
-            if (!front) {
-                normal = -normal;
-            }
-            let lightmap = baked(input.face, input.world);
-            color = base * (gather(input.world, normal, input.model > 0.5, lightmap.w > 0.5) + lightmap.rgb);
-            if ((flags & FLAG_SELF_ILLUM) != 0u && (frame.options.x & 2u) != 0u) {
-                color = mix(color, base * material.self_illum.rgb, texel.a);
-            }
-            if ((flags & FLAG_EMISSIVE) != 0u && (frame.options.x & 4u) != 0u) {
-                color = max(color, base * material.emissive.rgb);
-            }
-            color = tonemap(color);
-        }
-        if (input.alpha.y < 0.0) {
-            color = fogged(color, input.world) - fogged(vec3<f32>(0.0), input.world);
-        } else {
-            color = fogged(color, input.world);
-        }
+        color = fogged(color, input.world);
     }
     color = mix(color, vec3<f32>(1.0, 0.0, 0.0), input.highlight);
     return premultiplied(color, texel.a, input.alpha);

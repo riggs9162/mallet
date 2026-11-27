@@ -39,13 +39,15 @@ pub enum Action {
     ToggleDisplacementEdgeCollapse,
     /// Show or hide the cyan wireframe of every prop model in the 2D views.
     ToggleModelWireframes,
-    /// Show or hide tool textures (nodraw, clip, trigger and the like) in the 3D views.
+    /// Show or hide tool textures (clip, trigger, hint and the like) in the 3D views.
     ToggleToolTextures,
     /// Show or hide editor-only helpers (entity boxes, editor sprites and editor models)
     /// in the 3D views.
     ToggleHelpers,
-    /// Show the map's skybox on sky faces in the lighting preview, or leave them black.
-    ToggleSkybox,
+    /// Show or hide nodraw faces in the 3D views.
+    ToggleNodraw,
+    /// Show or hide sky faces in the 3D views, which uncovers the 2D skybox behind them.
+    ToggleSkyTextures,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,

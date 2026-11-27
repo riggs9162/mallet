@@ -99,7 +99,8 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleModelWireframes,
     Action::ToggleToolTextures,
     Action::ToggleHelpers,
-    Action::ToggleSkybox,
+    Action::ToggleNodraw,
+    Action::ToggleSkyTextures,
     Action::SelectionTool,
     Action::CameraTool,
     Action::MagnifyTool,
@@ -679,8 +680,10 @@ impl MalletApp {
                     menu_toggle(ui, keymap, "Tool Textures", tools, Action::ToggleToolTextures, &mut chosen);
                     let helpers = editor.config.view.helpers;
                     menu_toggle(ui, keymap, "Editor Helpers", helpers, Action::ToggleHelpers, &mut chosen);
-                    let skybox = editor.config.view.skybox;
-                    menu_toggle(ui, keymap, "Skybox", skybox, Action::ToggleSkybox, &mut chosen);
+                    let nodraw = editor.config.view.nodraw;
+                    menu_toggle(ui, keymap, "Nodraw", nodraw, Action::ToggleNodraw, &mut chosen);
+                    let sky = editor.config.view.sky_textures;
+                    menu_toggle(ui, keymap, "Sky Textures", sky, Action::ToggleSkyTextures, &mut chosen);
                     menu_toggle(
                         ui,
                         keymap,
@@ -3122,11 +3125,17 @@ fn run(action: Action, editor: &mut Editor) {
             editor.save_config();
             editor.message = format!("Tool textures in the 3D views {}", if shown { "shown" } else { "hidden" });
         }
-        Action::ToggleSkybox => {
-            let shown = !editor.config.view.skybox;
-            editor.config.view.skybox = shown;
+        Action::ToggleNodraw => {
+            let shown = !editor.config.view.nodraw;
+            editor.config.view.nodraw = shown;
             editor.save_config();
-            editor.message = format!("Skybox in the lighting preview {}", if shown { "shown" } else { "hidden" });
+            editor.message = format!("Nodraw in the 3D views {}", if shown { "shown" } else { "hidden" });
+        }
+        Action::ToggleSkyTextures => {
+            let shown = !editor.config.view.sky_textures;
+            editor.config.view.sky_textures = shown;
+            editor.save_config();
+            editor.message = format!("Sky textures in the 3D views {}", if shown { "shown" } else { "hidden" });
         }
         Action::ToggleHelpers => {
             let shown = !editor.config.view.helpers;

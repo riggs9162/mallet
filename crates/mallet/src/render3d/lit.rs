@@ -1,6 +1,6 @@
 //! The lighting preview: the camera view lit the way Source lights a map, from every
 //! light entity, the sun and sky light, texture lights, self-illuminated materials,
-//! projected textures, glows, the skybox and fog.
+//! projected textures, glows and fog. Tool textures stay full bright, as in Hammer++.
 //!
 //! Lights are gathered from the scene's lighting and the texture lights of `lights.rad`
 //! whenever the map, the settings or a dragged light change, and are sorted into a grid
@@ -40,7 +40,7 @@ use super::{
     ModelInstanceData, RenderStats, Renderer3D, Translucent, COLOR_FORMAT, WHITE_KEY,
 };
 use crate::config::LightingOptions;
-use crate::lighting::{HelperMode, LightingDetail, SkyMode, TextureLights, Tonemap};
+use crate::lighting::{HelperMode, LightingDetail, TextureLights, Tonemap};
 use crate::scene::{Overlay, Owner, Scene, SceneFace};
 use crate::view3d::Camera3D;
 
@@ -50,10 +50,6 @@ const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SKY_SHADOW_SIZE: u32 = 1024;
 /// Pixels across the textures projected textures project, once scaled.
 const COOKIE_SIZE: u32 = 256;
-/// Pixels across each skybox face, once scaled.
-const SKY_FACE_SIZE: u32 = 512;
-/// Skybox face names, in the order the shader reads them: +X, -X, +Y, -Y, up, down.
-const SKY_SUFFIXES: [&str; 6] = ["rt", "lf", "bk", "ft", "up", "dn"];
 /// Texture lights are split into patches about this far apart, as VRAD chops faces.
 const PATCH_SPACING: f64 = 128.0;
 /// The most patches along one side of a texture light face.
@@ -176,12 +172,6 @@ struct GpuFrame {
     fog_color2: [f32; 4],
     fog_dir: [f32; 4],
     fog_range: [f32; 4],
-    sky_color: [f32; 4],
-    sky_top: [f32; 4],
-    sky_bottom: [f32; 4],
-    sky_dusk: [f32; 4],
-    sun_glow: [f32; 4],
-    sun_glow_color: [f32; 4],
     grid_origin: [f32; 4],
     grid_size: [u32; 4],
     options: [u32; 4],
@@ -349,14 +339,14 @@ impl ShadowSet {
 }
 
 /// An RGBA texture array sampled by the shader: projected textures or skybox faces.
-struct ImageArray {
+pub(super) struct ImageArray {
     _texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    pub(super) view: wgpu::TextureView,
 }
 
 impl ImageArray {
     /// Uploads square layers of `size` pixels; at least one white layer when there are none.
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, layers: &[Vec<u8>], label: &str) -> Self {
+    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, layers: &[Vec<u8>], label: &str) -> Self {
         let white = vec![255u8; (size * size * 4) as usize];
         let layers: Vec<&[u8]> = if layers.is_empty() {
             vec![&white]
@@ -1013,7 +1003,7 @@ struct PropCaster {
 
 /// Something made on a worker thread for the preview, by default textures, with what it
 /// is for.
-type Loading<T, R = Vec<Option<Vec<u8>>>> = Option<(T, mpsc::Receiver<R>)>;
+pub(super) type Loading<T, R = Vec<Option<Vec<u8>>>> = Option<(T, mpsc::Receiver<R>)>;
 
 /// Everything the lighting preview keeps between frames.
 pub(super) struct LitState {
@@ -1047,11 +1037,6 @@ pub(super) struct LitState {
     cookies: ImageArray,
     cookie_names: Vec<String>,
     cookie_loading: Loading<Vec<String>>,
-    skybox: ImageArray,
-    /// The skybox last loaded, and whether all six of its faces were found.
-    sky_name: Option<String>,
-    sky_ready: bool,
-    sky_loading: Loading<String>,
     group: Option<wgpu::BindGroup>,
     /// What the gathered lights were made from, and what the light grid was sorted from;
     /// a dragged light changes the first but not the second, as it lights everywhere.
@@ -1156,7 +1141,6 @@ impl LitState {
                     count: None,
                 },
                 color_array(9),
-                color_array(10),
                 wgpu::BindGroupLayoutEntry {
                     binding: 11,
                     visibility: fragment,
@@ -1362,10 +1346,6 @@ impl LitState {
             cookies: ImageArray::new(device, queue, 1, &[], "mallet projected textures"),
             cookie_names: Vec::new(),
             cookie_loading: None,
-            skybox: ImageArray::new(device, queue, 1, &[], "mallet skybox"),
-            sky_name: None,
-            sky_ready: false,
-            sky_loading: None,
             group: None,
             layout,
             lights_key: None,
@@ -1397,7 +1377,6 @@ impl LitState {
     /// included.
     pub(super) fn loading(&self) -> usize {
         usize::from(self.cookie_loading.is_some())
-            + usize::from(self.sky_loading.is_some())
             + usize::from(self.luxel_loading.is_some())
     }
 
@@ -1427,8 +1406,8 @@ impl LitState {
         })
     }
 
-    /// Takes in projected textures and skybox faces that finished loading; with `wait`,
-    /// waits for those still loading, as screenshots do.
+    /// Takes in projected textures that finished loading; with `wait`, waits for those
+    /// still loading, as screenshots do.
     pub(super) fn poll(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, wait: bool) {
         let receive = |receiver: &mpsc::Receiver<Vec<Option<Vec<u8>>>>| {
             if wait {
@@ -1453,29 +1432,11 @@ impl LitState {
                 Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
-        if let Some((name, receiver)) = self.sky_loading.take() {
-            match receive(&receiver) {
-                Ok(faces) => {
-                    self.sky_ready = faces.iter().all(Option::is_some);
-                    let layers: Vec<Vec<u8>> = faces.into_iter().flatten().collect();
-                    self.skybox = if self.sky_ready {
-                        ImageArray::new(device, queue, SKY_FACE_SIZE, &layers, "mallet skybox")
-                    } else {
-                        ImageArray::new(device, queue, 1, &[], "mallet skybox")
-                    };
-                    self.sky_name = Some(name);
-                    self.group = None;
-                    self.version += 1;
-                }
-                Err(mpsc::TryRecvError::Empty) => self.sky_loading = Some((name, receiver)),
-                Err(mpsc::TryRecvError::Disconnected) => {}
-            }
-        }
     }
 
-    /// Starts loading the projected textures and skybox the map asks for, when they are
-    /// not loaded or loading already.
-    fn request_textures(&mut self, scene: &Scene, loader: Option<&MaterialLoader>, options: &LightingOptions) {
+    /// Starts loading the projected textures the map asks for, when they are not loaded or
+    /// loading already.
+    fn request_textures(&mut self, scene: &Scene, loader: Option<&MaterialLoader>) {
         let Some(loader) = loader else {
             return;
         };
@@ -1514,34 +1475,6 @@ impl LitState {
                 self.cookie_loading = Some((names, receiver));
             }
         }
-        let sky = scene.lighting.sky.name.trim().to_ascii_lowercase();
-        let sky_wanted = options.sky == SkyMode::Skybox
-            && !sky.is_empty()
-            && sky != "painted"
-            && self.sky_name.as_deref() != Some(sky.as_str())
-            && self.sky_loading.as_ref().is_none_or(|(loading, _)| *loading != sky);
-        if sky_wanted {
-            let (sender, receiver) = mpsc::channel();
-            let loader = loader.clone();
-            let name = sky.clone();
-            let spawned = std::thread::Builder::new()
-                .name("mallet skybox".to_owned())
-                .spawn(move || {
-                    let faces = SKY_SUFFIXES
-                        .iter()
-                        .map(|suffix| {
-                            let material = loader.load(&format!("skybox/{name}{suffix}"));
-                            let image = material.texture?;
-                            let half = image.pixel_width >= image.pixel_height * 2;
-                            Some(square(&image, SKY_FACE_SIZE, half))
-                        })
-                        .collect();
-                    let _ = sender.send(faces);
-                });
-            if spawned.is_ok() {
-                self.sky_loading = Some((sky, receiver));
-            }
-        }
     }
 
     /// Gets the lights, the light grid and the shadow maps ready for a frame, drawing the
@@ -1561,7 +1494,7 @@ impl LitState {
         let options = input.options;
         let device = &renderer.device;
         let queue = &renderer.queue;
-        self.request_textures(scene, loader, options);
+        self.request_textures(scene, loader);
         let settled = if renderer.loading.is_empty() {
             renderer.textures_version
         } else {
@@ -2471,7 +2404,6 @@ impl LitState {
             eye: four(rgb(camera.position), options.exposure_scale() as f32),
             fill: four([options.fill_light() as f32; 3], options.bounce_share() as f32),
             sky_light: four(rgb(ambient.filter(|_| options.sky_light).unwrap_or(DVec3::ZERO)), 0.0),
-            sun_glow: [0.0, 0.0, 1.0, 2.0],
             grid_origin: four(self.grid.origin.to_array(), self.grid.cell),
             grid_size: [
                 self.grid.size[0],
@@ -2504,41 +2436,6 @@ impl LitState {
             }
             frame.fog_range = [fog.start as f32, fog.end as f32, 0.0, 0.0];
         }
-        let flat = ambient
-            .filter(|ambient| ambient.max_element() > 0.0)
-            .map_or(DVec3::new(0.35, 0.5, 0.75), |ambient| {
-                ambient / ambient.max_element() * 0.7
-            });
-        let painted = lighting.sky.name.eq_ignore_ascii_case("painted") && lighting.sky.paint.is_some();
-        let skybox_ready = self.sky_ready
-            && self
-                .sky_name
-                .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case(lighting.sky.name.trim()));
-        let mode = match options.sky {
-            SkyMode::Black => 0.0,
-            SkyMode::Skybox if painted => 3.0,
-            SkyMode::Skybox if skybox_ready => 2.0,
-            SkyMode::Skybox => 1.0,
-        };
-        frame.sky_color = four(rgb(flat), mode);
-        if let Some(paint) = &lighting.sky.paint {
-            frame.sky_top = four(rgb(paint.top), paint.fade_bias as f32);
-            frame.sky_bottom = four(rgb(paint.bottom), paint.dusk_scale as f32);
-            frame.sky_dusk = four(rgb(paint.dusk_color), paint.dusk_intensity as f32);
-        }
-        let glow = lighting.sky.sun.or_else(|| {
-            lighting
-                .sky
-                .paint
-                .filter(|_| painted)
-                .map(|paint| (paint.sun_normal, paint.sun_color * 4.0, paint.sun_size.max(0.5)))
-        });
-        if let (Some((toward, color, size)), true) = (glow, options.glows && options.sky != SkyMode::Black) {
-            let toward = toward.normalize_or(DVec3::Z);
-            frame.sun_glow = four(rgb(toward), size.clamp(0.1, 30.0).to_radians().cos() as f32);
-            frame.sun_glow_color = four(rgb(color), 0.0);
-        }
         frame
     }
 
@@ -2566,7 +2463,6 @@ impl LitState {
                     resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
                 },
                 view(9, &self.cookies.view),
-                view(10, &self.skybox.view),
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: wgpu::BindingResource::Sampler(&self.clamp_sampler),
@@ -2814,7 +2710,7 @@ fn max_layers(device: &wgpu::Device) -> u32 {
 /// Scales an image to a square of `side` pixels, nearest pixel. With `upper_half`, the
 /// image fills the upper half and its bottom row is repeated below, as half-height
 /// skybox sides are drawn.
-fn square(image: &mallet_content::vtf::Image, side: u32, upper_half: bool) -> Vec<u8> {
+pub(super) fn square(image: &mallet_content::vtf::Image, side: u32, upper_half: bool) -> Vec<u8> {
     let (width, height) = (image.pixel_width.max(1), image.pixel_height.max(1));
     let mut pixels = Vec::with_capacity((side * side * 4) as usize);
     for y in 0..side {
