@@ -12,6 +12,7 @@ mod entity_report;
 mod entity_tools;
 pub(crate) use compile_window::count;
 mod map_dialogs;
+mod asset_browser;
 mod model_browser;
 mod new_objects;
 mod options;

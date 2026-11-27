@@ -11,8 +11,8 @@ use eframe::egui::{self, Color32, RichText};
 use egui_phosphor::regular as icon;
 use mallet_vmf::sound::{Outline, OutlineKind};
 
-use super::model_browser::{Pick, Search};
-use super::texture_browser::thousands;
+use super::asset_browser::{thousands, Search, SearchBox};
+use super::model_browser::Pick;
 use super::MalletApp;
 use crate::config::SoundscapeBrowserView;
 use crate::editor::{class_plays_soundscape, Editor, Tool};
@@ -22,7 +22,6 @@ const ACCENT: Color32 = Color32::from_rgb(70, 140, 230);
 const WARNING: Color32 = Color32::from_rgb(235, 160, 80);
 const SIDEBAR_WIDTH: f32 = 230.0;
 const DETAILS_WIDTH: f32 = 400.0;
-const MAX_FILTER_HISTORY: usize = 12;
 const ROW_HEIGHT: f32 = 20.0;
 /// The class the entity tool switches to for a soundscape picked with nothing selected.
 const SOUNDSCAPE_CLASS: &str = "env_soundscape";
@@ -666,46 +665,18 @@ impl SoundscapeBrowserState {
     fn bottom_bar(&mut self, ui: &mut egui::Ui, editor: &Editor, target: &Target, commands: &mut Vec<Command>) {
         ui.add_space(2.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label("Filter");
-            let search = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.view.filter)
-                        .hint_text("such as canals !util")
-                        .desired_width(210.0),
-                )
-                .on_hover_text(
-                    "Every word must be in the soundscape's name. Start a word with ! to leave out soundscapes \
-                     that have it. * stands for any text and ? for one character.",
-                );
-            if self.focus_search {
-                search.request_focus();
-                self.focus_search = false;
+            SearchBox {
+                hint: "such as canals !util",
+                help: "Every word must be in the soundscape's name. Start a word with ! to leave out soundscapes \
+                       that have it. * stands for any text and ? for one character.",
+                width: 210.0,
             }
-            if search.lost_focus() && !self.view.filter.trim().is_empty() {
-                let filter = self.view.filter.trim().to_owned();
-                self.view.filter_history.retain(|old| old != &filter);
-                self.view.filter_history.insert(0, filter);
-                self.view.filter_history.truncate(MAX_FILTER_HISTORY);
-            }
-            ui.add_enabled_ui(!self.view.filter_history.is_empty(), |ui| {
-                ui.menu_button(icon::CARET_DOWN, |ui| {
-                    for old in self.view.filter_history.clone() {
-                        if ui.button(&old).clicked() {
-                            self.view.filter = old;
-                            ui.close_menu();
-                        }
-                    }
-                })
-                .response
-                .on_hover_text("Earlier searches");
-            });
-            if ui
-                .add_enabled(!self.view.filter.is_empty(), egui::Button::new(icon::X))
-                .on_hover_text("Clear the search")
-                .clicked()
-            {
-                self.view.filter.clear();
-            }
+            .show(
+                ui,
+                &mut self.view.filter,
+                &mut self.view.filter_history,
+                &mut self.focus_search,
+            );
             ui.separator();
             ui.checkbox(&mut self.view.used_only, "Only used soundscapes")
                 .on_hover_text("Show only the soundscapes the map's entities name");

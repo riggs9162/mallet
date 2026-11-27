@@ -521,7 +521,7 @@ pub struct TextureBrowserView {
     pub filter_history: Vec<String>,
     /// `%keywords` every shown material must have.
     pub keywords: String,
-    /// The top-level folder the list is narrowed to, if any.
+    /// The folder the list is narrowed to, if any, such as `brick` or `metal/trim`.
     pub folder: Option<String>,
     /// Folders and archives whose materials are hidden, by path.
     pub hidden_sources: Vec<PathBuf>,

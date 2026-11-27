@@ -1,45 +1,46 @@
 //! The texture browser: every material the game mounts, as thumbnails that load in the
 //! background while you scroll. Like Hammer's texture list, with a sidebar to narrow it
-//! to one game, addon or folder, and filters for what a material does.
+//! to one game, addon or folder, and filters for what a material does. The parts it
+//! shares with the model browser live in [`super::asset_browser`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use egui_phosphor::regular as icon;
 use mallet_content::vtf::Image;
-use mallet_content::{parallel_map, MaterialInfo, MaterialLoader, Source, SourceKind};
+use mallet_content::{parallel_map, MaterialInfo, MaterialLoader};
 
+use super::asset_browser::{
+    self, card, card_grid, checkerboard, hidden_paths, in_folder, paint_thumbnail, restore_hidden, source_lines,
+    thousands, upload, Catalog, Listing, Loaders, Search, SearchBox, Thumbnail, Thumbnails, MUTED,
+};
 use super::thumbnail_cache::ThumbnailCache;
 use super::MalletApp;
 use crate::config::{TextureBrowserOptions, TextureBrowserView};
 use crate::editor::Editor;
 
-const MUTED: Color32 = Color32::from_gray(140);
-const ACCENT: Color32 = Color32::from_rgb(70, 140, 230);
 /// Requests waiting to load; older ones are dropped, as they have scrolled out of view.
 const MAX_REQUESTS: usize = 256;
 /// Materials described per batch while indexing. Between batches the index waits for
 /// the thumbnails on screen, which share the same drives.
 const INDEX_BATCH: usize = 256;
 const SIDEBAR_WIDTH: f32 = 210.0;
-const MAX_FILTER_HISTORY: usize = 12;
 /// Folders whose materials are not meant for brushes, hidden while "Brush materials" is on.
 const NON_BRUSH_FOLDERS: [&str; 9] = [
-    "models/",
-    "particle/",
-    "particles/",
-    "vgui/",
-    "hud/",
-    "console/",
-    "sprites/",
-    "editor/",
-    "effects/",
+    "models",
+    "particle",
+    "particles",
+    "vgui",
+    "hud",
+    "console",
+    "sprites",
+    "editor",
+    "effects",
 ];
 
 /// What a texture picked in the browser is for.
@@ -54,86 +55,6 @@ pub(super) enum Pick {
     Replace,
 }
 
-enum Thumbnail {
-    Loading,
-    Ready(egui::TextureHandle, [u32; 2]),
-    Missing,
-}
-
-/// The thumbnails waiting to load, newest last, shared by the loaders and the index.
-#[derive(Default)]
-struct Queue {
-    names: Mutex<Vec<String>>,
-    /// Signalled when a name is added, so an idle loader starts on it straight away.
-    added: Condvar,
-    /// Thumbnails a loader is reading right now.
-    loading: AtomicUsize,
-}
-
-impl Queue {
-    fn names(&self) -> MutexGuard<'_, Vec<String>> {
-        self.names.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Whether no thumbnail is waiting or loading, so the index may use the drives.
-    fn idle(&self) -> bool {
-        self.loading.load(Ordering::Relaxed) == 0 && self.names().is_empty()
-    }
-
-    /// The newest name waiting, after waiting for one to be added, counted as loading
-    /// until [`Queue::done`]. `None` once `stop` is set.
-    fn next(&self, stop: &AtomicBool) -> Option<String> {
-        let mut names = self.names();
-        loop {
-            if stop.load(Ordering::Relaxed) {
-                return None;
-            }
-            if let Some(name) = names.pop() {
-                self.loading.fetch_add(1, Ordering::Relaxed);
-                return Some(name);
-            }
-            names = self
-                .added
-                .wait_timeout(names, Duration::from_millis(250))
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
-        }
-    }
-
-    /// Marks a thumbnail taken with [`Queue::next`] as loaded.
-    fn done(&self) {
-        self.loading.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// The background thumbnail loaders for one game, started with these thread and size
-/// settings.
-struct Loaders {
-    game: PathBuf,
-    threads: usize,
-    side: u32,
-    results: Receiver<(String, Option<Image>)>,
-    stop: Arc<AtomicBool>,
-    queue: Arc<Queue>,
-}
-
-impl Drop for Loaders {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        self.queue.added.notify_all();
-    }
-}
-
-/// The game's materials with where each comes from, and counts for the sidebar.
-struct Listing {
-    game: PathBuf,
-    /// Each material with every source that has it; the first is where it loads from.
-    materials: Vec<(String, Vec<usize>)>,
-    sources: Vec<Source>,
-    per_source: HashMap<usize, usize>,
-    per_folder: BTreeMap<String, usize>,
-}
-
 /// What the texture browser remembers between frames.
 pub(super) struct TextureBrowserState {
     pub(super) pick: Pick,
@@ -141,22 +62,18 @@ pub(super) struct TextureBrowserState {
     view: TextureBrowserView,
     /// Whether `view` has been read from the settings yet.
     view_loaded: bool,
-    listing: Option<Listing>,
-    list_receiver: Option<(PathBuf, Receiver<Listing>)>,
+    catalog: Catalog<()>,
     hidden_sources: HashSet<usize>,
-    loaders: Option<Loaders>,
-    queue: Arc<Queue>,
-    thumbnails: HashMap<String, Thumbnail>,
-    /// The frame each thumbnail was last drawn in, so the ones off screen longest are
-    /// dropped first.
-    last_shown: HashMap<String, u64>,
-    frame: u64,
+    loaders: Option<Loaders<Option<Image>>>,
+    thumbnails: Thumbnails,
     info: HashMap<String, MaterialInfo>,
     index_receiver: Option<Receiver<Vec<(String, MaterialInfo)>>>,
     /// The game's loader, for describing materials once they are listed.
     index_loader: Option<MaterialLoader>,
     /// The material clicked last, shown in the bar at the bottom.
     selected: Option<String>,
+    /// Whether the sidebar should open the way down to the chosen folder this frame.
+    reveal_folder: bool,
     /// Materials the map uses, cached per geometry generation.
     used: Option<(u64, Arc<BTreeSet<String>>)>,
     pub(super) focus_search: bool,
@@ -168,18 +85,15 @@ impl Default for TextureBrowserState {
             pick: Pick::Current,
             view: TextureBrowserView::default(),
             view_loaded: false,
-            listing: None,
-            list_receiver: None,
+            catalog: Catalog::default(),
             hidden_sources: HashSet::new(),
             loaders: None,
-            queue: Arc::default(),
-            thumbnails: HashMap::new(),
-            last_shown: HashMap::new(),
-            frame: 0,
+            thumbnails: Thumbnails::new(MAX_REQUESTS),
             info: HashMap::new(),
             index_receiver: None,
             index_loader: None,
             selected: None,
+            reveal_folder: false,
             used: None,
             focus_search: true,
         }
@@ -223,7 +137,7 @@ impl MalletApp {
         };
         let game = editor.game_dir().map(PathBuf::from).unwrap_or_default();
         let state = &mut self.texture_browser;
-        state.frame += 1;
+        state.thumbnails.next_frame();
         let options = editor.config.texture_browser.clone();
         state.start(&game, &loader, &options);
         state.receive(ctx);
@@ -270,7 +184,7 @@ impl MalletApp {
                     state.grid(ui, &used, &current, size, scroll_step, &mut commands);
                 });
             });
-        state.trim(options.cache_size());
+        state.thumbnails.trim(options.cache_size());
         state.save_view(ctx, editor);
         for command in commands {
             match command {
@@ -306,75 +220,46 @@ impl MalletApp {
     }
 }
 
+/// A material's name as the browser shows it, which is its whole name.
+fn whole(name: &str) -> &str {
+    name
+}
+
+/// Whether a material lies in a folder whose materials are not meant for brushes.
+fn non_brush(name: &str) -> bool {
+    NON_BRUSH_FOLDERS
+        .iter()
+        .any(|folder| name.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/')))
+}
+
 impl TextureBrowserState {
     /// Lists the game's materials, starts describing them for the filters, and starts the
     /// thumbnail loaders, once per game and again when their settings change.
     fn start(&mut self, game: &PathBuf, loader: &MaterialLoader, options: &TextureBrowserOptions) {
         self.index_loader = Some(loader.clone());
-        let listed = self.listing.as_ref().is_some_and(|listing| &listing.game == game);
-        let listing = self.list_receiver.as_ref().is_some_and(|(listing, _)| listing == game);
-        if !listed && !listing {
-            let (sender, receiver) = mpsc::channel();
-            let (loader, listing_game) = (loader.clone(), game.clone());
-            thread::spawn(move || {
-                let materials = loader.list_sourced();
-                let mut per_source: HashMap<usize, usize> = HashMap::new();
-                let mut per_folder: BTreeMap<String, usize> = BTreeMap::new();
-                for (name, sources) in &materials {
-                    for source in sources {
-                        *per_source.entry(*source).or_default() += 1;
-                    }
-                    let folder = name.split('/').next().unwrap_or_default().to_owned();
-                    *per_folder.entry(folder).or_default() += 1;
-                }
-                let _ = sender.send(Listing {
-                    game: listing_game,
-                    sources: loader.sources(),
-                    materials,
-                    per_source,
-                    per_folder,
-                });
-            });
-            self.list_receiver = Some((game.clone(), receiver));
+        let (listing_loader, listing_game) = (loader.clone(), game.clone());
+        let started = self.catalog.list(game, move || {
+            let materials = listing_loader.list_sourced();
+            Listing::new(listing_game, materials, listing_loader.sources(), whole, ())
+        });
+        if started {
+            self.index_receiver = None;
             self.thumbnails.clear();
             self.info.clear();
         }
         let (threads, side) = (options.thread_count(), options.thumbnail_side());
-        let stale = |loaders: &Loaders| &loaders.game != game || loaders.threads != threads || loaders.side != side;
-        if self.loaders.as_ref().is_none_or(stale) {
+        if self
+            .loaders
+            .as_ref()
+            .is_none_or(|loaders| !loaders.matches(game, threads, side))
+        {
             self.loaders = None;
-            self.queue.names().clear();
-            let stop = Arc::new(AtomicBool::new(false));
-            let (sender, results) = mpsc::channel();
-            let cache = ThumbnailCache::new(game, side).map(Arc::new);
-            for _ in 0..threads {
-                let (queue, stop, sender, loader, cache) = (
-                    Arc::clone(&self.queue),
-                    Arc::clone(&stop),
-                    sender.clone(),
-                    loader.clone(),
-                    cache.clone(),
-                );
-                thread::spawn(move || {
-                    while let Some(name) = queue.next(&stop) {
-                        let image = load_thumbnail(&loader, cache.as_deref(), &name, side);
-                        queue.done();
-                        if sender.send((name, image)).is_err() {
-                            return;
-                        }
-                    }
-                });
-            }
-            self.loaders = Some(Loaders {
-                game: game.clone(),
-                threads,
-                side,
-                results,
-                stop,
-                queue: Arc::clone(&self.queue),
-            });
             self.thumbnails.clear();
-            self.last_shown.clear();
+            let cache = ThumbnailCache::new(game, side);
+            let loader = loader.clone();
+            self.loaders = Some(Loaders::start(game, threads, side, &self.thumbnails, move |name| {
+                load_thumbnail(&loader, cache.as_ref(), name, side)
+            }));
         }
     }
 
@@ -393,16 +278,9 @@ impl TextureBrowserState {
 
     /// Takes in the listing, material descriptions and finished thumbnails.
     fn receive(&mut self, ctx: &egui::Context) {
-        if let Some((_, receiver)) = &self.list_receiver {
-            match receiver.try_recv() {
-                Ok(listing) => {
-                    self.start_index(&listing);
-                    self.restore_view(&listing);
-                    self.listing = Some(listing);
-                    self.list_receiver = None;
-                }
-                Err(_) => ctx.request_repaint_after(Duration::from_millis(50)),
-            }
+        if self.catalog.receive(ctx) {
+            self.start_index();
+            self.restore_view();
         }
         if let Some(receiver) = &self.index_receiver {
             let mut finished = false;
@@ -423,38 +301,31 @@ impl TextureBrowserState {
             }
         }
         let Some(loaders) = &self.loaders else { return };
-        let mut received = false;
-        while let Ok((name, image)) = loaders.results.try_recv() {
-            received = true;
+        let finished = loaders.finished();
+        let received = !finished.is_empty();
+        for (name, image) in finished {
             let thumbnail = match image {
                 Some(image) => {
-                    let pixels = egui::ColorImage::from_rgba_unmultiplied(
-                        [image.pixel_width as usize, image.pixel_height as usize],
-                        &image.rgba,
-                    );
-                    let options = egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
-                    let texture = ctx.load_texture(format!("thumbnail:{name}"), pixels, options);
+                    let size = [image.pixel_width as usize, image.pixel_height as usize];
+                    let texture = upload(ctx, format!("thumbnail:{name}"), size, &image.rgba);
                     Thumbnail::Ready(texture, [image.width, image.height])
                 }
-                None => Thumbnail::Missing,
+                None => Thumbnail::Failed(None),
             };
-            self.thumbnails.insert(name, thumbnail);
+            self.thumbnails.finish(name, thumbnail);
         }
-        let waiting = self
-            .thumbnails
-            .values()
-            .any(|thumbnail| matches!(thumbnail, Thumbnail::Loading));
-        if received || waiting {
+        if received || self.thumbnails.waiting() {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
     }
 
     /// Describes every material in the background, in batches, for the filters.
-    fn start_index(&mut self, listing: &Listing) {
-        let names: Vec<String> = listing.materials.iter().map(|(name, _)| name.clone()).collect();
+    fn start_index(&mut self) {
+        let Some(listing) = &self.catalog.listing else { return };
+        let names: Vec<String> = listing.entries.iter().map(|(name, _)| name.clone()).collect();
         let (sender, receiver) = mpsc::channel();
         if let Some(loader) = self.index_loader.clone() {
-            let queue = Arc::clone(&self.queue);
+            let queue = self.thumbnails.queue();
             thread::spawn(move || {
                 for chunk in names.chunks(INDEX_BATCH) {
                     while !queue.idle() {
@@ -492,140 +363,44 @@ impl TextureBrowserState {
         used
     }
 
-    /// The sidebar: sources grouped by kind, then top-level folders, each with a count.
+    /// The sidebar: sources grouped by kind, then the folder tree, each with a count.
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        let Some(listing) = &self.listing else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Listing materials...");
-            });
-            return;
-        };
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Sources").strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("None").clicked() {
-                    self.hidden_sources = listing.per_source.keys().copied().collect();
-                }
-                if ui.small_button("All").clicked() {
-                    self.hidden_sources.clear();
-                }
-            });
-        });
-        let groups = [
-            (SourceKind::Game, "Game"),
-            (SourceKind::MountedGame, "Mounted games"),
-            (SourceKind::Addon, "Addons"),
-            (SourceKind::Download, "Downloads"),
-        ];
-        for (kind, label) in groups {
-            let members: Vec<(usize, &Source, usize)> = listing
-                .sources
-                .iter()
-                .enumerate()
-                .filter(|(_, source)| source.kind == kind)
-                .filter_map(|(index, source)| Some((index, source, *listing.per_source.get(&index)?)))
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
-            let total: usize = members.iter().map(|(_, _, count)| count).sum();
-            let shown = members
-                .iter()
-                .filter(|(index, _, _)| !self.hidden_sources.contains(index))
-                .count();
-            egui::CollapsingHeader::new(format!("{label}  {}", thousands(total)))
-                .id_salt(("source_group", label))
-                .default_open(kind != SourceKind::Addon)
-                .show(ui, |ui| {
-                    let mut all = shown == members.len();
-                    if ui.checkbox(&mut all, RichText::new("All of these").small()).changed() {
-                        for (index, _, _) in &members {
-                            if all {
-                                self.hidden_sources.remove(index);
-                            } else {
-                                self.hidden_sources.insert(*index);
-                            }
-                        }
-                    }
-                    for (index, source, count) in &members {
-                        let mut on = !self.hidden_sources.contains(index);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .checkbox(&mut on, &source.name)
-                                .on_hover_text(source.path.display().to_string())
-                                .changed()
-                            {
-                                if on {
-                                    self.hidden_sources.remove(index);
-                                } else {
-                                    self.hidden_sources.insert(*index);
-                                }
-                            }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(thousands(*count)).small().color(MUTED));
-                            });
-                        });
-                    }
-                });
-        }
-        ui.add_space(8.0);
-        ui.label(RichText::new("Folders").strong());
-        if ui.selectable_label(self.view.folder.is_none(), "All folders").clicked() {
-            self.view.folder = None;
-        }
-        for (folder, count) in &listing.per_folder {
-            let hidden = self.view.brush_only
-                && NON_BRUSH_FOLDERS
-                    .iter()
-                    .any(|skip| skip.trim_end_matches('/') == folder);
-            if hidden {
-                continue;
-            }
-            ui.horizontal(|ui| {
-                let selected = self.view.folder.as_deref() == Some(folder.as_str());
-                if ui.selectable_label(selected, folder).clicked() {
-                    self.view.folder = if selected { None } else { Some(folder.clone()) };
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(thousands(*count)).small().color(MUTED));
-                });
-            });
-        }
+        let brush_only = self.view.brush_only;
+        asset_browser::sidebar(
+            ui,
+            &self.catalog,
+            "materials",
+            &mut self.hidden_sources,
+            &mut self.view.folder,
+            self.reveal_folder,
+            |folder| brush_only && NON_BRUSH_FOLDERS.contains(&folder),
+        );
+        self.reveal_folder = false;
     }
 
-    /// The materials passing every filter, in name order.
-    /// Indices into the listing of the materials passing every filter. A material shows
-    /// while any source that has it is ticked.
+    /// Indices into the listing of the materials passing every filter, in name order. A
+    /// material shows while any source that has it is ticked.
     fn filtered(&self, used: &BTreeSet<String>) -> Vec<usize> {
-        let Some(listing) = &self.listing else {
+        let Some(listing) = &self.catalog.listing else {
             return Vec::new();
         };
-        let terms: Vec<String> = self
-            .view
-            .filter
-            .split_whitespace()
-            .map(str::to_ascii_lowercase)
-            .collect();
+        let search = Search::parse(&self.view.filter);
         let keywords: Vec<String> = self
             .view
             .keywords
             .split_whitespace()
             .map(str::to_ascii_lowercase)
             .collect();
-        let folder = self.view.folder.as_ref().map(|folder| format!("{folder}/"));
         listing
-            .materials
+            .entries
             .iter()
             .enumerate()
-            .map(|(index, (name, sources))| (index, name, sources))
-            .filter(|(_, _, sources)| sources.iter().any(|source| !self.hidden_sources.contains(source)))
-            .map(|(index, name, _)| (index, name))
-            .filter(|(_, name)| folder.as_ref().is_none_or(|folder| name.starts_with(folder.as_str())))
-            .filter(|(_, name)| !self.view.brush_only || !NON_BRUSH_FOLDERS.iter().any(|skip| name.starts_with(skip)))
-            .filter(|(_, name)| !self.view.used_only || used.contains(name.as_str()))
-            .filter(|(_, name)| terms.iter().all(|term| name.contains(term.as_str())))
-            .filter(|(_, name)| match self.info.get(name.as_str()) {
+            .filter(|(_, (_, sources))| sources.iter().any(|source| !self.hidden_sources.contains(source)))
+            .filter(|(_, (name, _))| self.view.folder.as_deref().is_none_or(|folder| in_folder(name, folder)))
+            .filter(|(_, (name, _))| !self.view.brush_only || !non_brush(name))
+            .filter(|(_, (name, _))| !self.view.used_only || used.contains(name.as_str()))
+            .filter(|(_, (name, _))| search.matches(name))
+            .filter(|(_, (name, _))| match self.info.get(name.as_str()) {
                 None => keywords.is_empty(),
                 Some(info) => {
                     let kind = if info.translucent {
@@ -646,17 +421,17 @@ impl TextureBrowserState {
             .collect()
     }
 
-    /// The thumbnail grid. Cards share the width evenly, `per_row` to a row.
+    /// The thumbnail grid.
     fn grid(
         &mut self,
         ui: &mut egui::Ui,
         used: &BTreeSet<String>,
         current: &str,
-        [width, height]: [f32; 2],
+        size: [f32; 2],
         scroll_step: f32,
         commands: &mut Vec<Command>,
     ) {
-        if self.listing.is_none() {
+        if self.catalog.listing.is_none() {
             ui.add_space(20.0);
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -667,145 +442,79 @@ impl TextureBrowserState {
         let names = self.filtered(used);
         if names.is_empty() {
             ui.add_space(20.0);
-            ui.label(RichText::new("No materials match. Clear the search or turn on more sources.").color(MUTED));
+            ui.label(
+                RichText::new("No materials match. Clear the search, choose All folders or turn on more sources.")
+                    .color(MUTED),
+            );
             return;
         }
-        let gap = 6.0;
-        let columns = self.view.per_row.max(1);
-        let card = ((width - 16.0 - gap * (columns as f32 - 1.0)) / columns as f32).max(32.0);
-        let row_height = card + 22.0 + gap;
-        let rows = names.len().div_ceil(columns);
-        let wheel = wheel_rows(ui, ui.available_rect_before_wrap());
-        // A solid bar that is always shown, with a handle long enough to grab. egui's
-        // default floating bar is hidden until hovered, and with tens of thousands of
-        // materials its handle shrinks to a dot that is hard to find and catch. It fits in
-        // the 16 points the cards leave free on the right.
-        ui.spacing_mut().scroll = egui::style::ScrollStyle {
-            bar_width: 10.0,
-            handle_min_length: 48.0,
-            bar_inner_margin: 4.0,
-            dormant_background_opacity: 0.5,
-            active_background_opacity: 0.7,
-            interact_background_opacity: 0.9,
-            dormant_handle_opacity: 0.8,
-            active_handle_opacity: 1.0,
-            interact_handle_opacity: 1.0,
-            ..egui::style::ScrollStyle::solid()
-        };
-        egui::ScrollArea::vertical()
-            .id_salt("texture_grid")
-            .max_height(height)
-            .auto_shrink([false, false])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-            .show_rows(ui, row_height, rows, |ui, range| {
-                if wheel != 0.0 {
-                    ui.scroll_with_delta_animation(
-                        egui::vec2(0.0, wheel * row_height * scroll_step),
-                        egui::style::ScrollAnimation::none(),
-                    );
+        card_grid(
+            ui,
+            "texture_grid",
+            names.len(),
+            self.view.per_row,
+            size,
+            scroll_step,
+            |ui, shown, side| {
+                let Some((name, sources)) = self
+                    .catalog
+                    .listing
+                    .as_ref()
+                    .and_then(|listing| listing.source_names(names[shown]))
+                else {
+                    return;
+                };
+                let response = self.card(ui, &name, &sources, side, name == current);
+                if response.clicked() {
+                    self.selected = Some(name.clone());
+                    commands.push(Command::Choose(name.clone(), false));
                 }
-                for row in range {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
-                        for index in names.iter().skip(row * columns).take(columns) {
-                            let Some((name, sources)) = self.listing.as_ref().and_then(|listing| {
-                                let (name, sources) = listing.materials.get(*index)?;
-                                let names: Vec<String> = sources
-                                    .iter()
-                                    .filter_map(|source| listing.sources.get(*source))
-                                    .map(|source| source.name.clone())
-                                    .collect();
-                                Some((name.clone(), names))
-                            }) else {
-                                continue;
-                            };
-                            let response = self.card(ui, &name, &sources, card, name == current);
-                            let name = &name;
-                            if response.clicked() {
-                                self.selected = Some(name.clone());
-                                commands.push(Command::Choose(name.clone(), false));
-                            }
-                            if response.double_clicked() {
-                                commands.push(Command::Choose(name.clone(), true));
-                            }
-                        }
-                    });
-                    ui.add_space(gap);
+                if response.double_clicked() {
+                    commands.push(Command::Choose(name.clone(), true));
                 }
-            });
+                response.context_menu(|ui| {
+                    if ui
+                        .button("Mark")
+                        .on_hover_text("Select every face using this texture")
+                        .clicked()
+                    {
+                        commands.push(Command::Mark(name.clone()));
+                        ui.close_menu();
+                    }
+                    if ui.button("Replace...").clicked() {
+                        commands.push(Command::Replace(name.clone()));
+                        ui.close_menu();
+                    }
+                    if ui.button("Show its folder").clicked() {
+                        self.view.folder = Some(
+                            name.rsplit_once('/')
+                                .map_or(asset_browser::ROOT_FOLDER, |(folder, _)| folder)
+                                .to_owned(),
+                        );
+                        self.reveal_folder = true;
+                        ui.close_menu();
+                    }
+                });
+            },
+        );
     }
 
     /// One card: the thumbnail at its real size up to the card's, and the name under it.
-    fn card(&mut self, ui: &mut egui::Ui, name: &str, sources: &[String], size: f32, current: bool) -> egui::Response {
-        self.request(name);
-        match self.last_shown.get_mut(name) {
-            Some(frame) => *frame = self.frame,
-            None => {
-                self.last_shown.insert(name.to_owned(), self.frame);
+    fn card(&mut self, ui: &mut egui::Ui, name: &str, sources: &[String], side: f32, current: bool) -> egui::Response {
+        self.thumbnails.show(name, self.loaders.is_some());
+        let selected = self.selected.as_deref() == Some(name);
+        let (show_alpha, thumbnail) = (self.view.show_alpha, self.thumbnails.get(name));
+        let response = card(ui, side, name, current, selected, |painter, rect| {
+            if show_alpha {
+                checkerboard(painter, rect.shrink(3.0));
             }
-        }
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size + 22.0), egui::Sense::click());
-        let image_rect = egui::Rect::from_min_size(rect.min, egui::Vec2::splat(size));
-        let painter = ui.painter();
-        painter.rect_filled(rect, 4, Color32::from_gray(if response.hovered() { 44 } else { 30 }));
-        if self.view.show_alpha {
-            checkerboard(painter, image_rect.shrink(3.0));
-        }
-        match self.thumbnails.get(name) {
-            Some(Thumbnail::Ready(texture, [width, height])) => {
-                // Small textures stay small, as in Hammer; large ones shrink to fit.
-                let fit = (size - 6.0) / (*width).max(*height).max(1) as f32;
-                let scale = fit.min(1.0);
-                let target = egui::Rect::from_center_size(
-                    image_rect.center(),
-                    egui::vec2(*width as f32 * scale, *height as f32 * scale),
-                );
-                let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-                painter.image(texture.id(), target, full, Color32::WHITE);
-            }
-            Some(Thumbnail::Missing) => {
-                painter.text(
-                    image_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    icon::IMAGE_BROKEN,
-                    egui::FontId::proportional(22.0),
-                    MUTED,
-                );
-            }
-            _ => {}
-        }
-        let label = egui::Rect::from_min_max(egui::pos2(rect.min.x, image_rect.max.y), rect.max);
-        painter.rect_filled(
-            label,
-            egui::CornerRadius {
-                nw: 0,
-                ne: 0,
-                sw: 4,
-                se: 4,
-            },
-            if current { ACCENT } else { Color32::from_gray(22) },
-        );
-        let short = name.rsplit('/').next().unwrap_or(name);
-        painter.text(
-            label.center(),
-            egui::Align2::CENTER_CENTER,
-            elide(short, ((size - 8.0) / 6.0) as usize),
-            egui::FontId::proportional(11.0),
-            Color32::from_gray(if current { 255 } else { 210 }),
-        );
-        if current {
-            painter.rect_stroke(rect, 4, egui::Stroke::new(2.0_f32, ACCENT), egui::StrokeKind::Inside);
-        }
+            paint_thumbnail(painter, rect, thumbnail, false);
+        });
         let mut details = vec![name.to_owned()];
-        if let Some(Thumbnail::Ready(_, [width, height])) = self.thumbnails.get(name) {
+        if let Some([width, height]) = self.thumbnails.size(name) {
             details.push(format!("{width} x {height}"));
         }
-        if let Some((first, others)) = sources.split_first() {
-            details.push(format!("loads from {first}"));
-            if !others.is_empty() {
-                details.push(format!("also in {}", others.join(", ")));
-            }
-        }
+        details.extend(source_lines(sources));
         if let Some(info) = self.info.get(name) {
             let mut traits = Vec::new();
             if info.translucent {
@@ -844,41 +553,23 @@ impl TextureBrowserState {
                 ui.add(egui::Slider::new(&mut self.view.per_row, 2..=14).text("per row"))
                     .on_hover_text("How many textures fit across; they grow and shrink with the window");
                 ui.horizontal(|ui| {
-                    ui.label("Filter");
-                    let search = ui.add(
-                        egui::TextEdit::singleline(&mut self.view.filter)
-                            .hint_text("such as brick wall")
-                            .desired_width(170.0),
+                    SearchBox {
+                        hint: "such as brick wall !dirt",
+                        help: "Every word must be in the material's name. Start a word with ! to leave out \
+                               materials that have it. * stands for any text and ? for one character.",
+                        width: 170.0,
+                    }
+                    .show(
+                        ui,
+                        &mut self.view.filter,
+                        &mut self.view.filter_history,
+                        &mut self.focus_search,
                     );
-                    if self.focus_search {
-                        search.request_focus();
-                        self.focus_search = false;
-                    }
-                    if search.lost_focus() && !self.view.filter.trim().is_empty() {
-                        let filter = self.view.filter.trim().to_owned();
-                        self.view.filter_history.retain(|old| old != &filter);
-                        self.view.filter_history.insert(0, filter);
-                        self.view.filter_history.truncate(MAX_FILTER_HISTORY);
-                    }
-                    ui.add_enabled_ui(!self.view.filter_history.is_empty(), |ui| {
-                        ui.menu_button(icon::CARET_DOWN, |ui| {
-                            for old in self.view.filter_history.clone() {
-                                if ui.button(&old).clicked() {
-                                    self.view.filter = old;
-                                    ui.close_menu();
-                                }
-                            }
-                        })
-                        .response
-                        .on_hover_text("Earlier searches");
-                    });
                 });
                 ui.horizontal(|ui| {
                     let name = selected.as_deref().unwrap_or("Click a texture");
                     ui.label(RichText::new(name).monospace());
-                    if let Some(Thumbnail::Ready(_, [width, height])) =
-                        selected.as_ref().and_then(|name| self.thumbnails.get(name))
-                    {
+                    if let Some([width, height]) = selected.as_ref().and_then(|name| self.thumbnails.size(name)) {
                         ui.label(RichText::new(format!("{width}x{height}")).color(MUTED));
                     }
                 });
@@ -926,8 +617,7 @@ impl TextureBrowserState {
                         }
                     });
                     if ui.button(format!("{} Reload", icon::ARROWS_CLOCKWISE)).clicked() {
-                        self.listing = None;
-                        self.list_receiver = None;
+                        self.catalog.reset();
                         self.loaders = None;
                         self.index_receiver = None;
                     }
@@ -941,13 +631,13 @@ impl TextureBrowserState {
                 });
                 ui.end_row();
             });
-        let status = match (&self.listing, &self.index_receiver) {
+        let status = match (&self.catalog.listing, &self.index_receiver) {
             (Some(listing), Some(_)) => format!(
                 "{} materials; reading {} of them for the filters",
-                thousands(listing.materials.len()),
-                thousands(listing.materials.len() - self.info.len().min(listing.materials.len()))
+                thousands(listing.entries.len()),
+                thousands(listing.entries.len() - self.info.len().min(listing.entries.len()))
             ),
-            (Some(listing), None) => format!("{} materials", thousands(listing.materials.len())),
+            (Some(listing), None) => format!("{} materials", thousands(listing.entries.len())),
             (None, _) => String::new(),
         };
         ui.label(RichText::new(status).small().color(MUTED));
@@ -955,83 +645,31 @@ impl TextureBrowserState {
 
     /// Hides the sources the settings hide and drops a saved folder the game lacks, once
     /// a listing arrives.
-    fn restore_view(&mut self, listing: &Listing) {
-        self.hidden_sources = listing
-            .sources
-            .iter()
-            .enumerate()
-            .filter(|(_, source)| self.view.hidden_sources.contains(&source.path))
-            .map(|(index, _)| index)
-            .collect();
+    fn restore_view(&mut self) {
+        let Some(listing) = &self.catalog.listing else { return };
+        self.hidden_sources = restore_hidden(&listing.sources, &self.view.hidden_sources);
         if self
             .view
             .folder
             .as_ref()
-            .is_some_and(|folder| !listing.per_folder.contains_key(folder))
+            .is_some_and(|folder| !listing.folders.contains(folder))
         {
             self.view.folder = None;
         }
+        self.reveal_folder = true;
     }
 
     /// Writes the filters and layout to the settings when they have changed, waiting
     /// while a text box is being typed in so every key press does not save.
     fn save_view(&mut self, ctx: &egui::Context, editor: &mut Editor) {
-        if let Some(listing) = &self.listing {
-            let mut hidden: Vec<PathBuf> = self
-                .hidden_sources
-                .iter()
-                .filter_map(|index| listing.sources.get(*index))
-                .map(|source| source.path.clone())
-                .collect();
-            hidden.sort();
-            self.view.hidden_sources = hidden;
+        if let Some(listing) = &self.catalog.listing {
+            self.view.hidden_sources = hidden_paths(&listing.sources, &self.hidden_sources);
         }
         if self.view == editor.config.texture_browser_view || ctx.wants_keyboard_input() {
             return;
         }
         editor.config.texture_browser_view = self.view.clone();
         editor.save_config();
-    }
-
-    /// Asks for a thumbnail if it is not loaded or loading.
-    fn request(&mut self, name: &str) {
-        if self.thumbnails.contains_key(name) {
-            return;
-        }
-        if self.loaders.is_none() {
-            return;
-        }
-        let dropped: Vec<String> = {
-            let mut queue = self.queue.names();
-            queue.push(name.to_owned());
-            let excess = queue.len().saturating_sub(MAX_REQUESTS);
-            queue.drain(..excess).collect()
-        };
-        for dropped in dropped {
-            self.thumbnails.remove(&dropped);
-        }
-        self.queue.added.notify_one();
-        self.thumbnails.insert(name.to_owned(), Thumbnail::Loading);
-    }
-
-    /// Drops the thumbnails off screen longest when there are more than `limit`, down to
-    /// three quarters of it, so they reload as needed and browsing never fills GPU memory.
-    fn trim(&mut self, limit: usize) {
-        if self.thumbnails.len() <= limit {
-            return;
-        }
-        let mut loaded: Vec<(u64, String)> = self
-            .thumbnails
-            .iter()
-            .filter(|(_, thumbnail)| !matches!(thumbnail, Thumbnail::Loading))
-            .map(|(name, _)| (self.last_shown.get(name).copied().unwrap_or(0), name.clone()))
-            .collect();
-        loaded.sort_unstable();
-        let excess = self.thumbnails.len().saturating_sub(limit * 3 / 4);
-        for (_, name) in loaded.into_iter().take(excess) {
-            self.thumbnails.remove(&name);
-            self.last_shown.remove(&name);
-        }
     }
 }
 
@@ -1069,60 +707,15 @@ fn open_source(loader: &MaterialLoader, material: &str) {
     }
 }
 
-/// How many wheel notches the pointer scrolled over `area` this frame, taken from egui so
-/// its scroll area does not also scroll by its own line height. The browsers scroll that
-/// many cards, as set in Mallet Options. egui spreads one notch over several frames, so the
-/// share it hands out each frame is taken rather than the wheel events, which would leave
-/// the rest of the notch to scroll the grid by egui's fixed amount.
-pub(super) fn wheel_rows(ui: &egui::Ui, area: egui::Rect) -> f32 {
-    if !ui.rect_contains_pointer(area) {
-        return 0.0;
-    }
-    let line = ui
-        .ctx()
-        .options(|options| options.line_scroll_speed)
-        .max(1.0);
-    ui.ctx().input_mut(|input| {
-        let rows = input.smooth_scroll_delta.y / line;
-        input.smooth_scroll_delta.y = 0.0;
-        rows
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// A grey checkerboard, so transparent parts of a texture show.
-pub(super) fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
-    let cell = 8.0;
-    let columns = (rect.width() / cell).ceil() as usize;
-    let rows = (rect.height() / cell).ceil() as usize;
-    for row in 0..rows {
-        for column in 0..columns {
-            if (row + column) % 2 == 0 {
-                let min = rect.min + egui::vec2(column as f32 * cell, row as f32 * cell);
-                let square = egui::Rect::from_min_size(min, egui::Vec2::splat(cell)).intersect(rect);
-                painter.rect_filled(square, 0, Color32::from_gray(60));
-            }
-        }
-    }
-}
-
-/// `30782` as `30,782`.
-pub(super) fn thousands(number: usize) -> String {
-    let digits = number.to_string();
-    let mut grouped = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
-}
-
-/// Cuts text to `limit` characters with an ellipsis.
-pub(super) fn elide(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit.max(4) {
-        text.to_owned()
-    } else {
-        format!("{}…", text.chars().take(limit.max(4) - 1).collect::<String>())
+    #[test]
+    fn brush_materials_leave_out_whole_folders_only() {
+        assert!(non_brush("models/props_c17/oildrum001"));
+        assert!(non_brush("effects/water_warp"));
+        assert!(!non_brush("modelsx/brick"));
+        assert!(!non_brush("brick/brickwall001a"));
     }
 }
