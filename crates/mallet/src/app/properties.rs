@@ -100,6 +100,8 @@ enum Change {
     BrowseModel(String),
     /// Open the soundscape browser to pick a soundscape for this key.
     BrowseSoundscape(String),
+    /// Open the sky browser to pick the map's sky.
+    BrowseSky,
     /// Start picking faces for this side list key in the 3D view, or stop when it is
     /// being picked already.
     PickFaces(String),
@@ -143,6 +145,7 @@ impl MalletApp {
         let mut changes = Vec::new();
         let mut browse_model = None;
         let mut browse_soundscape = None;
+        let mut browse_sky = false;
         egui::Window::new(title)
             .id(egui::Id::new("object_properties"))
             .open(&mut open)
@@ -196,6 +199,10 @@ impl MalletApp {
                     browse_soundscape = Some(key);
                     Ok(())
                 }
+                Change::BrowseSky => {
+                    browse_sky = true;
+                    Ok(())
+                }
                 Change::PickFaces(key) => {
                     if snapshot.picking.as_ref() == Some(&key) {
                         editor.stop_face_pick();
@@ -230,6 +237,9 @@ impl MalletApp {
                 key,
             };
             self.open_soundscape_browser(editor, pick);
+        }
+        if browse_sky {
+            self.open_sky_browser(editor);
         }
     }
 }
@@ -699,7 +709,28 @@ fn property_editor(
         .classname
         .as_deref()
         .is_some_and(|classname| crate::position_pick::is_position_key(classname, &property.name));
+    let names_sky = property.name.eq_ignore_ascii_case("skyname") && snapshot.classname.as_deref() == Some("worldspawn");
     match property.kind.as_str() {
+        _ if names_sky => {
+            ui.horizontal(|ui| {
+                let width = (width - 92.0).max(80.0);
+                let (response, committed) =
+                    text_field_response(ui, &mut state.drafts, draft_key.clone(), &current, &hint, width);
+                if let Some(text) = committed {
+                    changes.push(Change::SetKey(property.name.clone(), text));
+                }
+                if ui
+                    .button(format!("{} Browse...", icon::CLOUD_SUN))
+                    .on_hover_text("Sky browser: look around in each of the game's skies and pick one")
+                    .clicked()
+                {
+                    state.drafts.remove(&draft_key);
+                    changes.push(Change::BrowseSky);
+                }
+                response
+            })
+            .inner
+        }
         _ if names_position => {
             ui.horizontal(|ui| {
                 let (response, committed) = target_field(
