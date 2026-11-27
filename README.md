@@ -26,6 +26,14 @@ screenshots. It is a work in progress: see the [roadmap](docs/ROADMAP.md) for wh
 cargo run --release -p mallet -- path/to/map.vmf
 ```
 
+While working on Mallet itself on Windows, `tools\watch.ps1` rebuilds it whenever a
+source file changes and restarts it on the new build. A failed build leaves the running
+window alone. Mallet still asks about unsaved maps before it restarts:
+
+```powershell
+.\tools\watch.ps1 path\to\map.vmf
+```
+
 On Linux you need the usual wgpu system libraries first:
 `libxkbcommon`, `libx11`-and-friends (X11 development packages), `libwayland`,
 and the Vulkan loader — on Debian/Ubuntu:
