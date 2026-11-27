@@ -1,6 +1,6 @@
 //! Resolves material names to the texture Hammer shows for them and how it uses alpha.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use mallet_kv::{Block, Item};
@@ -838,6 +838,26 @@ impl Materials {
         text
     }
 
+    /// Forgets what is cached about the materials that use any of the `changed` game
+    /// files, as [`GameFs::changed_files`] reports them, so they are read again when next
+    /// asked for. Returns the keys of the materials forgotten.
+    pub fn forget_changed(&mut self, changed: &HashSet<String>) -> Vec<String> {
+        let mut keys: Vec<String> = self.cache.keys().chain(self.rectangles.keys()).cloned().collect();
+        keys.sort();
+        keys.dedup();
+        let uses = parallel_map(&keys, |key| self.loader.uses_any(key, changed));
+        let forgotten: Vec<String> = keys
+            .into_iter()
+            .zip(uses)
+            .filter_map(|(key, uses)| uses.then_some(key))
+            .collect();
+        for key in &forgotten {
+            self.cache.remove(key);
+            self.rectangles.remove(key);
+        }
+        forgotten
+    }
+
     /// Looks several materials up at once, spread over every CPU core, and returns them
     /// in the same order: what each is and its texture's size, without its pixels. Results
     /// are cached.
@@ -1015,6 +1035,57 @@ impl MaterialLoader {
             frame,
         )
         .ok()
+    }
+
+    /// Every game file a material is read from: its VMT and the ones it patches, its
+    /// textures, its water normal map and its hotspot `.rect` file. Files that are not
+    /// there are listed too, as the paths they would have.
+    pub fn files(&self, material: &str) -> Vec<String> {
+        let key = material_key(material);
+        let mut files = Vec::new();
+        self.vmt_chain(&key, 0, &mut files);
+        if let Some(properties) = self.properties(&key, 0) {
+            let textures = [
+                &properties.texture,
+                &properties.second_texture,
+                &properties.third_texture,
+                &properties.fourth_texture,
+                &properties.normal_map,
+            ];
+            files.extend(textures.into_iter().flatten().map(|name| format!("materials/{name}.vtf")));
+            if let Some(name) = &properties.rectangle_map {
+                files.push(format!("materials/{name}.rect"));
+            }
+        }
+        files
+    }
+
+    /// Whether a material is read from any of the `changed` game files.
+    pub fn uses_any(&self, material: &str, changed: &HashSet<String>) -> bool {
+        self.files(material).iter().any(|file| changed.contains(file))
+    }
+
+    /// Adds the VMT of material `key` to `files`, and those of the materials it patches.
+    fn vmt_chain(&self, key: &str, depth: usize, files: &mut Vec<String>) {
+        let path = format!("materials/{key}.vmt");
+        let data = self.filesystem.read(&path);
+        files.push(path);
+        let Some(data) = data else { return };
+        if depth >= MAX_PATCH_DEPTH {
+            return;
+        }
+        let text = String::from_utf8_lossy(&data);
+        let Ok(items) = mallet_kv::parse(&text) else { return };
+        let root = items.iter().find_map(|item| match item {
+            Item::Block(block) => Some(block),
+            Item::Pair(_) => None,
+        });
+        let include = root
+            .filter(|root| root.name.eq_ignore_ascii_case("patch"))
+            .and_then(|root| root.get("include"));
+        if let Some(include) = include {
+            self.vmt_chain(&material_key(include), depth + 1, files);
+        }
     }
 
     /// A material's texture as the viewports show it, decoded.

@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{PoisonError, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, PoisonError, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use mallet_kv::{Block, Item};
 
@@ -122,6 +122,30 @@ pub struct GameFs {
     game_dir: PathBuf,
     mounts: Vec<Mount>,
     sources: Vec<Source>,
+    /// Every loose file read so far, so [`GameFs::changed_files`] can tell when one is
+    /// saved again while Mallet runs.
+    watched: Mutex<HashMap<PathBuf, Watched>>,
+}
+
+/// When a loose file was last seen written, and how large it was then; `None` when it
+/// was not there.
+type Stamp = Option<(SystemTime, u64)>;
+
+/// What [`GameFs`] knows about a loose file it has read.
+#[derive(Debug)]
+struct Watched {
+    /// The game path it was read as, such as `materials/brick/brickwall001a.vtf`.
+    path: String,
+    stamp: Stamp,
+    /// Set when the file changed at the last look. It is reported once a look finds it
+    /// unchanged again, so a file still being written is not read half done.
+    settling: bool,
+}
+
+/// The stamp of a file on disk now.
+fn stamp_of(file: &Path) -> Stamp {
+    let metadata = fs::metadata(file).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 impl GameFs {
@@ -152,6 +176,7 @@ impl GameFs {
             game_dir: game_dir.to_owned(),
             mounts: Vec::new(),
             sources: Vec::new(),
+            watched: Mutex::default(),
         };
         for value in search_paths(&items) {
             filesystem.mount_search_path(&value, game_dir, &base_dir);
@@ -255,7 +280,11 @@ impl GameFs {
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
         let path = normalize(path);
         self.mounts.iter().find_map(|mount| match &mount.place {
-            Place::Folder(folder) => folder.file(&path).and_then(|file| fs::read(file).ok()),
+            Place::Folder(folder) => folder.file(&path).and_then(|file| {
+                let data = fs::read(&file).ok()?;
+                self.watch(file, &path);
+                Some(data)
+            }),
             Place::Vpk(archive) => archive.read(&path).ok().flatten(),
         })
     }
@@ -265,10 +294,11 @@ impl GameFs {
     pub fn open(&self, path: &str) -> Option<GameFile<'_>> {
         let path = normalize(path);
         self.mounts.iter().find_map(|mount| match &mount.place {
-            Place::Folder(folder) => folder
-                .file(&path)
-                .and_then(|file| fs::File::open(file).ok())
-                .map(GameFile::Loose),
+            Place::Folder(folder) => folder.file(&path).and_then(|file| {
+                let opened = fs::File::open(&file).ok()?;
+                self.watch(file, &path);
+                Some(GameFile::Loose(opened))
+            }),
             Place::Vpk(archive) => archive.contains(&path).then(|| GameFile::Packed(archive, path.clone())),
         })
     }
@@ -303,6 +333,61 @@ impl GameFs {
             }
         }
         None
+    }
+
+    /// Starts watching a loose file that was just read as game path `path`.
+    fn watch(&self, file: PathBuf, path: &str) {
+        let mut watched = self.watched.lock().unwrap_or_else(PoisonError::into_inner);
+        if watched.contains_key(&file) {
+            return;
+        }
+        let stamp = stamp_of(&file);
+        watched.insert(
+            file,
+            Watched {
+                path: path.to_owned(),
+                stamp,
+                settling: false,
+            },
+        );
+    }
+
+    /// The game paths of loose files that were saved, replaced or deleted since this was
+    /// last asked, among those read so far. A file is reported once it has stopped
+    /// changing between two calls, so call this every second or so. It asks the disk
+    /// about every file read, so call it away from the window's thread.
+    pub fn changed_files(&self) -> Vec<String> {
+        let files: Vec<PathBuf> = self
+            .watched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect();
+        let stamps: Vec<(PathBuf, Stamp)> = files
+            .into_iter()
+            .map(|file| {
+                let stamp = stamp_of(&file);
+                (file, stamp)
+            })
+            .collect();
+        let mut watched = self.watched.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut changed = Vec::new();
+        for (file, stamp) in stamps {
+            let Some(entry) = watched.get_mut(&file) else {
+                continue;
+            };
+            if entry.stamp != stamp {
+                entry.stamp = stamp;
+                entry.settling = true;
+            } else if entry.settling {
+                entry.settling = false;
+                changed.push(entry.path.clone());
+            }
+        }
+        changed.sort();
+        changed.dedup();
+        changed
     }
 
     fn mount_search_path(&mut self, value: &str, game_dir: &Path, base_dir: &Path) {
