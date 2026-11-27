@@ -33,29 +33,15 @@ impl Tonemap {
     }
 }
 
-/// What sky faces show.
+/// What sky faces show in the lighting preview.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkyMode {
     /// The map's skybox textures, or Garry's Mod's painted sky.
-    #[default]
     Skybox,
-    /// One colour, from the sky light.
-    Color,
-    /// Black.
+    /// Black, as the void past the map.
+    #[default]
     Black,
-}
-
-impl SkyMode {
-    pub const ALL: [Self; 3] = [Self::Skybox, Self::Color, Self::Black];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Skybox => "Skybox",
-            Self::Color => "Sky colour",
-            Self::Black => "Black",
-        }
-    }
 }
 
 /// How finely brush faces are lit.

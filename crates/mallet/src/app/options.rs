@@ -12,7 +12,7 @@ use crate::compile::default_presets;
 use crate::config::{self, ToolKind};
 use crate::editor::Editor;
 use crate::keymap::KeyMap;
-use crate::lighting::{HelperMode, LightingDetail, SkyMode, Tonemap};
+use crate::lighting::{HelperMode, LightingDetail, Tonemap};
 #[cfg(windows)]
 use crate::shell;
 
@@ -980,15 +980,6 @@ fn lighting_look_rows(ui: &mut egui::Ui, id: &str, lighting: &mut config::Lighti
         lighting.bounce = percent / 100.0;
         *dirty = true;
     }
-    ui.end_row();
-    ui.label("Sky").on_hover_text("What sky faces show.");
-    egui::ComboBox::from_id_salt((id, "sky"))
-        .selected_text(lighting.sky.label())
-        .show_ui(ui, |ui| {
-            for sky in SkyMode::ALL {
-                *dirty |= ui.selectable_value(&mut lighting.sky, sky, sky.label()).changed();
-            }
-        });
     ui.end_row();
     ui.label("Fog")
         .on_hover_text("The first env_fog_controller with fog enabled.");

@@ -32,7 +32,8 @@ use mallet_content::vtf::{Encoding, Level, Mips};
 use mallet_content::{AlphaMode, MaterialLoader, Materials, SpriteLook, Surface, TextureTransform, Water};
 use mallet_vmf::displacement::Surface as DisplacementSurface;
 
-use crate::lighting::TextureLights;
+use crate::config::LightingOptions;
+use crate::lighting::{SkyMode, TextureLights};
 use crate::scene::{
     box_edges, entity_marker_edges, model_origin_edges, ModelCache, Overlay, Owner, Remap, Scene, SceneFace, WireMesh,
     AGENT_CAMERA_COLOR, MODEL_ORIGIN_COLOR, MODEL_ORIGIN_LENGTH,
@@ -105,6 +106,8 @@ pub struct ViewFilter {
     /// Editor-only helpers: point entity boxes, editor sprites and the editor models some
     /// classes show.
     pub helpers: bool,
+    /// The map's skybox on sky faces in the lighting preview, instead of black.
+    pub skybox: bool,
 }
 
 /// One corner of a brush face on the GPU. The textured view shades it by its normal, as
@@ -1006,6 +1009,11 @@ impl Renderer3D {
             gamma_view,
         );
         self.poll_loading();
+        let options = LightingOptions {
+            sky: if filter.skybox { SkyMode::Skybox } else { SkyMode::Black },
+            ..lighting.options.clone()
+        };
+        let lighting = LightingInput { options: &options, ..lighting };
         let lit = style == CameraStyle::Lit;
         let textured = style != CameraStyle::Wireframe;
         if lit {

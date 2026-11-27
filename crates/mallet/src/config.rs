@@ -155,7 +155,9 @@ pub struct LightingOptions {
     pub shadow_softness: f64,
     /// Props cast shadows.
     pub prop_shadows: bool,
-    /// What sky faces show.
+    /// What sky faces show, set for each frame from the toolbar's Skybox toggle and never
+    /// saved.
+    #[serde(skip)]
     pub sky: crate::lighting::SkyMode,
     /// env_fog_controller's fog.
     pub fog: bool,
@@ -196,7 +198,7 @@ impl Default for LightingOptions {
             small_shadow_size: 128,
             shadow_softness: 1.0,
             prop_shadows: true,
-            sky: crate::lighting::SkyMode::Skybox,
+            sky: crate::lighting::SkyMode::Black,
             fog: true,
             glows: true,
             helpers: crate::lighting::HelperMode::Selected,
@@ -910,6 +912,9 @@ pub struct ViewOptions {
     /// Draw editor-only helpers in the 3D views: point entity boxes, editor sprites and
     /// the editor models some classes show.
     pub helpers: bool,
+    /// Draw the map's skybox, named by worldspawn's sky name, on sky faces in the lighting
+    /// preview; off leaves them black, as the void past the map.
+    pub skybox: bool,
     /// How far the 3D view draws, in units.
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
@@ -957,6 +962,7 @@ impl Default for ViewOptions {
             model_wireframes: false,
             tool_textures: true,
             helpers: true,
+            skybox: false,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_preview: true,

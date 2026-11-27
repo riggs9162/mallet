@@ -99,6 +99,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleModelWireframes,
     Action::ToggleToolTextures,
     Action::ToggleHelpers,
+    Action::ToggleSkybox,
     Action::SelectionTool,
     Action::CameraTool,
     Action::MagnifyTool,
@@ -678,6 +679,8 @@ impl MalletApp {
                     menu_toggle(ui, keymap, "Tool Textures", tools, Action::ToggleToolTextures, &mut chosen);
                     let helpers = editor.config.view.helpers;
                     menu_toggle(ui, keymap, "Editor Helpers", helpers, Action::ToggleHelpers, &mut chosen);
+                    let skybox = editor.config.view.skybox;
+                    menu_toggle(ui, keymap, "Skybox", skybox, Action::ToggleSkybox, &mut chosen);
                     menu_toggle(
                         ui,
                         keymap,
@@ -3118,6 +3121,12 @@ fn run(action: Action, editor: &mut Editor) {
             editor.config.view.tool_textures = shown;
             editor.save_config();
             editor.message = format!("Tool textures in the 3D views {}", if shown { "shown" } else { "hidden" });
+        }
+        Action::ToggleSkybox => {
+            let shown = !editor.config.view.skybox;
+            editor.config.view.skybox = shown;
+            editor.save_config();
+            editor.message = format!("Skybox in the lighting preview {}", if shown { "shown" } else { "hidden" });
         }
         Action::ToggleHelpers => {
             let shown = !editor.config.view.helpers;

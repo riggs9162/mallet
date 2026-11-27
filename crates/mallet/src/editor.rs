@@ -2285,6 +2285,7 @@ impl Editor {
         ViewFilter {
             tool_textures: self.config.view.tool_textures,
             helpers: self.config.view.helpers,
+            skybox: self.config.view.skybox,
         }
     }
 

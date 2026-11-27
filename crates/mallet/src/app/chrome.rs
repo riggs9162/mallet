@@ -297,6 +297,12 @@ impl MalletApp {
                         editor.config.view.helpers,
                     ),
                     (
+                        icon::CLOUD_SUN,
+                        "Skybox: show the map's skybox on sky faces in the lighting preview instead of the black void",
+                        Action::ToggleSkybox,
+                        editor.config.view.skybox,
+                    ),
+                    (
                         icon::DOTS_NINE,
                         "Displacement Edge Collapse: mark in pink the displacement vertices the compiler leaves out next to neighbours of a lower power",
                         Action::ToggleDisplacementEdgeCollapse,

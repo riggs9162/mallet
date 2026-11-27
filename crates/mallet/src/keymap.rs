@@ -44,6 +44,8 @@ pub enum Action {
     /// Show or hide editor-only helpers (entity boxes, editor sprites and editor models)
     /// in the 3D views.
     ToggleHelpers,
+    /// Show the map's skybox on sky faces in the lighting preview, or leave them black.
+    ToggleSkybox,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,

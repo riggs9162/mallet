@@ -2517,7 +2517,6 @@ impl LitState {
                 .is_some_and(|name| name.eq_ignore_ascii_case(lighting.sky.name.trim()));
         let mode = match options.sky {
             SkyMode::Black => 0.0,
-            SkyMode::Color => 1.0,
             SkyMode::Skybox if painted => 3.0,
             SkyMode::Skybox if skybox_ready => 2.0,
             SkyMode::Skybox => 1.0,
