@@ -148,6 +148,13 @@ fn stamp_of(file: &Path) -> Stamp {
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
+/// A file's size and write time as text, or `None` when it is not there.
+fn stamp_text(file: &Path) -> Option<String> {
+    let (modified, length) = stamp_of(file)?;
+    let since = modified.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    Some(format!("{length}:{}", since.as_nanos()))
+}
+
 impl GameFs {
     /// Mounts the `game` search paths of the `gameinfo.txt` in `game_dir`, such as
     /// `.../GarrysMod/garrysmod` or `.../Half-Life 2/hl2`, then every game in its
@@ -216,6 +223,20 @@ impl GameFs {
         self.mounts.iter().any(|mount| match &mount.place {
             Place::Folder(folder) => folder.file(&path).is_some_and(|file| file.is_file()),
             Place::Vpk(archive) => archive.contains(&path),
+        })
+    }
+
+    /// A short text that changes whenever the game file at `path` may have changed: the
+    /// size and write time of the loose file, or of the VPK that holds it. `None` when no
+    /// mount has the file.
+    pub fn version(&self, path: &str) -> Option<String> {
+        let path = normalize(path);
+        self.mounts.iter().find_map(|mount| match &mount.place {
+            Place::Folder(folder) => folder.file(&path).and_then(|file| stamp_text(&file)),
+            Place::Vpk(archive) => archive
+                .contains(&path)
+                .then(|| stamp_text(archive.dir_path()))
+                .flatten(),
         })
     }
 

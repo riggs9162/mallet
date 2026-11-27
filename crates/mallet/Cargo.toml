@@ -21,6 +21,7 @@ bytemuck = { version = "1", features = ["derive"] }
 ab_glyph = "0.2"
 egui-phosphor = "0.9"
 discord-rich-presence = "1.1.0"
+texpresso = "2"
 
 # Low compile priority (nice) on non-Windows targets.
 [target.'cfg(unix)'.dependencies]

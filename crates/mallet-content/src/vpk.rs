@@ -62,6 +62,11 @@ pub struct VpkArchive {
 }
 
 impl VpkArchive {
+    /// The archive's `_dir.vpk` file.
+    pub fn dir_path(&self) -> &Path {
+        &self.dir_path
+    }
+
     /// Opens an archive from its `_dir.vpk` file and reads its directory tree.
     pub fn open(dir_path: &Path) -> Result<Self, ContentError> {
         let io_error = |error| ContentError::io(dir_path, error);

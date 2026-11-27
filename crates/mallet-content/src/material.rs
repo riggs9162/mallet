@@ -1200,6 +1200,72 @@ impl MaterialLoader {
         Some(image)
     }
 
+    /// The layers of a blended material that load, base first, each at most `max_side`
+    /// pixels across. A layer that fails to load is left out.
+    fn blend_layers(&self, properties: &Properties, max_side: u32) -> Vec<Image> {
+        [
+            properties.texture.as_deref(),
+            properties.second_texture.as_deref(),
+            properties.third_texture.as_deref(),
+            properties.fourth_texture.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|name| {
+            let file = self.texture_file(name)?;
+            vtf::load(|start, length| file.read(start, length), max_side).ok()
+        })
+        .collect()
+    }
+
+    /// The game files [`MaterialLoader::thumbnail`] makes a material's thumbnail from: its
+    /// VMT, the VMTs it includes, and the textures it shows. Empty when the VMT cannot be
+    /// read.
+    pub fn thumbnail_files(&self, material: &str) -> Vec<String> {
+        let key = material_key(material);
+        let Some(properties) = self.properties(&key, 0) else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        let mut vmt = Some(key);
+        while let Some(name) = vmt.take().filter(|_| files.len() <= MAX_PATCH_DEPTH) {
+            let path = format!("materials/{name}.vmt");
+            vmt = self
+                .filesystem
+                .read(&path)
+                .and_then(|data| mallet_kv::parse(&String::from_utf8_lossy(&data)).ok())
+                .and_then(|items| {
+                    items.iter().find_map(|item| match item {
+                        Item::Block(block) if block.name.eq_ignore_ascii_case("patch") => {
+                            block.get("include").map(material_key)
+                        }
+                        _ => None,
+                    })
+                });
+            files.push(path);
+        }
+        let water = properties.material().water.is_some();
+        let textures = if water {
+            vec![properties.normal_map.clone().or_else(|| properties.texture.clone())]
+        } else {
+            vec![
+                properties.texture.clone(),
+                properties.second_texture.clone(),
+                properties.third_texture.clone(),
+                properties.fourth_texture.clone(),
+            ]
+        };
+        files.extend(textures.into_iter().flatten().map(|name| format!("materials/{name}.vtf")));
+        files
+    }
+
+    /// A short text that changes whenever the game file at `path`, such as
+    /// `materials/brick/brickwall001a.vtf`, may have changed. `None` when the game has no
+    /// such file.
+    pub fn file_version(&self, path: &str) -> Option<String> {
+        self.filesystem.version(path)
+    }
+
     /// Every material in the game, such as `brick/brickwall001a`: the `.vmt` files under
     /// `materials/`, sorted.
     pub fn list(&self) -> Vec<String> {

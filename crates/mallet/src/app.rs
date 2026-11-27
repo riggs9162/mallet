@@ -26,6 +26,7 @@ mod select_3d;
 mod soundscape_browser;
 mod texture_browser;
 mod texture_tool;
+mod thumbnail_cache;
 mod transform_window;
 mod vertex_tool;
 mod visgroups;

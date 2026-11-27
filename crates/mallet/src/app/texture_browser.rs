@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use egui_phosphor::regular as icon;
 use mallet_content::vtf::Image;
 use mallet_content::{parallel_map, MaterialInfo, MaterialLoader, Source, SourceKind};
 
+use super::thumbnail_cache::ThumbnailCache;
 use super::MalletApp;
 use crate::config::{TextureBrowserOptions, TextureBrowserView};
 use crate::editor::Editor;
@@ -23,8 +24,9 @@ const MUTED: Color32 = Color32::from_gray(140);
 const ACCENT: Color32 = Color32::from_rgb(70, 140, 230);
 /// Requests waiting to load; older ones are dropped, as they have scrolled out of view.
 const MAX_REQUESTS: usize = 256;
-/// Materials described per batch while indexing.
-const INDEX_BATCH: usize = 1500;
+/// Materials described per batch while indexing. Between batches the index waits for
+/// the thumbnails on screen, which share the same drives.
+const INDEX_BATCH: usize = 256;
 const SIDEBAR_WIDTH: f32 = 210.0;
 const MAX_FILTER_HISTORY: usize = 12;
 /// Folders whose materials are not meant for brushes, hidden while "Brush materials" is on.
@@ -58,20 +60,67 @@ enum Thumbnail {
     Missing,
 }
 
+/// The thumbnails waiting to load, newest last, shared by the loaders and the index.
+#[derive(Default)]
+struct Queue {
+    names: Mutex<Vec<String>>,
+    /// Signalled when a name is added, so an idle loader starts on it straight away.
+    added: Condvar,
+    /// Thumbnails a loader is reading right now.
+    loading: AtomicUsize,
+}
+
+impl Queue {
+    fn names(&self) -> MutexGuard<'_, Vec<String>> {
+        self.names.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether no thumbnail is waiting or loading, so the index may use the drives.
+    fn idle(&self) -> bool {
+        self.loading.load(Ordering::Relaxed) == 0 && self.names().is_empty()
+    }
+
+    /// The newest name waiting, after waiting for one to be added, counted as loading
+    /// until [`Queue::done`]. `None` once `stop` is set.
+    fn next(&self, stop: &AtomicBool) -> Option<String> {
+        let mut names = self.names();
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some(name) = names.pop() {
+                self.loading.fetch_add(1, Ordering::Relaxed);
+                return Some(name);
+            }
+            names = self
+                .added
+                .wait_timeout(names, Duration::from_millis(250))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Marks a thumbnail taken with [`Queue::next`] as loaded.
+    fn done(&self) {
+        self.loading.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// The background thumbnail loaders for one game, started with these thread and size
 /// settings.
 struct Loaders {
     game: PathBuf,
     threads: usize,
     side: u32,
-    requests: Arc<Mutex<Vec<String>>>,
     results: Receiver<(String, Option<Image>)>,
     stop: Arc<AtomicBool>,
+    queue: Arc<Queue>,
 }
 
 impl Drop for Loaders {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.queue.added.notify_all();
     }
 }
 
@@ -96,7 +145,12 @@ pub(super) struct TextureBrowserState {
     list_receiver: Option<(PathBuf, Receiver<Listing>)>,
     hidden_sources: HashSet<usize>,
     loaders: Option<Loaders>,
+    queue: Arc<Queue>,
     thumbnails: HashMap<String, Thumbnail>,
+    /// The frame each thumbnail was last drawn in, so the ones off screen longest are
+    /// dropped first.
+    last_shown: HashMap<String, u64>,
+    frame: u64,
     info: HashMap<String, MaterialInfo>,
     index_receiver: Option<Receiver<Vec<(String, MaterialInfo)>>>,
     /// The game's loader, for describing materials once they are listed.
@@ -118,7 +172,10 @@ impl Default for TextureBrowserState {
             list_receiver: None,
             hidden_sources: HashSet::new(),
             loaders: None,
+            queue: Arc::default(),
             thumbnails: HashMap::new(),
+            last_shown: HashMap::new(),
+            frame: 0,
             info: HashMap::new(),
             index_receiver: None,
             index_loader: None,
@@ -166,6 +223,7 @@ impl MalletApp {
         };
         let game = editor.game_dir().map(PathBuf::from).unwrap_or_default();
         let state = &mut self.texture_browser;
+        state.frame += 1;
         let options = editor.config.texture_browser.clone();
         state.start(&game, &loader, &options);
         state.receive(ctx);
@@ -284,24 +342,25 @@ impl TextureBrowserState {
         let (threads, side) = (options.thread_count(), options.thumbnail_side());
         let stale = |loaders: &Loaders| &loaders.game != game || loaders.threads != threads || loaders.side != side;
         if self.loaders.as_ref().is_none_or(stale) {
-            let requests: Arc<Mutex<Vec<String>>> = Arc::default();
+            self.loaders = None;
+            self.queue.names().clear();
             let stop = Arc::new(AtomicBool::new(false));
             let (sender, results) = mpsc::channel();
+            let cache = ThumbnailCache::new(game, side).map(Arc::new);
             for _ in 0..threads {
-                let (requests, stop, sender, loader) =
-                    (Arc::clone(&requests), Arc::clone(&stop), sender.clone(), loader.clone());
+                let (queue, stop, sender, loader, cache) = (
+                    Arc::clone(&self.queue),
+                    Arc::clone(&stop),
+                    sender.clone(),
+                    loader.clone(),
+                    cache.clone(),
+                );
                 thread::spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        // Newest first: what was asked for last is what is on screen now.
-                        let next = requests.lock().ok().and_then(|mut queue| queue.pop());
-                        match next {
-                            Some(name) => {
-                                let image = loader.thumbnail(&name, side);
-                                if sender.send((name, image)).is_err() {
-                                    return;
-                                }
-                            }
-                            None => thread::sleep(Duration::from_millis(15)),
+                    while let Some(name) = queue.next(&stop) {
+                        let image = load_thumbnail(&loader, cache.as_deref(), &name, side);
+                        queue.done();
+                        if sender.send((name, image)).is_err() {
+                            return;
                         }
                     }
                 });
@@ -310,11 +369,12 @@ impl TextureBrowserState {
                 game: game.clone(),
                 threads,
                 side,
-                requests,
                 results,
                 stop,
+                queue: Arc::clone(&self.queue),
             });
             self.thumbnails.clear();
+            self.last_shown.clear();
         }
     }
 
@@ -394,8 +454,12 @@ impl TextureBrowserState {
         let names: Vec<String> = listing.materials.iter().map(|(name, _)| name.clone()).collect();
         let (sender, receiver) = mpsc::channel();
         if let Some(loader) = self.index_loader.clone() {
+            let queue = Arc::clone(&self.queue);
             thread::spawn(move || {
                 for chunk in names.chunks(INDEX_BATCH) {
+                    while !queue.idle() {
+                        thread::sleep(Duration::from_millis(20));
+                    }
                     let described = parallel_map(chunk, |name| loader.describe(name));
                     let batch: Vec<(String, MaterialInfo)> = chunk.iter().cloned().zip(described).collect();
                     if sender.send(batch).is_err() {
@@ -674,6 +738,12 @@ impl TextureBrowserState {
     /// One card: the thumbnail at its real size up to the card's, and the name under it.
     fn card(&mut self, ui: &mut egui::Ui, name: &str, sources: &[String], size: f32, current: bool) -> egui::Response {
         self.request(name);
+        match self.last_shown.get_mut(name) {
+            Some(frame) => *frame = self.frame,
+            None => {
+                self.last_shown.insert(name.to_owned(), self.frame);
+            }
+        }
         let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size + 22.0), egui::Sense::click());
         let image_rect = egui::Rect::from_min_size(rect.min, egui::Vec2::splat(size));
         let painter = ui.painter();
@@ -928,27 +998,54 @@ impl TextureBrowserState {
         if self.thumbnails.contains_key(name) {
             return;
         }
-        let Some(loaders) = &self.loaders else { return };
-        if let Ok(mut queue) = loaders.requests.lock() {
+        if self.loaders.is_none() {
+            return;
+        }
+        let dropped: Vec<String> = {
+            let mut queue = self.queue.names();
             queue.push(name.to_owned());
             let excess = queue.len().saturating_sub(MAX_REQUESTS);
-            if excess > 0 {
-                for dropped in queue.drain(..excess) {
-                    self.thumbnails.remove(&dropped);
-                }
-            }
+            queue.drain(..excess).collect()
+        };
+        for dropped in dropped {
+            self.thumbnails.remove(&dropped);
         }
+        self.queue.added.notify_one();
         self.thumbnails.insert(name.to_owned(), Thumbnail::Loading);
     }
 
-    /// Drops every thumbnail when there are more than `limit`, so they reload as needed and
-    /// browsing never fills GPU memory.
+    /// Drops the thumbnails off screen longest when there are more than `limit`, down to
+    /// three quarters of it, so they reload as needed and browsing never fills GPU memory.
     fn trim(&mut self, limit: usize) {
-        if self.thumbnails.len() > limit {
-            self.thumbnails
-                .retain(|_, thumbnail| matches!(thumbnail, Thumbnail::Loading));
+        if self.thumbnails.len() <= limit {
+            return;
+        }
+        let mut loaded: Vec<(u64, String)> = self
+            .thumbnails
+            .iter()
+            .filter(|(_, thumbnail)| !matches!(thumbnail, Thumbnail::Loading))
+            .map(|(name, _)| (self.last_shown.get(name).copied().unwrap_or(0), name.clone()))
+            .collect();
+        loaded.sort_unstable();
+        let excess = self.thumbnails.len().saturating_sub(limit * 3 / 4);
+        for (_, name) in loaded.into_iter().take(excess) {
+            self.thumbnails.remove(&name);
+            self.last_shown.remove(&name);
         }
     }
+}
+
+/// Loads a thumbnail from the disk cache when it is still current, otherwise from the
+/// game's files, keeping what was loaded in the cache for the next time.
+fn load_thumbnail(loader: &MaterialLoader, cache: Option<&ThumbnailCache>, name: &str, side: u32) -> Option<Image> {
+    if let Some(image) = cache.and_then(|cache| cache.load(loader, name)) {
+        return Some(image);
+    }
+    let image = loader.thumbnail(name, side)?;
+    if let Some(cache) = cache {
+        cache.store(loader, name, &image);
+    }
+    Some(image)
 }
 
 /// Opens a material's VMT in the program Windows uses for it. A VMT inside a VPK is

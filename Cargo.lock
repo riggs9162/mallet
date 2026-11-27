@@ -1811,6 +1811,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "texpresso",
  "tiny-skia",
  "tiny_http",
 ]
