@@ -18,7 +18,7 @@ use mallet_content::{parallel_map, MaterialInfo, MaterialLoader};
 
 use super::asset_browser::{
     self, card, card_grid, checkerboard, chip, empty_state, grid_columns, hidden_paths, in_folder, muted,
-    paint_thumbnail, path_bar, remember, restore_hidden, size_buttons, source_lines, status_line, thousands,
+    paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line, thousands,
     toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, KeyMove, Listing, Loaders, Marks, Narrowing,
     Search, SearchBox, Shelf, ShelfAction, Thumbnail, Thumbnails,
 };
@@ -463,7 +463,7 @@ impl TextureBrowserState {
                     .desired_width(130.0),
             );
             ui.separator();
-            size_buttons(ui, &mut self.view.card_size);
+            per_row_slider(ui, &mut self.view.per_row);
             ui.separator();
             toggle_chip(ui, &mut self.view.show_alpha, "Alpha", None)
                 .on_hover_text("Draw a checkerboard behind textures so transparency shows");
@@ -650,7 +650,7 @@ impl TextureBrowserState {
         }
         let mut reveal = None;
         if keys.moves() {
-            let (columns, _) = grid_columns(ui.available_width(), self.view.card_size);
+            let (columns, _) = grid_columns(ui.available_width(), self.view.per_row);
             let from = self
                 .selected
                 .as_ref()
@@ -664,12 +664,12 @@ impl TextureBrowserState {
         if keys.enter {
             commands.extend(self.selected.clone().map(|name| Command::Choose(name, true)));
         }
-        let mut card_size = self.view.card_size;
+        let mut per_row = self.view.per_row;
         card_grid(
             ui,
             "texture_grid",
             names.len(),
-            &mut card_size,
+            &mut per_row,
             scroll_step,
             reveal,
             |ui, shown, side| {
@@ -691,7 +691,7 @@ impl TextureBrowserState {
                 response.context_menu(|ui| self.card_menu(ui, &name, commands));
             },
         );
-        self.view.card_size = card_size;
+        self.view.per_row = per_row;
     }
 
     /// The menu a card opens when right-clicked.

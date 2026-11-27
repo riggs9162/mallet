@@ -25,11 +25,11 @@ const CARD_GAP: f32 = 6.0;
 const CARD_LABEL: f32 = 22.0;
 /// Width the grid leaves free on the right for its scroll bar.
 const SCROLL_BAR_ROOM: f32 = 16.0;
-/// The smallest and largest side of a card's picture, in points.
-const MIN_CARD: u32 = 64;
-const MAX_CARD: u32 = 320;
-/// The card sizes the toolbar offers.
-const CARD_SIZES: [(&str, u32); 3] = [("S", 96), ("M", 144), ("L", 224)];
+/// The fewest and most cards a row of the grid can hold.
+const MIN_PER_ROW: usize = 2;
+const MAX_PER_ROW: usize = 14;
+/// How far Ctrl and the mouse wheel have to zoom before a row holds one card more or less.
+const ZOOM_STEP: f32 = 1.25;
 /// Entries the Recent shelf keeps.
 const RECENT_LIMIT: usize = 24;
 /// Side of a picture on the Recent and Favourites shelf, in points.
@@ -745,17 +745,41 @@ impl SearchBox<'_> {
     }
 }
 
-/// How many cards fit across a grid `width` points wide, and the side of each card's
-/// picture.
-pub(super) fn grid_columns(width: f32, card_size: u32) -> (usize, f32) {
-    let side = card_size.clamp(MIN_CARD, MAX_CARD) as f32;
-    let room = (width - SCROLL_BAR_ROOM).max(side);
-    let columns = ((room + CARD_GAP) / (side + CARD_GAP)).floor() as usize;
-    (columns.max(1), side)
+/// How many cards a row of a grid `width` points wide holds when `per_row` are asked
+/// for, and the side of each card's picture, which share the width evenly.
+pub(super) fn grid_columns(width: f32, per_row: usize) -> (usize, f32) {
+    let columns = per_row.clamp(MIN_PER_ROW, MAX_PER_ROW);
+    let side = ((width - SCROLL_BAR_ROOM - CARD_GAP * (columns as f32 - 1.0)) / columns as f32).max(32.0);
+    (columns, side)
 }
 
-/// The grid of cards, each `card_size` points across, as many to a row as fit, drawing
-/// only the rows on screen. Holding Ctrl and scrolling over it changes the card size.
+/// Changes how many cards a row holds as Ctrl and the mouse wheel zoom over `area`:
+/// zooming in makes the cards larger, so fewer fit. The zoom is added up across frames,
+/// as egui hands out a wheel notch a little at a time.
+fn zoom_per_row(ui: &egui::Ui, area: egui::Rect, per_row: &mut usize) {
+    if !ui.rect_contains_pointer(area) {
+        return;
+    }
+    let zoom = ui.input(|input| input.zoom_delta());
+    if zoom == 1.0 {
+        return;
+    }
+    let id = ui.id().with("card_zoom");
+    let total = ui.data_mut(|data| {
+        let total = data.get_temp_mut_or(id, 0.0_f32);
+        *total += zoom.ln();
+        *total
+    });
+    let steps = (total / ZOOM_STEP.ln()).trunc();
+    if steps != 0.0 {
+        let fewer = steps as i64;
+        *per_row = (*per_row as i64 - fewer).clamp(MIN_PER_ROW as i64, MAX_PER_ROW as i64) as usize;
+        ui.data_mut(|data| data.insert_temp(id, total - steps * ZOOM_STEP.ln()));
+    }
+}
+
+/// The grid of cards, `per_row` to a row sharing the width evenly, drawing only the
+/// rows on screen. Holding Ctrl and scrolling over it changes how many fit across.
 /// `card` draws the card for an entry, given its index in the shown entries and the side
 /// of its picture; with `reveal`, the grid scrolls the entry at that index into view.
 ///
@@ -766,19 +790,14 @@ pub(super) fn card_grid(
     ui: &mut egui::Ui,
     salt: &str,
     count: usize,
-    card_size: &mut u32,
+    per_row: &mut usize,
     scroll_step: f32,
     reveal: Option<usize>,
     mut card: impl FnMut(&mut egui::Ui, usize, f32),
 ) {
     let area = ui.available_rect_before_wrap();
-    if ui.rect_contains_pointer(area) {
-        let zoom = ui.input(|input| input.zoom_delta());
-        if zoom != 1.0 {
-            *card_size = ((*card_size as f32 * zoom).round() as u32).clamp(MIN_CARD, MAX_CARD);
-        }
-    }
-    let (columns, side) = grid_columns(area.width(), *card_size);
+    zoom_per_row(ui, area, per_row);
+    let (columns, side) = grid_columns(area.width(), *per_row);
     let row_height = side + CARD_LABEL + CARD_GAP;
     let rows = count.div_ceil(columns);
     let wheel = wheel_rows(ui, area);
@@ -975,16 +994,12 @@ pub(super) fn toggle_chip(ui: &mut egui::Ui, on: &mut bool, label: &str, count: 
     response
 }
 
-/// The small, medium and large card size buttons.
-pub(super) fn size_buttons(ui: &mut egui::Ui, card_size: &mut u32) {
-    for (label, side) in CARD_SIZES {
-        if chip(ui, *card_size == side, label, None)
-            .on_hover_text("Card size. Hold Ctrl and scroll over the cards to zoom them.")
-            .clicked()
-        {
-            *card_size = side;
-        }
-    }
+/// The slider for how many cards a row holds.
+pub(super) fn per_row_slider(ui: &mut egui::Ui, per_row: &mut usize) {
+    ui.add(egui::Slider::new(per_row, MIN_PER_ROW..=MAX_PER_ROW).text("per row"))
+        .on_hover_text(
+            "How many cards fit across; they grow and shrink with the window. Holding Ctrl and              scrolling over the cards changes it too.",
+        );
 }
 
 /// The line under the grid: how many entries show out of how many, and a progress bar
@@ -1427,10 +1442,11 @@ mod tests {
     }
 
     #[test]
-    fn cards_keep_their_size_and_fill_the_width() {
-        assert_eq!(grid_columns(16.0 + 4.0 * 100.0 + 3.0 * CARD_GAP, 100), (4, 100.0));
-        assert_eq!(grid_columns(50.0, 100).0, 1);
-        assert_eq!(grid_columns(1000.0, 5).1, MIN_CARD as f32);
+    fn cards_share_the_width_evenly() {
+        assert_eq!(grid_columns(16.0 + 4.0 * 100.0 + 3.0 * CARD_GAP, 4), (4, 100.0));
+        assert_eq!(grid_columns(1000.0, 1).0, MIN_PER_ROW);
+        assert_eq!(grid_columns(1000.0, 99).0, MAX_PER_ROW);
+        assert_eq!(grid_columns(10.0, 4).1, 32.0);
     }
 
     #[test]

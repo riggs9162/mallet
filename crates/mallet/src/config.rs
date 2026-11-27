@@ -506,8 +506,8 @@ impl TextureBrowserOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TextureBrowserView {
-    /// The side of a card's picture, in points.
-    pub card_size: u32,
+    /// How many cards fit across the grid.
+    pub per_row: usize,
     /// Show the pane that describes the clicked material.
     pub show_details: bool,
     /// Materials used last, the latest first.
@@ -539,7 +539,7 @@ pub struct TextureBrowserView {
 impl Default for TextureBrowserView {
     fn default() -> Self {
         Self {
-            card_size: 128,
+            per_row: 7,
             show_details: true,
             recent: Vec::new(),
             favourites: Vec::new(),
@@ -595,8 +595,8 @@ pub struct SoundscapeBrowserView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelBrowserView {
-    /// The side of a card's picture, in points.
-    pub card_size: u32,
+    /// How many cards fit across the grid.
+    pub per_row: usize,
     /// Models used last, the latest first.
     pub recent: Vec<String>,
     /// Models starred to keep at hand.
@@ -622,7 +622,7 @@ pub struct ModelBrowserView {
 impl Default for ModelBrowserView {
     fn default() -> Self {
         Self {
-            card_size: 160,
+            per_row: 6,
             recent: Vec::new(),
             favourites: Vec::new(),
             used_only: false,

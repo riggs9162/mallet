@@ -18,7 +18,7 @@ use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, PropData, PropT
 
 use super::asset_browser::{
     self, card, card_grid, checkerboard, chip, elide, empty_state, grid_columns, hidden_paths, in_folder, muted,
-    paint_thumbnail, path_bar, remember, restore_hidden, size_buttons, source_lines, status_line, thousands,
+    paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line, thousands,
     toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, KeyMove, Listing, Loaders, Marks, Narrowing,
     Search, SearchBox, Shelf, ShelfAction, Thumbnail, Thumbnails, ROOT_FOLDER,
 };
@@ -971,7 +971,7 @@ impl ModelBrowserState {
         }
         let mut reveal = None;
         if keys.moves() {
-            let (columns, _) = grid_columns(ui.available_width(), self.view.card_size);
+            let (columns, _) = grid_columns(ui.available_width(), self.view.per_row);
             let from = self
                 .selected
                 .as_ref()
@@ -987,12 +987,12 @@ impl ModelBrowserState {
                 commands.push(self.use_command(&path));
             }
         }
-        let mut card_size = self.view.card_size;
+        let mut per_row = self.view.per_row;
         card_grid(
             ui,
             "model_grid",
             shown.len(),
-            &mut card_size,
+            &mut per_row,
             scroll_step,
             reveal,
             |ui, index, side| {
@@ -1015,7 +1015,7 @@ impl ModelBrowserState {
                 response.context_menu(|ui| self.card_menu(ui, &path, target, commands));
             },
         );
-        self.view.card_size = card_size;
+        self.view.per_row = per_row;
     }
 
     /// The menu a card opens when right-clicked.
@@ -1346,7 +1346,7 @@ impl ModelBrowserState {
                 &mut self.focus_search,
             );
             ui.separator();
-            size_buttons(ui, &mut self.view.card_size);
+            per_row_slider(ui, &mut self.view.per_row);
             ui.separator();
             toggle_chip(
                 ui,
