@@ -994,6 +994,12 @@ fn editor_definitions() -> Value {
             &[],
         ),
         tool(
+            "show_sky_browser",
+            "Open or close the sky browser, optionally searching for something. It lists the game's 2D skyboxes              with a live preview to look around in, and a sky picked there becomes the map's skyname.",
+            json!({ "open": { "type": "boolean" }, "filter": { "type": "string" } }),
+            &[],
+        ),
+        tool(
             "show_soundscape_browser",
             "Open or close the soundscape browser, optionally searching for something. A soundscape picked \
              there goes on the selected env_soundscape entities, or on new ones when none is selected.",
@@ -1292,7 +1298,7 @@ pub fn run(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
 }
 
 /// Tools that drive the window, which an agent in its own view may not use.
-const WINDOW_TOOLS: [&str; 8] = [
+const WINDOW_TOOLS: [&str; 9] = [
     "send_input",
     "show_compile",
     "show_options",
@@ -1301,6 +1307,7 @@ const WINDOW_TOOLS: [&str; 8] = [
     "show_texture_browser",
     "show_model_browser",
     "show_soundscape_browser",
+    "show_sky_browser",
 ];
 
 /// Runs a tool call in the agent's own view. Tab tools move only the agent between
@@ -1879,6 +1886,15 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 "The soundscape browser is open."
             } else {
                 "The soundscape browser is closed."
+            }))
+        }
+        "show_sky_browser" => {
+            editor.sky_browser_open = args.get("open").and_then(Value::as_bool).unwrap_or(true);
+            editor.sky_browser_filter = optional_string(args, "filter")?.map(str::to_owned);
+            Ok(ToolResult::text(if editor.sky_browser_open {
+                "The sky browser is open."
+            } else {
+                "The sky browser is closed."
             }))
         }
         "list_models" => {
