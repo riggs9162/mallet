@@ -17,10 +17,10 @@ use egui_phosphor::regular as icon;
 use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, PropData, PropTraits, PROP_CLASSES};
 
 use super::asset_browser::{
-    self, card, card_grid, checkerboard, chip, elide, empty_state, grid_columns, hidden_paths, in_folder, muted,
-    paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line, thousands,
-    toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, KeyMove, Listing, Loaders, Marks, Narrowing,
-    Search, SearchBox, Shelf, ShelfAction, Thumbnail, Thumbnails, ROOT_FOLDER,
+    self, card, checkerboard, chip, elide, empty_state, grid_columns, grid_lines, group_by_folder, hidden_paths,
+    in_folder, muted, paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line,
+    thousands, toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, Grid, KeyMove, Listing, Loaders,
+    Marks, Narrowing, Search, SearchBox, Shelf, ShelfAction, Shown, Thumbnail, Thumbnails, ROOT_FOLDER,
 };
 use super::MalletApp;
 use crate::config::{ModelBrowserView, ModelKinds, TextureBrowserOptions};
@@ -416,7 +416,13 @@ impl MalletApp {
         let target = state.target(editor);
         let keys = KeyMove::read(ctx, state.window);
         state.check_prop_traits(&used);
-        let shown = state.filtered(&used);
+        let mut shown = state.filtered(&used);
+        let groups = state
+            .catalog
+            .listing
+            .as_ref()
+            .filter(|_| state.view.group_by_folder)
+            .map(|listing| group_by_folder(listing, &mut shown, short_name));
 
         let title = match &state.pick {
             Pick::NewEntity => format!("{} Models: pick the model for new props", icon::CUBE_FOCUS),
@@ -457,7 +463,17 @@ impl MalletApp {
                         .show_inside(ui, |ui| state.preview_pane(ui, &game, &loader, &target, &mut commands));
                 }
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    state.grid(ui, &shown, &target, scroll_step, keys, &mut commands);
+                    state.grid(
+                        ui,
+                        Shown {
+                            entries: &shown,
+                            groups: groups.as_deref(),
+                        },
+                        &target,
+                        scroll_step,
+                        keys,
+                        &mut commands,
+                    );
                 });
             });
         state.window = window.map(|window| window.response.rect);
@@ -907,12 +923,13 @@ impl ModelBrowserState {
     fn grid(
         &mut self,
         ui: &mut egui::Ui,
-        shown: &[usize],
+        shown: Shown,
         target: &Target,
         scroll_step: f32,
         keys: KeyMove,
         commands: &mut Vec<Command>,
     ) {
+        let Shown { entries: shown, groups } = shown;
         path_bar(ui, "All models", &mut self.view.folder);
         let shelf = Shelf {
             recent: &self.view.recent,
@@ -972,11 +989,12 @@ impl ModelBrowserState {
         let mut reveal = None;
         if keys.moves() {
             let (columns, _) = grid_columns(ui.available_width(), self.view.per_row);
+            let lines = grid_lines(shown.len(), columns, groups);
             let from = self
                 .selected
                 .as_ref()
                 .and_then(|selected| shown.iter().position(|index| listing.entries[*index].0 == *selected));
-            if let Some(next) = keys.target(from, shown.len(), columns) {
+            if let Some(next) = keys.target(from, &lines) {
                 let path = listing.entries[shown[next]].0.clone();
                 self.select(&path);
                 reveal = Some(next);
@@ -988,33 +1006,36 @@ impl ModelBrowserState {
             }
         }
         let mut per_row = self.view.per_row;
-        card_grid(
-            ui,
-            "model_grid",
-            shown.len(),
-            &mut per_row,
+        let grid = Grid {
+            salt: "model_grid",
+            count: shown.len(),
+            groups,
             scroll_step,
             reveal,
-            |ui, index, side| {
-                let Some((path, sources)) = self
-                    .catalog
-                    .listing
-                    .as_ref()
-                    .and_then(|listing| listing.source_names(shown[index]))
-                else {
-                    return;
-                };
-                let current = target.current.as_deref() == Some(path.as_str());
-                let response = self.card(ui, &path, &sources, side, current);
-                if response.clicked() {
-                    self.select(&path);
-                }
-                if response.double_clicked() {
-                    commands.push(Command::Use(path.clone(), ModelVariant::default(), false));
-                }
-                response.context_menu(|ui| self.card_menu(ui, &path, target, commands));
-            },
-        );
+        };
+        let clicked = grid.show(ui, &mut per_row, |ui, index, side| {
+            let Some((path, sources)) = self
+                .catalog
+                .listing
+                .as_ref()
+                .and_then(|listing| listing.source_names(shown[index]))
+            else {
+                return;
+            };
+            let current = target.current.as_deref() == Some(path.as_str());
+            let response = self.card(ui, &path, &sources, side, current);
+            if response.clicked() {
+                self.select(&path);
+            }
+            if response.double_clicked() {
+                commands.push(Command::Use(path.clone(), ModelVariant::default(), false));
+            }
+            response.context_menu(|ui| self.card_menu(ui, &path, target, commands));
+        });
+        if let Some(group) = clicked.and_then(|group| groups?.get(group)) {
+            self.view.folder = Some(group.folder.clone());
+            self.reveal_folder = true;
+        }
         self.view.per_row = per_row;
     }
 
@@ -1348,6 +1369,13 @@ impl ModelBrowserState {
             ui.separator();
             per_row_slider(ui, &mut self.view.per_row);
             ui.separator();
+            toggle_chip(
+                ui,
+                &mut self.view.group_by_folder,
+                &format!("{} Folders", icon::FOLDERS),
+                None,
+            )
+            .on_hover_text("Put the models under a heading for each folder");
             toggle_chip(
                 ui,
                 &mut self.view.show_preview,

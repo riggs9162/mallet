@@ -508,6 +508,8 @@ impl TextureBrowserOptions {
 pub struct TextureBrowserView {
     /// How many cards fit across the grid.
     pub per_row: usize,
+    /// Put the cards under a heading for each folder.
+    pub group_by_folder: bool,
     /// Show the pane that describes the clicked material.
     pub show_details: bool,
     /// Materials used last, the latest first.
@@ -540,6 +542,7 @@ impl Default for TextureBrowserView {
     fn default() -> Self {
         Self {
             per_row: 7,
+            group_by_folder: true,
             show_details: true,
             recent: Vec::new(),
             favourites: Vec::new(),
@@ -597,6 +600,8 @@ pub struct SoundscapeBrowserView {
 pub struct ModelBrowserView {
     /// How many cards fit across the grid.
     pub per_row: usize,
+    /// Put the cards under a heading for each folder.
+    pub group_by_folder: bool,
     /// Models used last, the latest first.
     pub recent: Vec<String>,
     /// Models starred to keep at hand.
@@ -623,6 +628,7 @@ impl Default for ModelBrowserView {
     fn default() -> Self {
         Self {
             per_row: 6,
+            group_by_folder: true,
             recent: Vec::new(),
             favourites: Vec::new(),
             used_only: false,

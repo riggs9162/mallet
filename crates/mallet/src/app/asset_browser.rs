@@ -4,6 +4,7 @@
 //! in both browsers.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -23,6 +24,8 @@ pub(super) const ROOT_FOLDER: &str = "(no folder)";
 const CARD_GAP: f32 = 6.0;
 /// Height of the name bar under each card's picture.
 const CARD_LABEL: f32 = 22.0;
+/// Height of a folder's heading in the grid, with the room above it.
+const HEADING_HEIGHT: f32 = 30.0;
 /// Width the grid leaves free on the right for its scroll bar.
 const SCROLL_BAR_ROOM: f32 = 16.0;
 /// The fewest and most cards a row of the grid can hold.
@@ -778,80 +781,228 @@ fn zoom_per_row(ui: &egui::Ui, area: egui::Rect, per_row: &mut usize) {
     }
 }
 
-/// The grid of cards, `per_row` to a row sharing the width evenly, drawing only the
-/// rows on screen. Holding Ctrl and scrolling over it changes how many fit across.
-/// `card` draws the card for an entry, given its index in the shown entries and the side
-/// of its picture; with `reveal`, the grid scrolls the entry at that index into view.
-///
-/// The scroll bar is solid and always shown, with a handle long enough to grab: egui's
-/// floating bar hides until hovered, and with tens of thousands of entries its handle
-/// shrinks to a dot. It fits in the room the cards leave free on the right.
-pub(super) fn card_grid(
-    ui: &mut egui::Ui,
-    salt: &str,
-    count: usize,
-    per_row: &mut usize,
-    scroll_step: f32,
-    reveal: Option<usize>,
-    mut card: impl FnMut(&mut egui::Ui, usize, f32),
-) {
-    let area = ui.available_rect_before_wrap();
-    zoom_per_row(ui, area, per_row);
-    let (columns, side) = grid_columns(area.width(), *per_row);
-    let row_height = side + CARD_LABEL + CARD_GAP;
-    let rows = count.div_ceil(columns);
-    let wheel = wheel_rows(ui, area);
-    ui.spacing_mut().scroll = egui::style::ScrollStyle {
-        bar_width: 10.0,
-        handle_min_length: 48.0,
-        bar_inner_margin: 4.0,
-        dormant_background_opacity: 0.5,
-        active_background_opacity: 0.7,
-        interact_background_opacity: 0.9,
-        dormant_handle_opacity: 0.8,
-        active_handle_opacity: 1.0,
-        interact_handle_opacity: 1.0,
-        ..egui::style::ScrollStyle::solid()
+/// A run of shown entries that lie in one folder, which the grid puts under a heading.
+pub(super) struct Group {
+    pub(super) folder: String,
+    pub(super) count: usize,
+}
+
+/// Puts the shown entries in the order of the folders they lie in, keeping name order
+/// within a folder, and returns the run of entries in each folder. `short` gives an
+/// entry's name as the browser shows it, which the folder is taken from.
+pub(super) fn group_by_folder<X>(listing: &Listing<X>, shown: &mut [usize], short: fn(&str) -> &str) -> Vec<Group> {
+    let folder = |index: &usize| folder_of(short(&listing.entries[*index].0));
+    shown.sort_by_cached_key(folder);
+    let mut groups: Vec<Group> = Vec::new();
+    for index in shown.iter() {
+        let name = folder(index);
+        match groups.last_mut() {
+            Some(group) if group.folder == name => group.count += 1,
+            _ => groups.push(Group {
+                folder: name.to_owned(),
+                count: 1,
+            }),
+        }
+    }
+    groups
+}
+
+/// The entries a browser shows, as indices into its listing in the order shown, and
+/// the folders they are grouped in when they are.
+#[derive(Clone, Copy)]
+pub(super) struct Shown<'a> {
+    pub(super) entries: &'a [usize],
+    pub(super) groups: Option<&'a [Group]>,
+}
+
+/// One line of the grid: the heading of a group, or a row of cards for the shown
+/// entries in a range.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Line {
+    Heading(usize),
+    Cards(Range<usize>),
+}
+
+/// The grid's lines for `count` entries, `columns` to a row. With `groups`, each group
+/// starts with its heading and a new row.
+pub(super) fn grid_lines(count: usize, columns: usize, groups: Option<&[Group]>) -> Vec<Line> {
+    let rows = |start: usize, end: usize| {
+        (start..end)
+            .step_by(columns.max(1))
+            .map(move |row| Line::Cards(row..(row + columns).min(end)))
     };
-    egui::ScrollArea::vertical()
-        .id_salt(salt)
-        .max_height(area.height())
-        .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .show_viewport(ui, |ui, viewport| {
-            ui.set_height(rows as f32 * row_height);
-            if wheel != 0.0 {
-                ui.scroll_with_delta_animation(
-                    egui::vec2(0.0, wheel * row_height * scroll_step),
-                    egui::style::ScrollAnimation::none(),
-                );
-            }
-            let top = ui.max_rect().top();
-            let left = ui.max_rect().left();
-            if let Some(index) = reveal {
-                let y = top + (index / columns) as f32 * row_height;
-                let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), y..=y + row_height);
-                ui.scroll_to_rect(rect, None);
-            }
-            let first = (viewport.min.y / row_height).floor().max(0.0) as usize;
-            let last = ((viewport.max.y / row_height).ceil() as usize + 1).min(rows);
-            for row in first..last {
-                let y = top + row as f32 * row_height;
-                let rect = egui::Rect::from_min_size(
-                    egui::pos2(left, y),
-                    egui::vec2(ui.max_rect().width(), side + CARD_LABEL),
-                );
-                let builder = egui::UiBuilder::new()
-                    .max_rect(rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Min));
-                ui.allocate_new_ui(builder, |ui| {
-                    ui.spacing_mut().item_spacing.x = CARD_GAP;
-                    for index in (row * columns..(row + 1) * columns).take_while(|index| *index < count) {
-                        ui.push_id(index, |ui| card(ui, index, side));
+    let Some(groups) = groups else {
+        return rows(0, count).collect();
+    };
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (number, group) in groups.iter().enumerate() {
+        let end = (start + group.count).min(count);
+        lines.push(Line::Heading(number));
+        lines.extend(rows(start, end));
+        start = end;
+    }
+    lines
+}
+
+/// The grid of cards: which entries it shows and how. `card` draws the card for an
+/// entry, given its index in the shown entries and the side of its picture.
+pub(super) struct Grid<'a> {
+    pub(super) salt: &'a str,
+    pub(super) count: usize,
+    /// The folders the entries lie in, each under a heading; `None` shows them all in
+    /// one run.
+    pub(super) groups: Option<&'a [Group]>,
+    /// How far a wheel notch scrolls, in rows of cards.
+    pub(super) scroll_step: f32,
+    /// An entry to scroll into view, by its index in the shown entries.
+    pub(super) reveal: Option<usize>,
+}
+
+impl Grid<'_> {
+    /// Draws the grid, `per_row` cards to a row sharing the width evenly, and only the
+    /// lines on screen. Holding Ctrl and scrolling over it changes how many fit across.
+    /// Returns the group whose heading was clicked.
+    ///
+    /// The scroll bar is solid and always shown, with a handle long enough to grab:
+    /// egui's floating bar hides until hovered, and with tens of thousands of entries its
+    /// handle shrinks to a dot. It fits in the room the cards leave free on the right.
+    pub(super) fn show(
+        &self,
+        ui: &mut egui::Ui,
+        per_row: &mut usize,
+        mut card: impl FnMut(&mut egui::Ui, usize, f32),
+    ) -> Option<usize> {
+        let area = ui.available_rect_before_wrap();
+        zoom_per_row(ui, area, per_row);
+        let (columns, side) = grid_columns(area.width(), *per_row);
+        let row_height = side + CARD_LABEL + CARD_GAP;
+        let lines = grid_lines(self.count, columns, self.groups);
+        let mut bottoms = Vec::with_capacity(lines.len());
+        let mut height = 0.0;
+        for line in &lines {
+            height += match line {
+                Line::Heading(_) => HEADING_HEIGHT,
+                Line::Cards(_) => row_height,
+            };
+            bottoms.push(height);
+        }
+        let wheel = wheel_rows(ui, area);
+        ui.spacing_mut().scroll = egui::style::ScrollStyle {
+            bar_width: 10.0,
+            handle_min_length: 48.0,
+            bar_inner_margin: 4.0,
+            dormant_background_opacity: 0.5,
+            active_background_opacity: 0.7,
+            interact_background_opacity: 0.9,
+            dormant_handle_opacity: 0.8,
+            active_handle_opacity: 1.0,
+            interact_handle_opacity: 1.0,
+            ..egui::style::ScrollStyle::solid()
+        };
+        let mut clicked = None;
+        egui::ScrollArea::vertical()
+            .id_salt(self.salt)
+            .max_height(area.height())
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .show_viewport(ui, |ui, viewport| {
+                ui.set_height(height);
+                if wheel != 0.0 {
+                    ui.scroll_with_delta_animation(
+                        egui::vec2(0.0, wheel * row_height * self.scroll_step),
+                        egui::style::ScrollAnimation::none(),
+                    );
+                }
+                let origin = ui.max_rect().left_top();
+                let width = ui.max_rect().width();
+                let top_of = |line: usize| if line == 0 { 0.0 } else { bottoms[line - 1] };
+                if let Some(index) = self.reveal {
+                    let line = lines
+                        .iter()
+                        .position(|line| matches!(line, Line::Cards(range) if range.contains(&index)));
+                    if let Some(line) = line {
+                        let rect = egui::Rect::from_min_size(
+                            origin + egui::vec2(0.0, top_of(line)),
+                            egui::vec2(width, bottoms[line] - top_of(line)),
+                        );
+                        ui.scroll_to_rect(rect, None);
                     }
-                });
-            }
-        });
+                }
+                let first = bottoms.partition_point(|bottom| *bottom < viewport.min.y);
+                let last = bottoms.partition_point(|bottom| *bottom - row_height < viewport.max.y);
+                for (number, line) in lines.iter().enumerate().take(last.min(lines.len())).skip(first) {
+                    let min = origin + egui::vec2(0.0, top_of(number));
+                    match line {
+                        Line::Heading(group) => {
+                            let rect = egui::Rect::from_min_size(min, egui::vec2(width, HEADING_HEIGHT));
+                            if let Some(group_info) = self.groups.and_then(|groups| groups.get(*group)) {
+                                if heading(ui, rect, group_info).clicked() {
+                                    clicked = Some(*group);
+                                }
+                            }
+                        }
+                        Line::Cards(range) => {
+                            let rect = egui::Rect::from_min_size(min, egui::vec2(width, side + CARD_LABEL));
+                            let builder = egui::UiBuilder::new()
+                                .max_rect(rect)
+                                .layout(egui::Layout::left_to_right(egui::Align::Min));
+                            ui.allocate_new_ui(builder, |ui| {
+                                ui.spacing_mut().item_spacing.x = CARD_GAP;
+                                for index in range.clone() {
+                                    ui.push_id(index, |ui| card(ui, index, side));
+                                }
+                            });
+                        }
+                    }
+                }
+            });
+        clicked
+    }
+}
+
+/// A folder's heading in the grid: its name and how many entries it holds, then a rule
+/// to the right edge. Clicking it narrows the list to the folder.
+fn heading(ui: &mut egui::Ui, rect: egui::Rect, group: &Group) -> egui::Response {
+    let response = ui
+        .interact(
+            rect,
+            ui.id().with(("folder_heading", &group.folder)),
+            egui::Sense::click(),
+        )
+        .on_hover_text("Show only this folder")
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect);
+    let baseline = rect.bottom() - 9.0;
+    let name_colour = if response.hovered() {
+        visuals.hyperlink_color
+    } else {
+        visuals.strong_text_color()
+    };
+    let name = painter.text(
+        egui::pos2(rect.left() + 2.0, baseline),
+        egui::Align2::LEFT_CENTER,
+        format!("{}  {}", icon::FOLDER_SIMPLE, group.folder),
+        egui::FontId::proportional(14.0),
+        name_colour,
+    );
+    let count = painter.text(
+        egui::pos2(name.right() + 8.0, baseline),
+        egui::Align2::LEFT_CENTER,
+        thousands(group.count),
+        egui::FontId::proportional(11.0),
+        visuals.weak_text_color(),
+    );
+    let rule_start = count.right() + 10.0;
+    if rule_start < rect.right() - SCROLL_BAR_ROOM {
+        painter.hline(
+            rule_start..=rect.right() - SCROLL_BAR_ROOM,
+            baseline,
+            visuals.widgets.noninteractive.bg_stroke,
+        );
+    }
+    response
 }
 
 /// How a card is marked: the entry in use now, the one clicked last, and whether it is
@@ -1259,20 +1410,32 @@ impl KeyMove {
         self.step.across != 0 || self.step.rows != 0 || self.step.ends != 0
     }
 
-    /// The index the selection moves to from `from` in a grid of `count` entries,
-    /// `columns` across; from nothing selected it starts at the first entry.
-    pub(super) fn target(&self, from: Option<usize>, count: usize, columns: usize) -> Option<usize> {
+    /// The index the selection moves to from `from` in a grid laid out in `lines`, going
+    /// up and down by rows of cards and keeping to the same column where it can; from
+    /// nothing selected it starts at the first entry.
+    pub(super) fn target(&self, from: Option<usize>, lines: &[Line]) -> Option<usize> {
+        let rows: Vec<&Range<usize>> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::Cards(range) => Some(range),
+                Line::Heading(_) => None,
+            })
+            .collect();
+        let count = rows.last().map_or(0, |row| row.end);
         if count == 0 {
             return None;
         }
         let Some(from) = from else { return Some(0) };
         let last = count as i64 - 1;
-        let moved = match self.step.ends {
-            ends if ends > 0 => last,
-            ends if ends < 0 => 0,
-            _ => from as i64 + self.step.across + self.step.rows * columns as i64,
-        };
-        Some(moved.clamp(0, last) as usize)
+        if self.step.ends != 0 {
+            return Some(if self.step.ends > 0 { count - 1 } else { 0 });
+        }
+        let from = from.min(count - 1);
+        let row = rows.iter().position(|row| row.contains(&from)).unwrap_or(0);
+        let moved = (row as i64 + self.step.rows).clamp(0, rows.len() as i64 - 1) as usize;
+        let column = from - rows[row].start;
+        let landed = rows[moved].start + column.min(rows[moved].len() - 1);
+        Some((landed as i64 + self.step.across).clamp(0, last) as usize)
     }
 }
 
@@ -1431,14 +1594,46 @@ mod tests {
             step: Moves { across, rows, ends },
             enter: false,
         };
-        assert_eq!(keys(1, 0, 0).target(None, 10, 4), Some(0));
-        assert_eq!(keys(1, 0, 0).target(Some(2), 10, 4), Some(3));
-        assert_eq!(keys(0, 1, 0).target(Some(2), 10, 4), Some(6));
-        assert_eq!(keys(0, 1, 0).target(Some(8), 10, 4), Some(9));
-        assert_eq!(keys(0, -1, 0).target(Some(1), 10, 4), Some(0));
-        assert_eq!(keys(0, 0, 1).target(Some(1), 10, 4), Some(9));
-        assert_eq!(keys(0, 0, -1).target(Some(7), 10, 4), Some(0));
-        assert_eq!(keys(1, 0, 0).target(Some(0), 0, 4), None);
+        let plain = grid_lines(10, 4, None);
+        assert_eq!(keys(1, 0, 0).target(None, &plain), Some(0));
+        assert_eq!(keys(1, 0, 0).target(Some(2), &plain), Some(3));
+        assert_eq!(keys(0, 1, 0).target(Some(2), &plain), Some(6));
+        assert_eq!(keys(0, 1, 0).target(Some(7), &plain), Some(9));
+        assert_eq!(keys(0, -1, 0).target(Some(1), &plain), Some(1));
+        assert_eq!(keys(0, 0, 1).target(Some(1), &plain), Some(9));
+        assert_eq!(keys(0, 0, -1).target(Some(7), &plain), Some(0));
+        assert_eq!(keys(1, 0, 0).target(Some(0), &[]), None);
+        let groups = [
+            Group {
+                folder: "a".to_owned(),
+                count: 2,
+            },
+            Group {
+                folder: "b".to_owned(),
+                count: 5,
+            },
+        ];
+        let grouped = grid_lines(7, 4, Some(&groups));
+        assert_eq!(
+            grouped,
+            [
+                Line::Heading(0),
+                Line::Cards(0..2),
+                Line::Heading(1),
+                Line::Cards(2..6),
+                Line::Cards(6..7)
+            ]
+        );
+        assert_eq!(
+            keys(0, 1, 0).target(Some(1), &grouped),
+            Some(3),
+            "down from a folder's last row"
+        );
+        assert_eq!(
+            keys(0, -1, 0).target(Some(5), &grouped),
+            Some(1),
+            "up keeps to the column it can"
+        );
     }
 
     #[test]

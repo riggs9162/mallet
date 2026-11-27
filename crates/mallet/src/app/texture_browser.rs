@@ -17,10 +17,10 @@ use mallet_content::vtf::Image;
 use mallet_content::{parallel_map, MaterialInfo, MaterialLoader};
 
 use super::asset_browser::{
-    self, card, card_grid, checkerboard, chip, empty_state, grid_columns, hidden_paths, in_folder, muted,
-    paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line, thousands,
-    toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, KeyMove, Listing, Loaders, Marks, Narrowing,
-    Search, SearchBox, Shelf, ShelfAction, Thumbnail, Thumbnails,
+    self, card, checkerboard, chip, empty_state, grid_columns, grid_lines, group_by_folder, hidden_paths, in_folder,
+    muted, paint_thumbnail, path_bar, per_row_slider, remember, restore_hidden, source_lines, status_line, thousands,
+    toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, Grid, KeyMove, Listing, Loaders, Marks,
+    Narrowing, Search, SearchBox, Shelf, ShelfAction, Shown, Thumbnail, Thumbnails,
 };
 use super::thumbnail_cache::ThumbnailCache;
 use super::MalletApp;
@@ -179,7 +179,13 @@ impl MalletApp {
             Pick::Replace => self.face_edit.replace.to_ascii_lowercase(),
         };
         let keys = KeyMove::read(ctx, state.window);
-        let names = state.filtered(&used);
+        let mut names = state.filtered(&used);
+        let groups = state
+            .catalog
+            .listing
+            .as_ref()
+            .filter(|_| state.view.group_by_folder)
+            .map(|listing| group_by_folder(listing, &mut names, whole));
 
         let title = match state.pick {
             Pick::Current => format!("{} Textures", icon::IMAGES),
@@ -219,7 +225,17 @@ impl MalletApp {
                         .show_inside(ui, |ui| state.details(ui, &loader, &used, &mut commands));
                 }
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    state.grid(ui, &names, &current, scroll_step, keys, &mut commands);
+                    state.grid(
+                        ui,
+                        Shown {
+                            entries: &names,
+                            groups: groups.as_deref(),
+                        },
+                        &current,
+                        scroll_step,
+                        keys,
+                        &mut commands,
+                    );
                 });
             });
         state.window = shown.map(|shown| shown.response.rect);
@@ -465,6 +481,13 @@ impl TextureBrowserState {
             ui.separator();
             per_row_slider(ui, &mut self.view.per_row);
             ui.separator();
+            toggle_chip(
+                ui,
+                &mut self.view.group_by_folder,
+                &format!("{} Folders", icon::FOLDERS),
+                None,
+            )
+            .on_hover_text("Put the textures under a heading for each folder");
             toggle_chip(ui, &mut self.view.show_alpha, "Alpha", None)
                 .on_hover_text("Draw a checkerboard behind textures so transparency shows");
             toggle_chip(
@@ -580,12 +603,13 @@ impl TextureBrowserState {
     fn grid(
         &mut self,
         ui: &mut egui::Ui,
-        names: &[usize],
+        shown: Shown,
         current: &str,
         scroll_step: f32,
         keys: KeyMove,
         commands: &mut Vec<Command>,
     ) {
+        let Shown { entries: names, groups } = shown;
         path_bar(ui, "All materials", &mut self.view.folder);
         let shelf = Shelf {
             recent: &self.view.recent,
@@ -651,11 +675,12 @@ impl TextureBrowserState {
         let mut reveal = None;
         if keys.moves() {
             let (columns, _) = grid_columns(ui.available_width(), self.view.per_row);
+            let lines = grid_lines(names.len(), columns, groups);
             let from = self
                 .selected
                 .as_ref()
                 .and_then(|selected| names.iter().position(|index| listing.entries[*index].0 == *selected));
-            if let Some(target) = keys.target(from, names.len(), columns) {
+            if let Some(target) = keys.target(from, &lines) {
                 let name = listing.entries[names[target]].0.clone();
                 self.select(&name, commands);
                 reveal = Some(target);
@@ -665,32 +690,35 @@ impl TextureBrowserState {
             commands.extend(self.selected.clone().map(|name| Command::Choose(name, true)));
         }
         let mut per_row = self.view.per_row;
-        card_grid(
-            ui,
-            "texture_grid",
-            names.len(),
-            &mut per_row,
+        let grid = Grid {
+            salt: "texture_grid",
+            count: names.len(),
+            groups,
             scroll_step,
             reveal,
-            |ui, shown, side| {
-                let Some((name, sources)) = self
-                    .catalog
-                    .listing
-                    .as_ref()
-                    .and_then(|listing| listing.source_names(names[shown]))
-                else {
-                    return;
-                };
-                let response = self.card(ui, &name, &sources, side, name == current);
-                if response.clicked() {
-                    self.select(&name, commands);
-                }
-                if response.double_clicked() {
-                    commands.push(Command::Choose(name.clone(), true));
-                }
-                response.context_menu(|ui| self.card_menu(ui, &name, commands));
-            },
-        );
+        };
+        let clicked = grid.show(ui, &mut per_row, |ui, shown, side| {
+            let Some((name, sources)) = self
+                .catalog
+                .listing
+                .as_ref()
+                .and_then(|listing| listing.source_names(names[shown]))
+            else {
+                return;
+            };
+            let response = self.card(ui, &name, &sources, side, name == current);
+            if response.clicked() {
+                self.select(&name, commands);
+            }
+            if response.double_clicked() {
+                commands.push(Command::Choose(name.clone(), true));
+            }
+            response.context_menu(|ui| self.card_menu(ui, &name, commands));
+        });
+        if let Some(group) = clicked.and_then(|group| groups?.get(group)) {
+            self.view.folder = Some(group.folder.clone());
+            self.reveal_folder = true;
+        }
         self.view.per_row = per_row;
     }
 
