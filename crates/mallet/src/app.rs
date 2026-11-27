@@ -2309,6 +2309,8 @@ impl MalletApp {
         editor.snap_suspended = ctx.input(|input| input.modifiers.alt);
         editor.autosave.pointer_held = ctx.input(|input| input.pointer.any_down());
         self.take_content_changes(ctx, editor);
+        self.read_texture_browser_keys(ctx, editor);
+        self.read_model_browser_keys(ctx, editor);
         self.handle_input(ctx, editor);
         take_window_shot(ctx, editor);
         self.update_title(ctx, editor);

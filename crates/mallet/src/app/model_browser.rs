@@ -318,6 +318,8 @@ pub(super) struct ModelBrowserState {
     shelf_starred: bool,
     /// The window's place on screen last frame, for the keys that move the selection.
     window: Option<egui::Rect>,
+    /// The keys read this frame, before the editor's shortcuts could act on them.
+    keys: KeyMove,
     /// Models the map uses, cached per geometry generation.
     used: Option<(u64, Arc<BTreeSet<String>>)>,
     preview: Preview,
@@ -343,6 +345,7 @@ impl Default for ModelBrowserState {
             folder_search: String::new(),
             shelf_starred: false,
             window: None,
+            keys: KeyMove::default(),
             used: None,
             preview: Preview::default(),
             focus_search: false,
@@ -358,6 +361,17 @@ enum Command {
 }
 
 impl MalletApp {
+    /// Takes the keys that move the model browser's selection, before the editor's
+    /// shortcuts see them, while the browser is open and the pointer is over it.
+    pub(super) fn read_model_browser_keys(&mut self, ctx: &egui::Context, editor: &Editor) {
+        let state = &mut self.model_browser;
+        state.keys = if editor.model_browser_open {
+            KeyMove::read(ctx, state.window)
+        } else {
+            KeyMove::default()
+        };
+    }
+
     /// Opens the model browser to pick a model for `pick`.
     pub(super) fn open_model_browser(&mut self, editor: &mut Editor, pick: Pick) {
         editor.model_browser_open = true;
@@ -414,7 +428,7 @@ impl MalletApp {
         let used = state.used_models(editor);
         let scroll_step = editor.config.view.texture_scroll.clamp(0.25, 2.0) as f32;
         let target = state.target(editor);
-        let keys = KeyMove::read(ctx, state.window);
+        let keys = std::mem::take(&mut state.keys);
         state.check_prop_traits(&used);
         let mut shown = state.filtered(&used);
         let groups = state

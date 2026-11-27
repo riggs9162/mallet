@@ -968,7 +968,7 @@ fn heading(ui: &mut egui::Ui, rect: egui::Rect, group: &Group) -> egui::Response
         .interact(
             rect,
             ui.id().with(("folder_heading", &group.folder)),
-            egui::Sense::click(),
+            egui::Sense::CLICK,
         )
         .on_hover_text("Show only this folder")
         .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -1024,7 +1024,7 @@ pub(super) fn card(
     marks: Marks,
     picture: impl FnOnce(&egui::Ui, &egui::Painter, egui::Rect),
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side + CARD_LABEL), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side + CARD_LABEL), egui::Sense::CLICK);
     let image_rect = egui::Rect::from_min_size(rect.min, egui::Vec2::splat(side));
     let visuals = ui.visuals().clone();
     let painter = ui.painter();
@@ -1347,7 +1347,7 @@ impl Shelf<'_> {
     /// One small picture on the shelf.
     fn item(&self, ui: &mut egui::Ui, thumbnails: &mut Thumbnails, loading: bool, name: &str) -> egui::Response {
         thumbnails.show(name, loading);
-        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(SHELF_SIDE), egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(SHELF_SIDE), egui::Sense::CLICK);
         let selected = self.selected == Some(name);
         let shade = if selected || response.hovered() { 0.14 } else { 0.05 };
         ui.painter().rect_filled(rect, 4, tint(ui.visuals(), shade));
@@ -1383,13 +1383,17 @@ struct Moves {
 
 impl KeyMove {
     /// Reads and uses up the keys while the pointer is over the browser's window from
-    /// last frame and no text box takes them, so nothing behind the window acts on them.
+    /// last frame and no text box is being typed in. It runs before the editor's own
+    /// shortcuts, so nothing behind the window acts on the keys as well.
     pub(super) fn read(ctx: &egui::Context, window: Option<egui::Rect>) -> Self {
         let over = ctx
             .pointer_hover_pos()
             .zip(window)
             .is_some_and(|(pointer, window)| window.contains(pointer));
-        if !over || ctx.wants_keyboard_input() {
+        let typing = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+        if !over || typing {
             return Self::default();
         }
         ctx.input_mut(|input| {

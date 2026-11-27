@@ -96,6 +96,8 @@ pub(super) struct TextureBrowserState {
     shelf_starred: bool,
     /// The window's place on screen last frame, for the keys that move the selection.
     window: Option<egui::Rect>,
+    /// The keys read this frame, before the editor's shortcuts could act on them.
+    keys: KeyMove,
     /// The trait counts, with how many materials were described when they were made.
     trait_counts: (usize, TraitCounts),
     /// Materials the map uses, cached per geometry generation.
@@ -122,6 +124,7 @@ impl Default for TextureBrowserState {
             folder_search: String::new(),
             shelf_starred: false,
             window: None,
+            keys: KeyMove::default(),
             trait_counts: (usize::MAX, TraitCounts::default()),
             used: None,
             focus_search: true,
@@ -138,6 +141,17 @@ enum Command {
 }
 
 impl MalletApp {
+    /// Takes the keys that move the texture browser's selection, before the editor's
+    /// shortcuts see them, while the browser is open and the pointer is over it.
+    pub(super) fn read_texture_browser_keys(&mut self, ctx: &egui::Context, editor: &Editor) {
+        let state = &mut self.texture_browser;
+        state.keys = if editor.texture_browser_open {
+            KeyMove::read(ctx, state.window)
+        } else {
+            KeyMove::default()
+        };
+    }
+
     /// Opens the texture browser to pick a texture for `pick`.
     pub(super) fn open_texture_browser(&mut self, editor: &mut Editor, pick: Pick) {
         editor.texture_browser_open = true;
@@ -178,7 +192,7 @@ impl MalletApp {
             Pick::Find => self.face_edit.find.to_ascii_lowercase(),
             Pick::Replace => self.face_edit.replace.to_ascii_lowercase(),
         };
-        let keys = KeyMove::read(ctx, state.window);
+        let keys = std::mem::take(&mut state.keys);
         let mut names = state.filtered(&used);
         let groups = state
             .catalog
