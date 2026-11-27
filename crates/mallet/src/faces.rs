@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use glam::DVec3;
 use mallet_vmf::edit::Edit;
 use mallet_vmf::geometry::solid_faces;
-use mallet_vmf::texture::{Hotspot, Justify};
+use mallet_vmf::texture::{Hotspot, Justify, TexelTransform};
 use mallet_vmf::{Side, Solid};
 
 use eframe::egui;
@@ -539,10 +539,20 @@ impl Editor {
                     .copied()
                     .unwrap_or([DEFAULT_TEXTURE_SIZE; 2]);
                 let points = if change.as_one { all_points.as_slice() } else { polygon };
-                let rects = hotspots.get(&side.material).map(Vec::as_slice).unwrap_or(&[]);
+                let (rects, transform) = hotspots
+                    .get(&side.material)
+                    .map_or((&[][..], TexelTransform::IDENTITY), |(rects, transform)| {
+                        (rects.as_slice(), *transform)
+                    });
                 if how != Justify::Fit
                     || rects.is_empty()
-                    || !side.hotspot(polygon, rects, change.alternates, face_random(seed, side.id))
+                    || !side.hotspot(
+                        polygon,
+                        rects,
+                        &transform,
+                        change.alternates,
+                        face_random(seed, side.id),
+                    )
                 {
                     side.justify(how, points, size);
                 }
@@ -651,8 +661,8 @@ impl Editor {
         let mut hotspotted = 0;
         let all_points: Vec<DVec3> = faces.iter().flat_map(|face| face.polygon.iter().copied()).collect();
         let count = self.edit_sides(sides, None, |side, polygon| {
-            if let Some(rects) = hotspots.get(&side.material) {
-                if side.hotspot(polygon, rects, alternates, face_random(seed, side.id)) {
+            if let Some((rects, transform)) = hotspots.get(&side.material) {
+                if side.hotspot(polygon, rects, transform, alternates, face_random(seed, side.id)) {
                     hotspotted += 1;
                     return;
                 }
@@ -680,15 +690,41 @@ impl Editor {
         Hotspot::parse_rect_file(&text).unwrap_or_default()
     }
 
-    /// The hotspot rectangles of every material in `materials` that has any.
-    fn hotspots_of(&mut self, materials: Vec<String>) -> HashMap<String, Vec<Hotspot>> {
+    /// The hotspot rectangles of every material in `materials` that has any, with the
+    /// texture transform the game shows that material's texture through.
+    fn hotspots_of(&mut self, materials: Vec<String>) -> HashMap<String, (Vec<Hotspot>, TexelTransform)> {
         materials
             .into_iter()
             .filter_map(|material| {
                 let rects = self.hotspots(&material);
-                (!rects.is_empty()).then_some((material, rects))
+                if rects.is_empty() {
+                    return None;
+                }
+                let transform = self.texel_transform(&material);
+                Some((material, (rects, transform)))
             })
             .collect()
+    }
+
+    /// A material's `$basetexturetransform` measured in texels of its texture, or the
+    /// identity when it has none or cannot be found.
+    fn texel_transform(&mut self, material: &str) -> TexelTransform {
+        let Some(found) = self
+            .materials
+            .as_mut()
+            .and_then(|materials| materials.materials(&[material]).pop())
+        else {
+            return TexelTransform::IDENTITY;
+        };
+        let Some(size) = found.size else {
+            return TexelTransform::IDENTITY;
+        };
+        let transform = found.base_transform;
+        TexelTransform::from_normalised(
+            transform.matrix.map(|row| row.map(f64::from)),
+            transform.offset.map(f64::from),
+            size.map(f64::from),
+        )
     }
 
     /// Aligns textures to the world or to their faces.

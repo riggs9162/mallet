@@ -105,6 +105,60 @@ impl Hotspot {
     }
 }
 
+/// A material's texture transform (`$basetexturetransform`) measured in texels: where a
+/// face's axes put texel `p`, the game shows texel `matrix * p + offset`. Hotspot fitting
+/// undoes it, so the rectangle the face is fitted to is the one seen in the game.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TexelTransform {
+    /// Rows of the 2 by 2 matrix.
+    pub matrix: [[f64; 2]; 2],
+    pub offset: [f64; 2],
+}
+
+impl Default for TexelTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl TexelTransform {
+    /// Shows texels where the face's axes put them.
+    pub const IDENTITY: Self = Self {
+        matrix: [[1.0, 0.0], [0.0, 1.0]],
+        offset: [0.0, 0.0],
+    };
+
+    /// The transform in texels of one that works on coordinates normalised to a texture
+    /// of `size` texels, as the shader's `uv' = matrix * uv + offset` does.
+    pub fn from_normalised(matrix: [[f64; 2]; 2], offset: [f64; 2], size: [f64; 2]) -> Self {
+        Self {
+            matrix: std::array::from_fn(|row| {
+                std::array::from_fn(|column| matrix[row][column] * size[row] / size[column])
+            }),
+            offset: std::array::from_fn(|row| offset[row] * size[row]),
+        }
+    }
+
+    /// The transform that takes shown texels back to the ones the face's axes give, or
+    /// `None` when this one flattens the texture to a line or a point.
+    fn inverse(&self) -> Option<Self> {
+        let [[a, b], [c, d]] = self.matrix;
+        let determinant = a * d - b * c;
+        if !determinant.is_finite() || determinant.abs() < 1e-9 {
+            return None;
+        }
+        let matrix = [[d / determinant, -b / determinant], [-c / determinant, a / determinant]];
+        let offset = std::array::from_fn(|row| -(matrix[row][0] * self.offset[0] + matrix[row][1] * self.offset[1]));
+        Some(Self { matrix, offset })
+    }
+
+    /// How many shown texels each texel of the face's axes becomes across and down: a
+    /// rectangle looks this many times smaller on a face than its texels say.
+    fn stretch(&self) -> [f64; 2] {
+        self.matrix.map(|[x, y]| x.hypot(y).max(1e-9))
+    }
+}
+
 /// The axes Hammer and the compilers pick for a face aligned to the world: the major axis
 /// closest to the normal decides which world plane the texture is projected from.
 pub fn world_axes(normal: DVec3) -> (DVec3, DVec3) {
@@ -333,7 +387,18 @@ impl Side {
     /// reflectable rectangle is flipped. Rectangles marked `alt` are used only with
     /// `alternates`, and then they are the only ones used, unless the texture has none.
     /// Returns whether a rectangle was applied; faces with no area are left alone.
-    pub fn hotspot(&mut self, points: &[DVec3], hotspots: &[Hotspot], alternates: bool, random: u64) -> bool {
+    ///
+    /// `transform` is the material's texture transform. Rectangles are matched at the
+    /// size the transform shows them at, and the axes are set so that, once the game
+    /// applies it, the face shows exactly the chosen rectangle.
+    pub fn hotspot(
+        &mut self,
+        points: &[DVec3],
+        hotspots: &[Hotspot],
+        transform: &TexelTransform,
+        alternates: bool,
+        random: u64,
+    ) -> bool {
         let normal = side_normal(self);
         let (mut u, mut v) = (self.uaxis.axis.normalize_or_zero(), self.vaxis.axis.normalize_or_zero());
         if u == DVec3::ZERO || v == DVec3::ZERO || u.cross(v).length() < 1e-6 {
@@ -350,10 +415,16 @@ impl Side {
         if width < 1e-3 || height < 1e-3 {
             return false;
         }
+        let (undo, stretch) = match transform.inverse() {
+            Some(undo) => (undo, transform.stretch()),
+            None => (TexelTransform::IDENTITY, [1.0, 1.0]),
+        };
         let wanted_alt = alternates && hotspots.iter().any(|hotspot| hotspot.alt);
         let mut candidates: Vec<(f64, Hotspot, bool)> = Vec::new();
         for hotspot in hotspots.iter().filter(|hotspot| hotspot.alt == wanted_alt) {
-            let [rect_width, rect_height] = hotspot.size().map(|texels| texels * HOTSPOT_SCALE);
+            let [texels_across, texels_down] = hotspot.size();
+            let rect_width = texels_across * HOTSPOT_SCALE / stretch[0];
+            let rect_height = texels_down * HOTSPOT_SCALE / stretch[1];
             let error = |across: f64, down: f64| (across / rect_width).ln().abs() + (down / rect_height).ln().abs();
             candidates.push((error(width, height), *hotspot, false));
             if hotspot.rotate {
@@ -378,12 +449,20 @@ impl Side {
         let [rect_width, rect_height] = hotspot.size();
         let (u_min, u_max) = extent(u, points);
         let (v_min, v_max) = extent(v, points);
-        self.uaxis.axis = u;
-        self.vaxis.axis = v;
-        self.uaxis.scale = ((u_max - u_min) / rect_width).max(1e-4);
-        self.vaxis.scale = ((v_max - v_min) / rect_height).max(1e-4);
-        self.uaxis.offset = hotspot.min[0] - u_min / self.uaxis.scale;
-        self.vaxis.offset = hotspot.min[1] - v_min / self.vaxis.scale;
+        let scale = [
+            ((u_max - u_min) / rect_width).max(1e-4),
+            ((v_max - v_min) / rect_height).max(1e-4),
+        ];
+        let shown_axes = [u / scale[0], v / scale[1]];
+        let shown_offsets = [hotspot.min[0] - u_min / scale[0], hotspot.min[1] - v_min / scale[1]];
+        for (row, axis) in [&mut self.uaxis, &mut self.vaxis].into_iter().enumerate() {
+            let [first, second] = undo.matrix[row];
+            let per_unit = shown_axes[0] * first + shown_axes[1] * second;
+            let length = per_unit.length().max(1e-9);
+            axis.axis = per_unit / length;
+            axis.scale = (1.0 / length).max(1e-4);
+            axis.offset = first * shown_offsets[0] + second * shown_offsets[1] + undo.offset[row];
+        }
         true
     }
 }
@@ -534,7 +613,7 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
             rect([0.0, 256.0], [64.0, 512.0], false),
         ];
         let mut side = side_facing(DVec3::Z);
-        assert!(side.hotspot(&points, &hotspots, false, 7));
+        assert!(side.hotspot(&points, &hotspots, &TexelTransform::IDENTITY, false, 7));
         let corners = [DVec3::new(0.0, 64.0, 32.0), DVec3::new(128.0, 0.0, 32.0)].map(|point| texel(&side, point));
         assert!(
             (corners[0][0] - 256.0).abs() < 1e-6 && corners[0][1].abs() < 1e-6,
@@ -547,7 +626,7 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
 
         let tall = [rect([0.0, 0.0], [256.0, 512.0], true)];
         let mut side = side_facing(DVec3::Z);
-        assert!(side.hotspot(&points, &tall, false, 0));
+        assert!(side.hotspot(&points, &tall, &TexelTransform::IDENTITY, false, 0));
         assert_eq!(
             side.rotation,
             Some(90.0),
@@ -560,6 +639,80 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
         assert!(
             (spans[0] - 256.0).abs() < 1e-6 && (spans[1] - 512.0).abs() < 1e-6,
             "{spans:?}"
+        );
+    }
+
+    #[test]
+    fn hotspot_undoes_the_material_texture_transform() {
+        let rect = |min: [f64; 2], max: [f64; 2]| Hotspot {
+            min,
+            max,
+            rotate: false,
+            reflect: false,
+            alt: false,
+        };
+        let points = [
+            DVec3::new(0.0, 0.0, 32.0),
+            DVec3::new(128.0, 0.0, 32.0),
+            DVec3::new(128.0, 64.0, 32.0),
+            DVec3::new(0.0, 64.0, 32.0),
+        ];
+        let hotspots = [
+            rect([1024.0, 0.0], [1536.0, 256.0]),
+            rect([0.0, 1024.0], [1024.0, 1536.0]),
+        ];
+        let shown_corners = |transform: &TexelTransform, side: &Side| {
+            let mut us = Vec::new();
+            let mut vs = Vec::new();
+            for point in points {
+                let p = [
+                    point.dot(side.uaxis.axis) / side.uaxis.scale + side.uaxis.offset,
+                    point.dot(side.vaxis.axis) / side.vaxis.scale + side.vaxis.offset,
+                ];
+                let [[a, b], [c, d]] = transform.matrix;
+                us.push(a * p[0] + b * p[1] + transform.offset[0]);
+                vs.push(c * p[0] + d * p[1] + transform.offset[1]);
+            }
+            let range = |values: &[f64]| {
+                values
+                    .iter()
+                    .fold([f64::INFINITY, f64::NEG_INFINITY], |[min, max], value| {
+                        [min.min(*value), max.max(*value)]
+                    })
+            };
+            (range(&us), range(&vs))
+        };
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+
+        let scaled = TexelTransform::from_normalised([[4.0, 0.0], [0.0, 4.0]], [0.0, 0.0], [2048.0, 2048.0]);
+        let mut side = side_facing(DVec3::Z);
+        assert!(side.hotspot(&points, &hotspots, &scaled, false, 0));
+        let (u, v) = shown_corners(&scaled, &side);
+        assert!(
+            near(u, [0.0, 1024.0]) && near(v, [1024.0, 1536.0]),
+            "a four times scale picks the rectangle that looks the face's size and shows it whole: {u:?} {v:?}"
+        );
+
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let turned =
+            TexelTransform::from_normalised([[2.0 * cos, -sin], [2.0 * sin, cos]], [0.1, 0.3], [1024.0, 512.0]);
+        let mut side = side_facing(DVec3::Z);
+        assert!(side.hotspot(&points, &hotspots[..1], &turned, false, 0));
+        let mut lands = Vec::new();
+        for point in [points[3], points[1]] {
+            let p = [
+                point.dot(side.uaxis.axis) / side.uaxis.scale + side.uaxis.offset,
+                point.dot(side.vaxis.axis) / side.vaxis.scale + side.vaxis.offset,
+            ];
+            let [[a, b], [c, d]] = turned.matrix;
+            lands.push([
+                a * p[0] + b * p[1] + turned.offset[0],
+                c * p[0] + d * p[1] + turned.offset[1],
+            ]);
+        }
+        assert!(
+            near(lands[0], [1024.0, 0.0]) && near(lands[1], [1536.0, 256.0]),
+            "a turned, moved and stretched transform still shows the rectangle corner to corner: {lands:?}"
         );
     }
 
@@ -587,7 +740,7 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
         let top = DVec3::new(0.0, 64.0, 32.0);
         let corner = |side: &Side| top.dot(side.vaxis.axis) / side.vaxis.scale + side.vaxis.offset;
         let mut side = side_facing(DVec3::Z);
-        assert!(side.hotspot(&points, &[base, alternate], true, 3));
+        assert!(side.hotspot(&points, &[base, alternate], &TexelTransform::IDENTITY, true, 3));
         assert!((corner(&side) - 256.0).abs() < 1e-6, "only the alternate is used");
         let small = DVec3::new(16.0, 16.0, 0.0);
         let square = [
@@ -597,7 +750,7 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
             points[0] + small * DVec3::Y,
         ];
         let mut side = side_facing(DVec3::Z);
-        assert!(side.hotspot(&square, &[base, alternate], false, 3));
+        assert!(side.hotspot(&square, &[base, alternate], &TexelTransform::IDENTITY, false, 3));
         let top = square[3];
         let texel = top.dot(side.vaxis.axis) / side.vaxis.scale + side.vaxis.offset;
         assert!(
@@ -606,7 +759,7 @@ side { "id" "6" "plane" "(128 0 0) (0 0 0) (0 0 32)" "material" "A" "uaxis" "[1 
         );
         let line = [DVec3::ZERO, DVec3::X * 64.0];
         assert!(
-            !side.hotspot(&line, &[base], false, 0),
+            !side.hotspot(&line, &[base], &TexelTransform::IDENTITY, false, 0),
             "a face with no area is left alone"
         );
     }
