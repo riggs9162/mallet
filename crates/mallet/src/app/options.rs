@@ -875,20 +875,6 @@ fn lighting_section(ui: &mut egui::Ui, editor: &mut Editor, dirty: &mut bool) {
         .spacing([16.0, 8.0])
         .show(ui, |ui| {
             lighting_look_rows(ui, "lighting_options", lighting, dirty);
-            row(ui, "Hide tool textures", "Faces the game never draws: nodraw, clip, trigger, hint, skip and the like.");
-            *dirty |= ui
-                .checkbox(&mut lighting.hide_tools, "Hide them, as in the game")
-                .changed();
-            ui.end_row();
-            row(
-                ui,
-                "Entity boxes",
-                "The boxes of point entities, drawn without lighting, and the editor models some classes show, such as AI nodes.",
-            );
-            *dirty |= ui
-                .checkbox(&mut lighting.entity_boxes, "Show entity boxes and editor models")
-                .changed();
-            ui.end_row();
         });
     ui.add_space(10.0);
     ui.label(RichText::new("Speed").strong());
@@ -1056,7 +1042,6 @@ pub(super) fn lighting_quick_settings(ui: &mut egui::Ui, editor: &mut Editor, mo
             ui.checkbox(&mut lighting.animate, "Appearances");
             ui.end_row();
             ui.checkbox(&mut lighting.hdr, "HDR values");
-            ui.checkbox(&mut lighting.hide_tools, "Hide tool textures");
             ui.end_row();
         });
     ui.add_space(4.0);

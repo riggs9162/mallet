@@ -161,11 +161,6 @@ pub struct LightingOptions {
     pub fog: bool,
     /// Glow sprites, light glows, the sun's glow and spotlight beams.
     pub glows: bool,
-    /// Hide faces that are invisible in the game: nodraw, clip, trigger, hint, skip and
-    /// the other tool textures.
-    pub hide_tools: bool,
-    /// Point entity boxes, and the editor models some classes show instead.
-    pub entity_boxes: bool,
     /// Which lights show their range, cone or direction.
     pub helpers: crate::lighting::HelperMode,
     /// Lights end where they are dimmer than this share of full brightness: lower is more
@@ -204,8 +199,6 @@ impl Default for LightingOptions {
             sky: crate::lighting::SkyMode::Skybox,
             fog: true,
             glows: true,
-            hide_tools: true,
-            entity_boxes: true,
             helpers: crate::lighting::HelperMode::Selected,
             cutoff: 0.004,
             lights_per_area: 64,
@@ -911,6 +904,12 @@ pub struct ViewOptions {
     pub collapsed_vertices: bool,
     /// Draw every prop model's triangles as a cyan wireframe in the 2D views.
     pub model_wireframes: bool,
+    /// Draw faces the game never draws in the 3D views: nodraw, clip, trigger, hint, skip
+    /// and the other tool textures.
+    pub tool_textures: bool,
+    /// Draw editor-only helpers in the 3D views: point entity boxes, editor sprites and
+    /// the editor models some classes show.
+    pub helpers: bool,
     /// How far the 3D view draws, in units.
     pub draw_distance: f64,
     /// Horizontal field of view of the 3D view, in degrees.
@@ -956,6 +955,8 @@ impl Default for ViewOptions {
             net_graph: true,
             collapsed_vertices: false,
             model_wireframes: false,
+            tool_textures: true,
+            helpers: true,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_preview: true,

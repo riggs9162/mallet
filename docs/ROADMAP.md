@@ -178,7 +178,7 @@ items bring the same to the other modes and add Hammer's and Hammer++'s other pr
 - [ ] Show Helpers: spheres, cones, lines and angles the FGD's helpers describe, in every view. Hammer
 - [ ] Toggles for models in 2D and entity names in 2D. Hammer
 - [ ] 3D Shaded Textured, 3D Filled Polygons and Draw Materials Opaque modes. Hammer
-- [ ] Toggle editor objects: tool textures (Ctrl+Shift+F2) and editor models and sprites (Alt+O) in the textured view. H++
+- [x] Toggle editor objects: tool textures (Ctrl+Shift+F2) and editor models and sprites (Alt+O) in the textured view. H++
 - [ ] Show nodraw faces, collision model wireframe and detail sprites toggles. Hammer
 - [ ] Model fade preview with start and end fade distances. Hammer
 - [ ] 2D skybox and 3D skybox in the textured view, toggled from the toolbar. H++

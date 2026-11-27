@@ -285,6 +285,18 @@ impl MalletApp {
                         edit.gizmo,
                     ),
                     (
+                        icon::TOOLBOX,
+                        "Tool textures: show nodraw, clip, trigger, hint, skip and the other faces the game never draws in the 3D views",
+                        Action::ToggleToolTextures,
+                        editor.config.view.tool_textures,
+                    ),
+                    (
+                        icon::STICKER,
+                        "Editor helpers: show point entity boxes, editor sprites and editor models in the 3D views",
+                        Action::ToggleHelpers,
+                        editor.config.view.helpers,
+                    ),
+                    (
                         icon::DOTS_NINE,
                         "Displacement Edge Collapse: mark in pink the displacement vertices the compiler leaves out next to neighbours of a lower power",
                         Action::ToggleDisplacementEdgeCollapse,

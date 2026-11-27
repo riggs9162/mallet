@@ -39,6 +39,11 @@ pub enum Action {
     ToggleDisplacementEdgeCollapse,
     /// Show or hide the cyan wireframe of every prop model in the 2D views.
     ToggleModelWireframes,
+    /// Show or hide tool textures (nodraw, clip, trigger and the like) in the 3D views.
+    ToggleToolTextures,
+    /// Show or hide editor-only helpers (entity boxes, editor sprites and editor models)
+    /// in the 3D views.
+    ToggleHelpers,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,
@@ -383,6 +388,8 @@ impl KeyMap {
                 (Action::ViewFront, Chord::key(Key::F4)),
                 (Action::ViewTextured, Chord::key(Key::F5)),
                 (Action::ViewLighting, Chord::ctrl(Key::F5)),
+                (Action::ToggleToolTextures, Chord::ctrl_shift(Key::F2)),
+                (Action::ToggleHelpers, Chord::alt(Key::O)),
                 (Action::NextViewType, Chord::key(Key::Tab)),
                 (Action::GoToBrush, Chord::ctrl_shift(Key::G)),
                 (Action::CheckForProblems, Chord::alt(Key::P)),

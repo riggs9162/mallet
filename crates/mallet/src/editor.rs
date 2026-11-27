@@ -29,7 +29,7 @@ use crate::content_watch::ContentWatch;
 use crate::document::Document;
 use crate::input::InputFrame;
 use crate::lighting::{load_texture_lights, TextureLights};
-use crate::render3d::{CameraStyle, LightingInput, Renderer3D};
+use crate::render3d::{CameraStyle, LightingInput, Renderer3D, ViewFilter};
 use crate::scene::{
     decal_key, entity_model_key, split_variant_key, CameraPreview, DecalSizes, ModelCache, ModelWires, Overlay, Owner, Scene,
 };
@@ -2279,6 +2279,15 @@ impl Editor {
         Some(canvas)
     }
 
+    /// What the 3D views draw besides the map as the game shows it, from the toolbar's
+    /// toggles.
+    pub fn view_filter(&self) -> ViewFilter {
+        ViewFilter {
+            tool_textures: self.config.view.tool_textures,
+            helpers: self.config.view.helpers,
+        }
+    }
+
     /// Renders a 3D slot on the GPU, when the window has created the renderer, and reads
     /// it back.
     fn render_camera_gpu(&mut self, slot: usize, style: CameraStyle) -> Option<PixmapCanvas> {
@@ -2288,6 +2297,7 @@ impl Editor {
             options: &self.config.lighting,
             texture_lights: &self.texture_lights,
         };
+        let filter = self.view_filter();
         let gpu = self.gpu.as_mut()?;
         gpu.render(
             slot,
@@ -2299,6 +2309,7 @@ impl Editor {
             self.materials.as_mut(),
             &self.models,
             lighting,
+            filter,
         );
         let mut rounds = 0;
         while (gpu.textures_loading() > 0 || gpu.lighting_pending()) && rounds < SCREENSHOT_ROUNDS {
@@ -2313,6 +2324,7 @@ impl Editor {
                 self.materials.as_mut(),
                 &self.models,
                 lighting,
+                filter,
             );
             rounds += 1;
         }

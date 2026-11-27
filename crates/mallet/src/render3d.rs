@@ -95,6 +95,18 @@ pub fn wgpu_setup() -> eframe::egui_wgpu::WgpuSetup {
     })
 }
 
+/// What the 3D views draw besides the map as the game shows it, as the toolbar's
+/// toggles set it.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewFilter {
+    /// Faces the game never draws: nodraw, clip, trigger, hint, skip and the other tool
+    /// textures.
+    pub tool_textures: bool,
+    /// Editor-only helpers: point entity boxes, editor sprites and the editor models some
+    /// classes show.
+    pub helpers: bool,
+}
+
 /// One corner of a brush face on the GPU. The textured view shades it by its normal, as
 /// Hammer does; the lighting preview lights it.
 #[repr(C)]
@@ -981,6 +993,7 @@ impl Renderer3D {
         materials: Option<&mut Materials>,
         models: &ModelCache,
         lighting: LightingInput<'_>,
+        filter: ViewFilter,
     ) -> (&wgpu::TextureView, bool) {
         let size = [size[0].max(1), size[1].max(1)];
         let gamma_view = self.sprite_pipelines.gamma_view();
@@ -1100,7 +1113,7 @@ impl Renderer3D {
         let aspect = size[0] as f32 / size[1] as f32;
         let matrix = view_projection(camera, aspect);
         let planes = frustum_planes(matrix);
-        let helpers = !lit || lighting.options.entity_boxes;
+        let helpers = filter.helpers;
         let sprites = if textured && helpers {
             let mut faces = self.sprite_faces(scene, overlay, camera);
             faces.extend(self.text_faces(scene, overlay));
@@ -1199,6 +1212,7 @@ impl Renderer3D {
         {
             let mut pass = begin_pass(&mut encoder, target, &look);
             pass.set_bind_group(0, &target.uniform_group, &[]);
+            let hidden = |key: &str| self.hides(key, filter);
             match (style, &self.faces) {
                 (CameraStyle::Textured, Some(faces)) => {
                     pass.set_pipeline(&self.face_pipeline);
@@ -1211,19 +1225,20 @@ impl Renderer3D {
                             pass.set_vertex_buffer(0, mesh.buffer_of(chunk).slice(..));
                             stats.chunks_drawn += 1;
                             stats.triangles_drawn += chunk.triangles;
-                            for (key, range) in &chunk.batches {
+                            for (key, range) in chunk.batches.iter().filter(|(key, _)| !hidden(key)) {
                                 pass.set_bind_group(1, &self.texture_for(key).bind_group, &[]);
                                 pass.draw(range.clone(), 0..1);
                             }
                         }
                     }
                     if let Some((buffer, ranges)) = &instances {
-                        self.draw_models(&mut pass, buffer, ranges, &mut stats);
+                        self.draw_models(&mut pass, buffer, ranges, &hidden, &mut stats);
                     }
                     for tinted in [tinted, face_tinted.as_ref()].into_iter().flatten() {
                         pass.set_pipeline(&self.overdraw_pipeline);
                         pass.set_vertex_buffer(0, tinted.buffer.slice(..));
-                        for (key, range) in tinted.chunks.iter().flat_map(|chunk| &chunk.batches) {
+                        let batches = tinted.chunks.iter().flat_map(|chunk| &chunk.batches);
+                        for (key, range) in batches.filter(|(key, _)| !hidden(key)) {
                             pass.set_bind_group(1, &self.texture_for(key).bind_group, &[]);
                             pass.draw(range.clone(), 0..1);
                         }
@@ -1234,7 +1249,7 @@ impl Renderer3D {
                             translucent,
                             instances.as_ref().map(|(buffer, _)| buffer),
                             (&self.translucent_pipeline, &self.translucent_model_pipeline),
-                            &|_| false,
+                            &hidden,
                             &mut stats,
                         );
                     }
@@ -1247,7 +1262,7 @@ impl Renderer3D {
                             self,
                             &mut pass,
                             &planes,
-                            lighting.options,
+                            &hidden,
                             &tinted_meshes,
                             translucent.as_ref(),
                             instances.as_ref(),
@@ -1612,11 +1627,19 @@ impl Renderer3D {
 
     /// Draws every visible prop's opaque meshes. Their see-through ones are drawn later,
     /// sorted with the see-through faces.
+    /// Whether faces of material `key` are left out of the 3D views: entity boxes while
+    /// helpers are hidden, and tool textures while those are hidden.
+    fn hides(&self, key: &str, filter: ViewFilter) -> bool {
+        (key == WHITE_KEY && !filter.helpers)
+            || (!filter.tool_textures && matches!(self.texture_for(key).surface, Surface::Tool | Surface::Nodraw))
+    }
+
     fn draw_models<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         instances: &'a wgpu::Buffer,
         ranges: &[(String, Range<u32>)],
+        hidden: &dyn Fn(&str) -> bool,
         stats: &mut RenderStats,
     ) {
         pass.set_pipeline(&self.model_pipeline);
@@ -1629,7 +1652,7 @@ impl Renderer3D {
             pass.set_index_buffer(model.indices.slice(..), wgpu::IndexFormat::Uint32);
             for (material, range) in &model.meshes {
                 let texture = self.texture_for(material);
-                if texture.alpha.see_through() {
+                if texture.alpha.see_through() || hidden(material) {
                     continue;
                 }
                 pass.set_bind_group(1, &texture.bind_group, &[]);

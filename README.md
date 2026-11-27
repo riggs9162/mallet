@@ -122,6 +122,12 @@ grid size with Snap to Grid and Show Grid, the texture and rotation locks, the g
 Check for Problems, Entity Report, Map Properties and Run Map. It wraps onto a second row
 when the window is too narrow for one.
 
+As in Hammer++, two toolbar toggles (also under View) choose what the 3D views draw besides
+the map as the game shows it, in the textured view and the lighting preview alike: Tool
+Textures (Ctrl+Shift+F2) shows nodraw, clip, trigger, hint, skip and the other faces the
+game never draws, and Editor Helpers (Alt+O) shows point entity boxes, editor sprites and
+the editor models some classes show, such as AI nodes.
+
 The 2D views show the 3D view's camera: a circle where it stands and its view pyramid,
 as wide as the field of view and as tall as the 3D view's picture, so you can see what the
 camera sees from above and the sides. The camera button beside a 3D viewport's label
@@ -307,8 +313,8 @@ hard falloff, `_distance`, spotlight cones and focus, `pitch`, `angles` and aim 
 | `env_sprite`, `env_sprite_oriented` | Their sprite, drawn as the game draws it in both 3D views: render mode, colour, scale, orientation and animation; Glow sprites keep their size on screen, fade past 1200 units and hide behind walls. The preview also fogs them, scales them by the exposure and `HDRColorScale`, and hides named sprites that start off |
 | `env_fog_controller`, `env_skypaint` | Fog, and Garry's Mod's painted sky |
 
-Sky faces show the map's skybox, and tool textures that are invisible in the game
-(nodraw, clip, trigger, hint, skip and the like) are hidden. Lights that start dark are
+Sky faces show the map's skybox. Tool textures and editor helpers follow the toolbar's
+toggles, as in the textured view. Lights that start dark are
 left off, and flickering or pulsing appearances can play. Shadows come from the sun,
 from sky light and from the lights nearest and brightest around the camera, and many
 more lights past those get small shadow maps, drawn a few each frame; only lights past
@@ -613,7 +619,7 @@ as you change it:
   shadows with their sizes, softness, how many lights cast them, how many more get small
   shadow maps and their size, and how many directions sky light is traced from; whether
   faces are lit per luxel or every pixel; exposure, tone mapping, fill light, fake bounce,
-  the sky, fog, glows, tool textures, entity boxes and light helpers; and how far lights
+  the sky, fog, glows and light helpers; and how far lights
   reach and how many may light one spot.
 - **Sound preview**: the preview's volume, whether soundscapes and ambient generics play,
   whether walls make sounds quieter, whether it falls silent while another window is

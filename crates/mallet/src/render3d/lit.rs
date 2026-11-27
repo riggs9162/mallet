@@ -2699,7 +2699,7 @@ impl LitState {
         renderer: &'a Renderer3D,
         pass: &mut wgpu::RenderPass<'a>,
         planes: &[Vec4; 6],
-        options: &LightingOptions,
+        hidden: &dyn Fn(&str) -> bool,
         tinted: &[&'a FaceMesh],
         translucent: Option<&'a Translucent>,
         instances: Option<&'a Batches>,
@@ -2710,10 +2710,6 @@ impl LitState {
             return;
         };
         pass.set_bind_group(2, group, &[]);
-        let hidden = |key: &str| {
-            (key == WHITE_KEY && !options.entity_boxes)
-                || (options.hide_tools && matches!(renderer.texture_for(key).surface, Surface::Tool | Surface::Nodraw))
-        };
         if let Some(faces) = &renderer.faces {
             pass.set_pipeline(&self.face);
             stats.chunks = faces.opaque.chunks.len();
@@ -2736,7 +2732,7 @@ impl LitState {
             }
         }
         if let Some((buffer, ranges)) = instances {
-            self.draw_models(renderer, pass, buffer, ranges, &hidden, stats);
+            self.draw_models(renderer, pass, buffer, ranges, hidden, stats);
         }
         for mesh in tinted {
             pass.set_pipeline(&self.overdraw);
@@ -2755,7 +2751,7 @@ impl LitState {
                 translucent,
                 instances.map(|(buffer, _)| buffer),
                 (&self.translucent, &self.translucent_model),
-                &hidden,
+                hidden,
                 stats,
             );
         }

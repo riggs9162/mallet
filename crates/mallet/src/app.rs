@@ -96,6 +96,8 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleHalfGridSnap,
     Action::ToggleShowGrid,
     Action::ToggleModelWireframes,
+    Action::ToggleToolTextures,
+    Action::ToggleHelpers,
     Action::SelectionTool,
     Action::CameraTool,
     Action::MagnifyTool,
@@ -671,6 +673,10 @@ impl MalletApp {
                     menu_item(ui, keymap, "Show All VisGroups", Action::ShowAllVisGroups, &mut chosen);
                     menu_item(ui, keymap, "Edit VisGroups...", Action::EditVisGroups, &mut chosen);
                     ui.separator();
+                    let tools = editor.config.view.tool_textures;
+                    menu_toggle(ui, keymap, "Tool Textures", tools, Action::ToggleToolTextures, &mut chosen);
+                    let helpers = editor.config.view.helpers;
+                    menu_toggle(ui, keymap, "Editor Helpers", helpers, Action::ToggleHelpers, &mut chosen);
                     menu_toggle(
                         ui,
                         keymap,
@@ -1717,6 +1723,7 @@ impl MalletApp {
             options: &editor.config.lighting,
             texture_lights: &editor.texture_lights,
         };
+        let filter = editor.view_filter();
         let renderer = editor.gpu.get_or_insert_with(|| new_renderer(render_state));
         let (view, recreated) = renderer.render(
             slot,
@@ -1728,6 +1735,7 @@ impl MalletApp {
             editor.materials.as_mut(),
             &editor.models,
             lighting,
+            filter,
         );
         show_texture(render_state, &mut self.slot_textures[slot], view, recreated)
     }
@@ -3103,6 +3111,18 @@ fn run(action: Action, editor: &mut Editor) {
             editor.config.view.model_wireframes = shown;
             editor.save_config();
             editor.message = format!("Model wireframes in the 2D views {}", on_off(shown));
+        }
+        Action::ToggleToolTextures => {
+            let shown = !editor.config.view.tool_textures;
+            editor.config.view.tool_textures = shown;
+            editor.save_config();
+            editor.message = format!("Tool textures in the 3D views {}", if shown { "shown" } else { "hidden" });
+        }
+        Action::ToggleHelpers => {
+            let shown = !editor.config.view.helpers;
+            editor.config.view.helpers = shown;
+            editor.save_config();
+            editor.message = format!("Editor helpers in the 3D views {}", if shown { "shown" } else { "hidden" });
         }
         Action::ToggleDisplacementEdgeCollapse => {
             let shown = !editor.config.view.collapsed_vertices;
