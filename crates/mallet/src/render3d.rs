@@ -34,7 +34,8 @@ use mallet_vmf::displacement::Surface as DisplacementSurface;
 
 use crate::lighting::TextureLights;
 use crate::scene::{
-    box_edges, entity_marker_edges, ModelCache, Overlay, Owner, Remap, Scene, SceneFace, WireMesh, AGENT_CAMERA_COLOR,
+    box_edges, entity_marker_edges, model_origin_edges, ModelCache, Overlay, Owner, Remap, Scene, SceneFace, WireMesh,
+    AGENT_CAMERA_COLOR, MODEL_ORIGIN_COLOR, MODEL_ORIGIN_LENGTH,
 };
 use crate::style::{self as view_style, ViewStyle};
 use crate::view2d::View2D;
@@ -1092,6 +1093,12 @@ impl Renderer3D {
         } else {
             Vec::new()
         };
+        for transform in scene.meshes.iter().filter_map(|mesh| mesh.model_transform(overlay, helpers)) {
+            let origin = transform.w_axis.truncate().as_vec3();
+            if box_visible(&planes, origin, origin) {
+                push_edges(&mut outline, &model_origin_edges(transform, MODEL_ORIGIN_LENGTH), None, MODEL_ORIGIN_COLOR);
+            }
+        }
         let mut stats = RenderStats::default();
         let (instances, see_through_props) = if textured {
             self.model_instances(scene, overlay, &planes, helpers, &mut stats)
@@ -1705,6 +1712,9 @@ impl Renderer3D {
         }
         for ([a, b], color) in view.centre_crosses(local, scene, overlay) {
             push_edges(&mut over, &[[view.axis.lift(a), view.axis.lift(b)]], None, color);
+        }
+        for [a, b] in view.model_origins(local, scene, overlay) {
+            push_edges(&mut over, &[[view.axis.lift(a), view.axis.lift(b)]], None, MODEL_ORIGIN_COLOR);
         }
         let mut tools = Vec::new();
         if let Some(block) = &overlay.block {

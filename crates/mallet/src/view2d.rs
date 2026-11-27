@@ -7,7 +7,8 @@ use mallet_vmf::geometry::Bounds;
 use crate::canvas::Canvas;
 use crate::clipper::{ClipOverlay, CLIP_PLANE_COLOR};
 use crate::scene::{
-    box_edges, entity_marker_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR, HANDLE_GRAB_PIXELS, HANDLE_HALF_SIZE,
+    box_edges, entity_marker_edges, model_origin_edges, CameraPreview, Overlay, Remap, Scene, AGENT_CAMERA_COLOR,
+    HANDLE_GRAB_PIXELS, HANDLE_HALF_SIZE, MODEL_ORIGIN_COLOR,
 };
 use crate::style;
 use crate::transform::HandleMode;
@@ -20,6 +21,8 @@ const MAX_SCALE: f64 = 32.0;
 const MAX_GRID_LINES: f64 = 4000.0;
 /// Half the size, in pixels, of the cross marking each brush's centre.
 const CROSS_PIXELS: f64 = 3.0;
+/// Length of the axis drawn at each prop model's origin, in screen pixels.
+const MODEL_ORIGIN_PIXELS: f64 = 12.0;
 /// Brushes smaller than this on screen, in pixels, get no centre cross.
 const CROSS_MIN_PIXELS: f64 = 10.0;
 /// Scroll distance egui reports for one mouse wheel notch.
@@ -339,6 +342,9 @@ impl View2D {
         for ([a, b], color) in self.centre_crosses(rect, scene, overlay) {
             canvas.lines(&[[self.to_screen(rect, a), self.to_screen(rect, b)]], color);
         }
+        for [a, b] in self.model_origins(rect, scene, overlay) {
+            canvas.lines(&[[self.to_screen(rect, a), self.to_screen(rect, b)]], MODEL_ORIGIN_COLOR);
+        }
         if let Some(block) = &overlay.block {
             self.draw_edges(canvas, rect, &box_edges(block), None, style.tool);
         }
@@ -377,6 +383,26 @@ impl View2D {
             crosses.push(([centre + DVec2::new(-arm, arm), centre + DVec2::new(arm, -arm)], color));
         }
         crosses
+    }
+
+    /// The lines of the axis at the origin of every prop model in view, flattened onto
+    /// this view and as long on screen at any zoom.
+    pub fn model_origins(&self, rect: Rect, scene: &Scene, overlay: &Overlay) -> Vec<[DVec2; 2]> {
+        let view_min = self.to_world(rect, rect.left_bottom());
+        let view_max = self.to_world(rect, rect.right_top());
+        let length = MODEL_ORIGIN_PIXELS / self.scale;
+        scene
+            .meshes
+            .iter()
+            .filter_map(|mesh| mesh.model_transform(overlay, true))
+            .filter(|transform| {
+                let origin = self.axis.project(transform.w_axis.truncate());
+                !(origin.cmplt(view_min).any() || origin.cmpgt(view_max).any())
+            })
+            .flat_map(|transform| model_origin_edges(transform, length))
+            .map(|[a, b]| [self.axis.project(a), self.axis.project(b)])
+            .filter(|[a, b]| a != b)
+            .collect()
     }
 
     /// Draws what sits on top of the map: the resize handles, this view's selection

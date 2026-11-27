@@ -358,6 +358,10 @@ impl Overlay {
 const ENTITY_MARKER_HALF_SIZE: f64 = 8.0;
 /// Colour of the marker that shows where an MCP agent's camera is.
 pub const AGENT_CAMERA_COLOR: Color32 = Color32::from_rgb(230, 110, 255);
+/// Colour of the axis drawn at each prop model's origin.
+pub const MODEL_ORIGIN_COLOR: Color32 = Color32::from_rgb(255, 220, 0);
+/// How far a model origin's axis reaches in the 3D view, in world units.
+pub const MODEL_ORIGIN_LENGTH: f64 = 16.0;
 /// How far in front of a camera marker its view pyramid reaches, in world units.
 const CAMERA_MARKER_DEPTH: f64 = 64.0;
 /// Half-size of the box drawn where a camera marker stands.
@@ -428,7 +432,26 @@ pub fn entity_marker_edges(point: DVec3) -> Vec<[DVec3; 2]> {
     edges
 }
 
+/// The edges of the axis drawn at a model's origin: one line `length` long along each
+/// of the model's own forward, left and up directions, whatever its `modelscale`.
+pub fn model_origin_edges(transform: DMat4, length: f64) -> Vec<[DVec3; 2]> {
+    let origin = transform.w_axis.truncate();
+    [transform.x_axis, transform.y_axis, transform.z_axis]
+        .into_iter()
+        .map(|axis| [origin, origin + axis.truncate().normalize_or_zero() * length])
+        .collect()
+}
+
 impl WireMesh {
+    /// Where this mesh's prop model sits after the current overlay moves it: the model's
+    /// transform, or `None` when the mesh shows no model or `helpers` is off and the
+    /// model is an editor helper.
+    pub fn model_transform(&self, overlay: &Overlay, helpers: bool) -> Option<DMat4> {
+        let instance = self.model.as_ref().filter(|instance| helpers || !instance.helper)?;
+        let (_, remap) = self.appearance(overlay);
+        Some(remap.map_or(instance.transform, |remap| remap.matrix() * instance.transform))
+    }
+
     /// What [`Scene::patch`] leaves where a mesh was taken out: nothing to draw, pick
     /// or select, in a place that keeps the meshes after it where they are.
     fn hole() -> Self {
