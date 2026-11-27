@@ -506,8 +506,14 @@ impl TextureBrowserOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TextureBrowserView {
-    /// How many cards fit across the grid.
-    pub per_row: usize,
+    /// The side of a card's picture, in points.
+    pub card_size: u32,
+    /// Show the pane that describes the clicked material.
+    pub show_details: bool,
+    /// Materials used last, the latest first.
+    pub recent: Vec<String>,
+    /// Materials starred to keep at hand.
+    pub favourites: Vec<String>,
     /// Show only materials the map uses.
     pub used_only: bool,
     /// Hide model, particle, sprite and interface materials.
@@ -533,7 +539,10 @@ pub struct TextureBrowserView {
 impl Default for TextureBrowserView {
     fn default() -> Self {
         Self {
-            per_row: 7,
+            card_size: 128,
+            show_details: true,
+            recent: Vec::new(),
+            favourites: Vec::new(),
             used_only: false,
             brush_only: true,
             filter: String::new(),
@@ -586,8 +595,12 @@ pub struct SoundscapeBrowserView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelBrowserView {
-    /// How many cards fit across the grid.
-    pub per_row: usize,
+    /// The side of a card's picture, in points.
+    pub card_size: u32,
+    /// Models used last, the latest first.
+    pub recent: Vec<String>,
+    /// Models starred to keep at hand.
+    pub favourites: Vec<String>,
     /// Show only models the map's entities use.
     pub used_only: bool,
     /// Text the search box held.
@@ -609,7 +622,9 @@ pub struct ModelBrowserView {
 impl Default for ModelBrowserView {
     fn default() -> Self {
         Self {
-            per_row: 6,
+            card_size: 160,
+            recent: Vec::new(),
+            favourites: Vec::new(),
             used_only: false,
             filter: String::new(),
             filter_history: Vec::new(),

@@ -15,8 +15,6 @@ use eframe::egui::{self, Color32, RichText};
 use egui_phosphor::regular as icon;
 use mallet_content::{Source, SourceKind};
 
-pub(super) const MUTED: Color32 = Color32::from_gray(140);
-pub(super) const ACCENT: Color32 = Color32::from_rgb(70, 140, 230);
 /// Earlier searches each browser remembers.
 pub(super) const MAX_FILTER_HISTORY: usize = 12;
 /// The name the sidebar gives files that lie in no folder.
@@ -27,6 +25,35 @@ const CARD_GAP: f32 = 6.0;
 const CARD_LABEL: f32 = 22.0;
 /// Width the grid leaves free on the right for its scroll bar.
 const SCROLL_BAR_ROOM: f32 = 16.0;
+/// The smallest and largest side of a card's picture, in points.
+const MIN_CARD: u32 = 64;
+const MAX_CARD: u32 = 320;
+/// The card sizes the toolbar offers.
+const CARD_SIZES: [(&str, u32); 3] = [("S", 96), ("M", 144), ("L", 224)];
+/// Entries the Recent shelf keeps.
+const RECENT_LIMIT: usize = 24;
+/// Side of a picture on the Recent and Favourites shelf, in points.
+const SHELF_SIDE: f32 = 52.0;
+/// How long a thumbnail takes to fade in once it has loaded.
+const FADE_SECONDS: f64 = 0.18;
+/// Rows Page Up and Page Down move the selection by.
+const PAGE_ROWS: i64 = 4;
+
+/// Text that matters less, such as counts, in the colours of the current theme.
+pub(super) fn muted(ui: &egui::Ui) -> Color32 {
+    ui.visuals().weak_text_color()
+}
+
+/// The theme's colour for warnings.
+pub(super) fn warning(ui: &egui::Ui) -> Color32 {
+    ui.visuals().warn_fg_color
+}
+
+/// A card's background: the window's colour moved toward the text's by `amount`, so it
+/// stands out a little in a dark theme and a light one alike.
+fn tint(visuals: &egui::Visuals, amount: f32) -> Color32 {
+    visuals.window_fill.lerp_to_gamma(visuals.text_color(), amount)
+}
 
 /// A card's picture: waiting to load, loaded at its real size, or failed with a reason
 /// when one is known.
@@ -147,10 +174,11 @@ impl<R: Send + 'static> Loaders<R> {
 }
 
 /// The thumbnails loaded or loading, with when each was last drawn so the ones off
-/// screen longest are dropped first.
+/// screen longest are dropped first, and when each arrived so it can fade in.
 pub(super) struct Thumbnails {
     pictures: HashMap<String, Thumbnail>,
     last_shown: HashMap<String, u64>,
+    arrived: HashMap<String, f64>,
     frame: u64,
     /// Requests waiting to load; older ones are dropped, as they have scrolled out of view.
     max_requests: usize,
@@ -162,6 +190,7 @@ impl Thumbnails {
         Self {
             pictures: HashMap::new(),
             last_shown: HashMap::new(),
+            arrived: HashMap::new(),
             frame: 0,
             max_requests,
             queue: Arc::default(),
@@ -190,6 +219,13 @@ impl Thumbnails {
         }
     }
 
+    /// How far a thumbnail has faded in at `now`, from 0 to 1.
+    fn opacity(&self, name: &str, now: f64) -> f32 {
+        self.arrived
+            .get(name)
+            .map_or(1.0, |arrived| ((now - arrived) / FADE_SECONDS).clamp(0.0, 1.0) as f32)
+    }
+
     /// Notes that a thumbnail is drawn this frame, and asks for it when it is not loaded
     /// or loading and `loading` says loaders are running.
     pub(super) fn show(&mut self, name: &str, loading: bool) {
@@ -215,30 +251,37 @@ impl Thumbnails {
         self.pictures.insert(name.to_owned(), Thumbnail::Loading);
     }
 
-    /// Keeps a finished thumbnail, unless nobody waits for it any more.
-    pub(super) fn finish(&mut self, name: String, thumbnail: Thumbnail) {
+    /// Keeps a thumbnail that finished at `now`, unless nobody waits for it any more.
+    pub(super) fn finish(&mut self, name: String, thumbnail: Thumbnail, now: f64) {
         if let Some(slot) = self.pictures.get_mut(&name) {
             *slot = thumbnail;
+            self.arrived.insert(name, now);
         }
     }
 
     /// Forgets one thumbnail, so it loads again the next time it is drawn.
     pub(super) fn remove(&mut self, name: &str) {
         self.pictures.remove(name);
+        self.arrived.remove(name);
     }
 
     /// Forgets every thumbnail and every request still waiting.
     pub(super) fn clear(&mut self) {
         self.pictures.clear();
         self.last_shown.clear();
+        self.arrived.clear();
         self.queue.names().clear();
     }
 
-    /// Whether a thumbnail is still loading.
-    pub(super) fn waiting(&self) -> bool {
-        self.pictures
-            .values()
-            .any(|thumbnail| matches!(thumbnail, Thumbnail::Loading))
+    /// Whether a thumbnail is still loading or fading in at `now`, so the window has to
+    /// be drawn again soon.
+    pub(super) fn busy(&mut self, now: f64) -> bool {
+        self.arrived.retain(|_, arrived| now - *arrived < FADE_SECONDS);
+        !self.arrived.is_empty()
+            || self
+                .pictures
+                .values()
+                .any(|thumbnail| matches!(thumbnail, Thumbnail::Loading))
     }
 
     /// Drops the thumbnails off screen longest when there are more than `limit`, down to
@@ -258,6 +301,7 @@ impl Thumbnails {
         for (_, name) in loaded.into_iter().take(excess) {
             self.pictures.remove(&name);
             self.last_shown.remove(&name);
+            self.arrived.remove(&name);
         }
     }
 }
@@ -286,6 +330,20 @@ impl Folder {
             folder = folder.children.entry(part.to_owned()).or_default();
             folder.count += 1;
         }
+    }
+
+    /// Whether this folder, whose path is `path`, or any folder below it has `term` in
+    /// its path.
+    fn matches(&self, path: &str, term: &str) -> bool {
+        path.contains(term)
+            || self.children.iter().any(|(name, child)| {
+                let below = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                };
+                child.matches(&below, term)
+            })
     }
 
     /// Whether a folder path such as `props/de_dust` is in the tree.
@@ -449,16 +507,22 @@ pub(super) fn hidden_paths(sources: &[Source], hidden: &HashSet<usize>) -> Vec<P
     paths
 }
 
-/// The sidebar: sources grouped by kind, then the folder tree, each with a count. The
-/// top-level folders `skip` names are left out. With `reveal`, the folders on the way
-/// down to the chosen one open.
+/// The folder chosen in the sidebar, the text the folder tree is searched for, and
+/// whether the folders on the way down to the chosen one should open this frame.
+pub(super) struct FolderPick<'a> {
+    pub(super) folder: &'a mut Option<String>,
+    pub(super) search: &'a mut String,
+    pub(super) reveal: bool,
+}
+
+/// The sidebar: sources grouped by kind, then a search box and the folder tree, each with
+/// a count. The top-level folders `skip` names are left out.
 pub(super) fn sidebar<X>(
     ui: &mut egui::Ui,
     catalog: &Catalog<X>,
     noun: &str,
     hidden: &mut HashSet<usize>,
-    folder: &mut Option<String>,
-    reveal: bool,
+    pick: FolderPick,
     skip: impl Fn(&str) -> bool,
 ) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -473,14 +537,34 @@ pub(super) fn sidebar<X>(
     ui.add_space(8.0);
     ui.label(RichText::new("Folders").strong());
     ui.horizontal(|ui| {
-        if ui.selectable_label(folder.is_none(), "All folders").clicked() {
-            *folder = None;
+        ui.add(
+            egui::TextEdit::singleline(pick.search)
+                .hint_text(format!("{} Find a folder", icon::MAGNIFYING_GLASS))
+                .desired_width(ui.available_width() - 28.0),
+        );
+        if ui
+            .add_enabled(!pick.search.is_empty(), egui::Button::new(icon::X).small())
+            .on_hover_text("Show every folder")
+            .clicked()
+        {
+            pick.search.clear();
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.selectable_label(pick.folder.is_none(), "All folders").clicked() {
+            *pick.folder = None;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(thousands(listing.folders.count)).small().color(MUTED));
+            ui.label(RichText::new(thousands(listing.folders.count)).small().color(muted(ui)));
         });
     });
-    folder_tree(ui, &listing.folders, "", folder, reveal, &skip);
+    let term = pick.search.trim().to_ascii_lowercase();
+    let tree = Tree {
+        term: &term,
+        reveal: pick.reveal,
+        skip: &skip,
+    };
+    tree.show(ui, &listing.folders, "", pick.folder);
 }
 
 /// The sources part of the sidebar, a tick box for each, grouped by kind.
@@ -543,7 +627,7 @@ fn sources_list<X>(ui: &mut egui::Ui, listing: &Listing<X>, hidden: &mut HashSet
                             set(hidden, *index, on);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(thousands(*count)).small().color(MUTED));
+                            ui.label(RichText::new(thousands(*count)).small().color(muted(ui)));
                         });
                     });
                 }
@@ -551,50 +635,57 @@ fn sources_list<X>(ui: &mut egui::Ui, listing: &Listing<X>, hidden: &mut HashSet
     }
 }
 
-/// The sidebar's folder tree under `folder`, whose own path is `prefix`. Clicking a
-/// folder's name narrows the list to it and everything below; its arrow opens it.
-fn folder_tree(
-    ui: &mut egui::Ui,
-    folder: &Folder,
-    prefix: &str,
-    selected: &mut Option<String>,
+/// How the sidebar's folder tree is drawn: only the folders whose path has `term` in it
+/// and the folders above them, opened, when it is not empty; with `reveal`, the folders
+/// on the way down to the chosen one open.
+struct Tree<'a> {
+    term: &'a str,
     reveal: bool,
-    skip: &dyn Fn(&str) -> bool,
-) {
-    for (name, child) in &folder.children {
-        if prefix.is_empty() && skip(name) {
-            continue;
-        }
-        let path = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        let label = |ui: &mut egui::Ui, selected: &mut Option<String>| {
-            let chosen = selected.as_deref() == Some(path.as_str());
-            if ui.selectable_label(chosen, name).on_hover_text(&path).clicked() {
-                *selected = if chosen { None } else { Some(path.clone()) };
+    skip: &'a dyn Fn(&str) -> bool,
+}
+
+impl Tree<'_> {
+    /// The folders under `folder`, whose own path is `prefix`. Clicking a folder's name
+    /// narrows the list to it and everything below; its arrow opens it.
+    fn show(&self, ui: &mut egui::Ui, folder: &Folder, prefix: &str, selected: &mut Option<String>) {
+        for (name, child) in &folder.children {
+            if prefix.is_empty() && (self.skip)(name) {
+                continue;
             }
-            ui.label(RichText::new(thousands(child.count)).small().color(MUTED));
-        };
-        if child.children.is_empty() {
-            ui.horizontal(|ui| {
-                ui.add_space(ui.spacing().indent);
-                label(ui, selected);
-            });
-            continue;
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if !self.term.is_empty() && !child.matches(&path.to_ascii_lowercase(), self.term) {
+                continue;
+            }
+            let label = |ui: &mut egui::Ui, selected: &mut Option<String>| {
+                let chosen = selected.as_deref() == Some(path.as_str());
+                if ui.selectable_label(chosen, name).on_hover_text(&path).clicked() {
+                    *selected = if chosen { None } else { Some(path.clone()) };
+                }
+                ui.label(RichText::new(thousands(child.count)).small().color(muted(ui)));
+            };
+            if child.children.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(ui.spacing().indent);
+                    label(ui, selected);
+                });
+                continue;
+            }
+            let id = ui.make_persistent_id(("browser_folder", &path));
+            let holds_selection = selected
+                .as_deref()
+                .is_some_and(|chosen| chosen.starts_with(&format!("{path}/")));
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+            if (self.reveal && holds_selection) || !self.term.is_empty() {
+                state.set_open(true);
+            }
+            state
+                .show_header(ui, |ui| label(ui, selected))
+                .body(|ui| self.show(ui, child, &path, selected));
         }
-        let id = ui.make_persistent_id(("browser_folder", &path));
-        let holds_selection = selected
-            .as_deref()
-            .is_some_and(|chosen| chosen.starts_with(&format!("{path}/")));
-        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-        if reveal && holds_selection {
-            state.set_open(true);
-        }
-        state
-            .show_header(ui, |ui| label(ui, selected))
-            .body(|ui| folder_tree(ui, child, &path, selected, reveal, skip));
     }
 }
 
@@ -649,26 +740,43 @@ impl SearchBox<'_> {
     }
 }
 
-/// The grid of cards, `per_row` to a row sharing the width evenly, drawing only the rows
-/// on screen. `card` draws the card for an entry, given its index in the shown entries
-/// and the side of its picture. The scroll bar is solid and always shown, with a handle
-/// long enough to grab: egui's floating bar hides until hovered, and with tens of
-/// thousands of entries its handle shrinks to a dot. It fits in the room the cards leave
-/// free on the right.
+/// How many cards fit across a grid `width` points wide, and the side of each card's
+/// picture.
+pub(super) fn grid_columns(width: f32, card_size: u32) -> (usize, f32) {
+    let side = card_size.clamp(MIN_CARD, MAX_CARD) as f32;
+    let room = (width - SCROLL_BAR_ROOM).max(side);
+    let columns = ((room + CARD_GAP) / (side + CARD_GAP)).floor() as usize;
+    (columns.max(1), side)
+}
+
+/// The grid of cards, each `card_size` points across, as many to a row as fit, drawing
+/// only the rows on screen. Holding Ctrl and scrolling over it changes the card size.
+/// `card` draws the card for an entry, given its index in the shown entries and the side
+/// of its picture; with `reveal`, the grid scrolls the entry at that index into view.
+///
+/// The scroll bar is solid and always shown, with a handle long enough to grab: egui's
+/// floating bar hides until hovered, and with tens of thousands of entries its handle
+/// shrinks to a dot. It fits in the room the cards leave free on the right.
 pub(super) fn card_grid(
     ui: &mut egui::Ui,
     salt: &str,
     count: usize,
-    per_row: usize,
-    [width, height]: [f32; 2],
+    card_size: &mut u32,
     scroll_step: f32,
+    reveal: Option<usize>,
     mut card: impl FnMut(&mut egui::Ui, usize, f32),
 ) {
-    let columns = per_row.clamp(2, 14);
-    let side = ((width - SCROLL_BAR_ROOM - CARD_GAP * (columns as f32 - 1.0)) / columns as f32).max(32.0);
+    let area = ui.available_rect_before_wrap();
+    if ui.rect_contains_pointer(area) {
+        let zoom = ui.input(|input| input.zoom_delta());
+        if zoom != 1.0 {
+            *card_size = ((*card_size as f32 * zoom).round() as u32).clamp(MIN_CARD, MAX_CARD);
+        }
+    }
+    let (columns, side) = grid_columns(area.width(), *card_size);
     let row_height = side + CARD_LABEL + CARD_GAP;
     let rows = count.div_ceil(columns);
-    let wheel = wheel_rows(ui, ui.available_rect_before_wrap());
+    let wheel = wheel_rows(ui, area);
     ui.spacing_mut().scroll = egui::style::ScrollStyle {
         bar_width: 10.0,
         handle_min_length: 48.0,
@@ -683,85 +791,140 @@ pub(super) fn card_grid(
     };
     egui::ScrollArea::vertical()
         .id_salt(salt)
-        .max_height(height)
+        .max_height(area.height())
         .auto_shrink([false, false])
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .show_rows(ui, row_height, rows, |ui, range| {
+        .show_viewport(ui, |ui, viewport| {
+            ui.set_height(rows as f32 * row_height);
             if wheel != 0.0 {
                 ui.scroll_with_delta_animation(
                     egui::vec2(0.0, wheel * row_height * scroll_step),
                     egui::style::ScrollAnimation::none(),
                 );
             }
-            for row in range {
-                ui.horizontal(|ui| {
+            let top = ui.max_rect().top();
+            let left = ui.max_rect().left();
+            if let Some(index) = reveal {
+                let y = top + (index / columns) as f32 * row_height;
+                let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), y..=y + row_height);
+                ui.scroll_to_rect(rect, None);
+            }
+            let first = (viewport.min.y / row_height).floor().max(0.0) as usize;
+            let last = ((viewport.max.y / row_height).ceil() as usize + 1).min(rows);
+            for row in first..last {
+                let y = top + row as f32 * row_height;
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(left, y),
+                    egui::vec2(ui.max_rect().width(), side + CARD_LABEL),
+                );
+                let builder = egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Min));
+                ui.allocate_new_ui(builder, |ui| {
                     ui.spacing_mut().item_spacing.x = CARD_GAP;
                     for index in (row * columns..(row + 1) * columns).take_while(|index| *index < count) {
-                        card(ui, index, side);
+                        ui.push_id(index, |ui| card(ui, index, side));
                     }
                 });
-                ui.add_space(CARD_GAP);
             }
         });
 }
 
+/// How a card is marked: the entry in use now, the one clicked last, and whether it is
+/// starred.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Marks {
+    pub(super) current: bool,
+    pub(super) selected: bool,
+    pub(super) favourite: bool,
+}
+
 /// One card: a square for the picture, which `picture` paints, and the name under it.
-/// The entry in use now is outlined in the accent colour and the one clicked last in
-/// grey.
+/// The entry in use now is outlined in the theme's selection colour and the one clicked
+/// last in the text colour; a starred one has a star in its corner.
 pub(super) fn card(
     ui: &mut egui::Ui,
     side: f32,
     name: &str,
-    current: bool,
-    selected: bool,
-    picture: impl FnOnce(&egui::Painter, egui::Rect),
+    marks: Marks,
+    picture: impl FnOnce(&egui::Ui, &egui::Painter, egui::Rect),
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side + CARD_LABEL), egui::Sense::click());
     let image_rect = egui::Rect::from_min_size(rect.min, egui::Vec2::splat(side));
+    let visuals = ui.visuals().clone();
     let painter = ui.painter();
-    let shade = match (selected, response.hovered()) {
-        (true, _) => 54,
-        (false, true) => 44,
-        (false, false) => 30,
+    let shade = match (marks.selected, response.hovered()) {
+        (true, _) => 0.16,
+        (false, true) => 0.1,
+        (false, false) => 0.05,
     };
-    painter.rect_filled(rect, 4, Color32::from_gray(shade));
-    picture(painter, image_rect);
+    painter.rect_filled(rect, 4, tint(&visuals, shade));
+    picture(ui, painter, image_rect);
     let label = egui::Rect::from_min_max(egui::pos2(rect.min.x, image_rect.max.y), rect.max);
-    painter.rect_filled(
-        label,
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 4,
-            se: 4,
-        },
-        if current { ACCENT } else { Color32::from_gray(22) },
-    );
+    let corners = egui::CornerRadius {
+        nw: 0,
+        ne: 0,
+        sw: 4,
+        se: 4,
+    };
+    let (label_fill, label_text) = if marks.current {
+        (visuals.selection.bg_fill, visuals.selection.stroke.color)
+    } else if marks.selected {
+        (visuals.extreme_bg_color, visuals.strong_text_color())
+    } else {
+        (visuals.extreme_bg_color, visuals.text_color())
+    };
+    painter.rect_filled(label, corners, label_fill);
     let short = name.rsplit('/').next().unwrap_or(name);
     painter.text(
         label.center(),
         egui::Align2::CENTER_CENTER,
         elide(short, ((side - 8.0) / 6.0) as usize),
         egui::FontId::proportional(11.0),
-        Color32::from_gray(if current || selected { 255 } else { 210 }),
+        label_text,
     );
-    if current {
-        painter.rect_stroke(rect, 4, egui::Stroke::new(2.0_f32, ACCENT), egui::StrokeKind::Inside);
-    } else if selected {
+    if marks.favourite {
+        painter.text(
+            image_rect.right_top() + egui::vec2(-5.0, 4.0),
+            egui::Align2::RIGHT_TOP,
+            icon::STAR,
+            egui::FontId::proportional(14.0),
+            visuals.warn_fg_color,
+        );
+    }
+    if marks.current {
         painter.rect_stroke(
             rect,
             4,
-            egui::Stroke::new(1.5_f32, Color32::from_gray(200)),
+            egui::Stroke::new(2.0_f32, visuals.selection.bg_fill),
+            egui::StrokeKind::Inside,
+        );
+    } else if marks.selected {
+        painter.rect_stroke(
+            rect,
+            4,
+            egui::Stroke::new(1.5_f32, visuals.strong_text_color()),
             egui::StrokeKind::Inside,
         );
     }
     response
 }
 
-/// Paints a loaded thumbnail centred in `rect`: small ones at their real size, as in
-/// Hammer, and large ones shrunk to fit. A failed one shows a warning icon.
-pub(super) fn paint_thumbnail(painter: &egui::Painter, rect: egui::Rect, thumbnail: Option<&Thumbnail>, upscale: bool) {
-    match thumbnail {
+/// Paints a thumbnail centred in `rect`: small ones at their real size, as in Hammer,
+/// and large ones shrunk to fit, or grown to fit as well with `upscale`. A loaded one
+/// fades in; one still loading shows a gently pulsing placeholder, and a failed one a
+/// warning icon.
+pub(super) fn paint_thumbnail(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    thumbnails: &Thumbnails,
+    name: &str,
+    upscale: bool,
+) {
+    let visuals = ui.visuals();
+    let now = ui.input(|input| input.time);
+    match thumbnails.get(name) {
         Some(Thumbnail::Ready(texture, [width, height])) => {
             let room = rect.width() - 6.0;
             let fit = room / (*width).max(*height).max(1) as f32;
@@ -769,7 +932,8 @@ pub(super) fn paint_thumbnail(painter: &egui::Painter, rect: egui::Rect, thumbna
             let target =
                 egui::Rect::from_center_size(rect.center(), egui::vec2(*width as f32 * scale, *height as f32 * scale));
             let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-            painter.image(texture.id(), target, full, Color32::WHITE);
+            let tint = Color32::WHITE.gamma_multiply(thumbnails.opacity(name, now));
+            painter.image(texture.id(), target, full, tint);
         }
         Some(Thumbnail::Failed(_)) => {
             painter.text(
@@ -777,10 +941,318 @@ pub(super) fn paint_thumbnail(painter: &egui::Painter, rect: egui::Rect, thumbna
                 egui::Align2::CENTER_CENTER,
                 icon::WARNING,
                 egui::FontId::proportional(22.0),
-                MUTED,
+                visuals.weak_text_color(),
             );
         }
-        _ => {}
+        _ => {
+            let wave = ((now * 2.5 - rect.left() as f64 * 0.004).sin() * 0.5 + 0.5) as f32;
+            painter.rect_filled(rect.shrink(6.0), 3, tint(visuals, 0.06 + 0.05 * wave));
+        }
+    }
+}
+
+/// A rounded on-off button for the toolbar, with a count after its label when one is
+/// given.
+pub(super) fn chip(ui: &mut egui::Ui, on: bool, label: &str, count: Option<usize>) -> egui::Response {
+    let text = match count {
+        Some(count) => format!("{label}  {}", thousands(count)),
+        None => label.to_owned(),
+    };
+    ui.add(egui::Button::new(text).selected(on).corner_radius(10.0))
+}
+
+/// A [`chip`] that turns `on` on and off when clicked.
+pub(super) fn toggle_chip(ui: &mut egui::Ui, on: &mut bool, label: &str, count: Option<usize>) -> egui::Response {
+    let response = chip(ui, *on, label, count);
+    if response.clicked() {
+        *on = !*on;
+    }
+    response
+}
+
+/// The small, medium and large card size buttons.
+pub(super) fn size_buttons(ui: &mut egui::Ui, card_size: &mut u32) {
+    for (label, side) in CARD_SIZES {
+        if chip(ui, *card_size == side, label, None)
+            .on_hover_text("Card size. Hold Ctrl and scroll over the cards to zoom them.")
+            .clicked()
+        {
+            *card_size = side;
+        }
+    }
+}
+
+/// The line under the grid: how many entries show out of how many, and a progress bar
+/// while `progress` says background work is going on, with `extra` after them.
+pub(super) fn status_line(
+    ui: &mut egui::Ui,
+    noun: &str,
+    shown: usize,
+    total: Option<usize>,
+    progress: Option<(f32, String)>,
+    extra: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        let counts = match total {
+            Some(total) if total == shown => format!("{} {noun}", thousands(total)),
+            Some(total) => format!("{} of {} {noun}", thousands(shown), thousands(total)),
+            None => format!("Listing {noun}..."),
+        };
+        ui.label(RichText::new(counts).small().color(muted(ui)));
+        if let Some((fraction, text)) = progress {
+            ui.separator();
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(150.0)
+                    .desired_height(12.0)
+                    .text(RichText::new(text).small()),
+            );
+        }
+        extra(ui);
+    });
+}
+
+/// The folder the grid is narrowed to, as a trail of folders above the grid: clicking
+/// one narrows the list to it, and the first shows everything.
+pub(super) fn path_bar(ui: &mut egui::Ui, root: &str, folder: &mut Option<String>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let crumb = |ui: &mut egui::Ui, text: &str, last: bool| {
+            let text = if last {
+                RichText::new(text).strong()
+            } else {
+                RichText::new(text).color(muted(ui))
+            };
+            ui.add(egui::Button::new(text).frame(false)).clicked()
+        };
+        if crumb(ui, &format!("{} {root}", icon::HOUSE), folder.is_none()) {
+            *folder = None;
+        }
+        let Some(chosen) = folder.clone() else { return };
+        let parts: Vec<&str> = chosen.split('/').collect();
+        for (depth, part) in parts.iter().enumerate() {
+            ui.label(RichText::new(icon::CARET_RIGHT).small().color(muted(ui)));
+            if crumb(ui, part, depth + 1 == parts.len()) {
+                *folder = Some(parts[..=depth].join("/"));
+            }
+        }
+    });
+}
+
+/// The filters every browser has, which the empty grid offers to undo.
+pub(super) struct Narrowing<'a> {
+    pub(super) filter: &'a mut String,
+    pub(super) hidden: &'a mut HashSet<usize>,
+    pub(super) folder: &'a mut Option<String>,
+    pub(super) used_only: &'a mut bool,
+}
+
+/// What the grid shows when nothing matches: why, and a button for each filter that
+/// narrows the list, with `extra` adding the browser's own.
+pub(super) fn empty_state(ui: &mut egui::Ui, noun: &str, narrowing: Narrowing, extra: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(40.0);
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new(icon::MAGNIFYING_GLASS).size(40.0).color(muted(ui)));
+        ui.add_space(4.0);
+        ui.label(RichText::new(format!("No {noun} match")).heading());
+        ui.label(RichText::new("Widen the list with one of these:").color(muted(ui)));
+        ui.add_space(6.0);
+    });
+    ui.horizontal_wrapped(|ui| {
+        let width = ui.available_width();
+        ui.add_space((width * 0.5 - 260.0).max(0.0));
+        if !narrowing.filter.is_empty() && ui.button(format!("{} Clear the search", icon::X)).clicked() {
+            narrowing.filter.clear();
+        }
+        if narrowing.folder.is_some() && ui.button(format!("{} All folders", icon::FOLDERS)).clicked() {
+            *narrowing.folder = None;
+        }
+        if !narrowing.hidden.is_empty() && ui.button(format!("{} Every source", icon::STACK)).clicked() {
+            narrowing.hidden.clear();
+        }
+        if *narrowing.used_only && ui.button("Unused ones too").clicked() {
+            *narrowing.used_only = false;
+        }
+        extra(ui);
+    });
+}
+
+/// Puts `name` first in a Recent list, keeping the list short.
+pub(super) fn remember(recent: &mut Vec<String>, name: &str) {
+    recent.retain(|old| old != name);
+    recent.insert(0, name.to_owned());
+    recent.truncate(RECENT_LIMIT);
+}
+
+/// Stars `name`, or takes its star away when it has one.
+pub(super) fn toggle_favourite(favourites: &mut Vec<String>, name: &str) {
+    if favourites.iter().any(|old| old == name) {
+        favourites.retain(|old| old != name);
+    } else {
+        favourites.push(name.to_owned());
+    }
+}
+
+/// What was done on the Recent and Favourites shelf.
+pub(super) enum ShelfAction {
+    /// Clicked: show it as the selected entry.
+    Select(String),
+    /// Double-clicked: use it.
+    Use(String),
+}
+
+/// The shelf above the grid: the entries used last or the starred ones, as small
+/// pictures. `short` gives an entry's name as the browser shows it.
+pub(super) struct Shelf<'a> {
+    pub(super) recent: &'a [String],
+    pub(super) favourites: &'a [String],
+    pub(super) selected: Option<&'a str>,
+    pub(super) short: fn(&str) -> &str,
+    pub(super) upscale: bool,
+}
+
+impl Shelf<'_> {
+    /// Draws the shelf, nothing while both lists are empty. `show_favourites` picks the
+    /// list shown.
+    pub(super) fn show(
+        &self,
+        ui: &mut egui::Ui,
+        thumbnails: &mut Thumbnails,
+        loading: bool,
+        show_favourites: &mut bool,
+    ) -> Option<ShelfAction> {
+        if self.recent.is_empty() && self.favourites.is_empty() {
+            return None;
+        }
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                if chip(
+                    ui,
+                    !*show_favourites,
+                    &format!("{} Recent", icon::CLOCK_COUNTER_CLOCKWISE),
+                    None,
+                )
+                .clicked()
+                {
+                    *show_favourites = false;
+                }
+                if chip(ui, *show_favourites, &format!("{} Starred", icon::STAR), None).clicked() {
+                    *show_favourites = true;
+                }
+            });
+            let names = if *show_favourites { self.favourites } else { self.recent };
+            if names.is_empty() {
+                let hint = if *show_favourites {
+                    "Right-click a card and choose Star to keep it here."
+                } else {
+                    "What you use shows up here."
+                };
+                ui.label(RichText::new(hint).color(muted(ui)));
+                return;
+            }
+            egui::ScrollArea::horizontal()
+                .id_salt("browser_shelf")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for name in names {
+                            ui.push_id(name, |ui| {
+                                let response = self.item(ui, thumbnails, loading, name);
+                                if response.double_clicked() {
+                                    action = Some(ShelfAction::Use(name.clone()));
+                                } else if response.clicked() {
+                                    action = Some(ShelfAction::Select(name.clone()));
+                                }
+                            });
+                        }
+                    });
+                });
+        });
+        ui.separator();
+        action
+    }
+
+    /// One small picture on the shelf.
+    fn item(&self, ui: &mut egui::Ui, thumbnails: &mut Thumbnails, loading: bool, name: &str) -> egui::Response {
+        thumbnails.show(name, loading);
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(SHELF_SIDE), egui::Sense::click());
+        let selected = self.selected == Some(name);
+        let shade = if selected || response.hovered() { 0.14 } else { 0.05 };
+        ui.painter().rect_filled(rect, 4, tint(ui.visuals(), shade));
+        paint_thumbnail(ui, ui.painter(), rect, thumbnails, name, self.upscale);
+        if selected {
+            ui.painter().rect_stroke(
+                rect,
+                4,
+                egui::Stroke::new(1.5_f32, ui.visuals().strong_text_color()),
+                egui::StrokeKind::Inside,
+            );
+        }
+        response.on_hover_text((self.short)(name))
+    }
+}
+
+/// How the keys pressed this frame move the selection in a grid: by `step` entries,
+/// and whether Enter asks to use it.
+#[derive(Clone, Copy, Default)]
+pub(super) struct KeyMove {
+    step: Moves,
+    pub(super) enter: bool,
+}
+
+/// The arrow, page, Home and End keys pressed, in a form that needs the grid's width
+/// to turn into a number of entries.
+#[derive(Clone, Copy, Default)]
+struct Moves {
+    across: i64,
+    rows: i64,
+    ends: i64,
+}
+
+impl KeyMove {
+    /// Reads and uses up the keys while the pointer is over the browser's window from
+    /// last frame and no text box takes them, so nothing behind the window acts on them.
+    pub(super) fn read(ctx: &egui::Context, window: Option<egui::Rect>) -> Self {
+        let over = ctx
+            .pointer_hover_pos()
+            .zip(window)
+            .is_some_and(|(pointer, window)| window.contains(pointer));
+        if !over || ctx.wants_keyboard_input() {
+            return Self::default();
+        }
+        ctx.input_mut(|input| {
+            let mut count = |key| input.count_and_consume_key(egui::Modifiers::NONE, key) as i64;
+            let step = Moves {
+                across: count(egui::Key::ArrowRight) - count(egui::Key::ArrowLeft),
+                rows: count(egui::Key::ArrowDown) - count(egui::Key::ArrowUp)
+                    + PAGE_ROWS * (count(egui::Key::PageDown) - count(egui::Key::PageUp)),
+                ends: count(egui::Key::End) - count(egui::Key::Home),
+            };
+            let enter = count(egui::Key::Enter) > 0;
+            Self { step, enter }
+        })
+    }
+
+    /// Whether any key moves the selection.
+    pub(super) fn moves(&self) -> bool {
+        self.step.across != 0 || self.step.rows != 0 || self.step.ends != 0
+    }
+
+    /// The index the selection moves to from `from` in a grid of `count` entries,
+    /// `columns` across; from nothing selected it starts at the first entry.
+    pub(super) fn target(&self, from: Option<usize>, count: usize, columns: usize) -> Option<usize> {
+        if count == 0 {
+            return None;
+        }
+        let Some(from) = from else { return Some(0) };
+        let last = count as i64 - 1;
+        let moved = match self.step.ends {
+            ends if ends > 0 => last,
+            ends if ends < 0 => 0,
+            _ => from as i64 + self.step.across + self.step.rows * columns as i64,
+        };
+        Some(moved.clamp(0, last) as usize)
     }
 }
 
@@ -813,8 +1285,9 @@ fn wheel_rows(ui: &egui::Ui, area: egui::Rect) -> f32 {
     })
 }
 
-/// A grey checkerboard, so transparent parts of a picture show.
-pub(super) fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
+/// A checkerboard in the theme's colours, so transparent parts of a picture show.
+pub(super) fn checkerboard(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect) {
+    let square_fill = tint(ui.visuals(), 0.14);
     let cell = 8.0;
     let columns = (rect.width() / cell).ceil() as usize;
     let rows = (rect.height() / cell).ceil() as usize;
@@ -823,7 +1296,7 @@ pub(super) fn checkerboard(painter: &egui::Painter, rect: egui::Rect) {
             if (row + column) % 2 == 0 {
                 let min = rect.min + egui::vec2(column as f32 * cell, row as f32 * cell);
                 let square = egui::Rect::from_min_size(min, egui::Vec2::splat(cell)).intersect(rect);
-                painter.rect_filled(square, 0, Color32::from_gray(60));
+                painter.rect_filled(square, 0, square_fill);
             }
         }
     }
@@ -930,6 +1403,41 @@ mod tests {
         assert!(in_folder("props_c17/trim/a", "props_c17"));
         assert!(!in_folder("props_c17x/a", "props_c17"));
         assert!(in_folder("lonely", ROOT_FOLDER));
+    }
+
+    #[test]
+    fn keys_move_the_selection_across_and_down_the_grid() {
+        let keys = |across, rows, ends| KeyMove {
+            step: Moves { across, rows, ends },
+            enter: false,
+        };
+        assert_eq!(keys(1, 0, 0).target(None, 10, 4), Some(0));
+        assert_eq!(keys(1, 0, 0).target(Some(2), 10, 4), Some(3));
+        assert_eq!(keys(0, 1, 0).target(Some(2), 10, 4), Some(6));
+        assert_eq!(keys(0, 1, 0).target(Some(8), 10, 4), Some(9));
+        assert_eq!(keys(0, -1, 0).target(Some(1), 10, 4), Some(0));
+        assert_eq!(keys(0, 0, 1).target(Some(1), 10, 4), Some(9));
+        assert_eq!(keys(0, 0, -1).target(Some(7), 10, 4), Some(0));
+        assert_eq!(keys(1, 0, 0).target(Some(0), 0, 4), None);
+    }
+
+    #[test]
+    fn cards_keep_their_size_and_fill_the_width() {
+        assert_eq!(grid_columns(16.0 + 4.0 * 100.0 + 3.0 * CARD_GAP, 100), (4, 100.0));
+        assert_eq!(grid_columns(50.0, 100).0, 1);
+        assert_eq!(grid_columns(1000.0, 5).1, MIN_CARD as f32);
+    }
+
+    #[test]
+    fn recent_entries_come_first_and_stars_toggle() {
+        let mut recent = vec!["a".to_owned(), "b".to_owned()];
+        remember(&mut recent, "b");
+        assert_eq!(recent, ["b", "a"]);
+        let mut starred = Vec::new();
+        toggle_favourite(&mut starred, "a");
+        assert_eq!(starred, ["a"]);
+        toggle_favourite(&mut starred, "a");
+        assert!(starred.is_empty());
     }
 
     #[test]

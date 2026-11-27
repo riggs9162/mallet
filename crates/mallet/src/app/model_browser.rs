@@ -17,15 +17,16 @@ use egui_phosphor::regular as icon;
 use mallet_content::{MaterialLoader, ModelDetails, ModelVariant, PropData, PropTraits, PROP_CLASSES};
 
 use super::asset_browser::{
-    self, card, card_grid, checkerboard, elide, hidden_paths, in_folder, paint_thumbnail, restore_hidden, source_lines,
-    thousands, upload, Catalog, Listing, Loaders, Search, SearchBox, Thumbnail, Thumbnails, MUTED, ROOT_FOLDER,
+    self, card, card_grid, checkerboard, chip, elide, empty_state, grid_columns, hidden_paths, in_folder, muted,
+    paint_thumbnail, path_bar, remember, restore_hidden, size_buttons, source_lines, status_line, thousands,
+    toggle_chip, toggle_favourite, upload, warning, Catalog, FolderPick, KeyMove, Listing, Loaders, Marks, Narrowing,
+    Search, SearchBox, Shelf, ShelfAction, Thumbnail, Thumbnails, ROOT_FOLDER,
 };
 use super::MalletApp;
 use crate::config::{ModelBrowserView, ModelKinds, TextureBrowserOptions};
 use crate::editor::{Editor, Tool};
 use crate::model_render::{self, LoadedModel, Orbit, Picture};
 
-const WARNING: Color32 = Color32::from_rgb(235, 160, 80);
 /// Requests waiting to load; older ones are dropped, as they have scrolled out of view.
 const MAX_REQUESTS: usize = 192;
 const SIDEBAR_WIDTH: f32 = 220.0;
@@ -68,8 +69,9 @@ struct TraitsCheck {
     /// The filters the checked models passed; the check is dropped when they change.
     filters: CheckFilters,
     results: Receiver<(String, PropTraits)>,
-    /// How many models are still to check.
+    /// How many models are still to check, out of how many.
     left: usize,
+    total: usize,
     stop: Arc<AtomicBool>,
 }
 
@@ -310,6 +312,12 @@ pub(super) struct ModelBrowserState {
     selected: Option<String>,
     /// Whether the sidebar should open the way down to the chosen folder this frame.
     reveal_folder: bool,
+    /// The text the sidebar's folder tree is searched for.
+    folder_search: String,
+    /// Whether the shelf shows the starred models rather than the recent ones.
+    shelf_starred: bool,
+    /// The window's place on screen last frame, for the keys that move the selection.
+    window: Option<egui::Rect>,
     /// Models the map uses, cached per geometry generation.
     used: Option<(u64, Arc<BTreeSet<String>>)>,
     preview: Preview,
@@ -332,6 +340,9 @@ impl Default for ModelBrowserState {
             loader: None,
             selected: None,
             reveal_folder: false,
+            folder_search: String::new(),
+            shelf_starred: false,
+            window: None,
             used: None,
             preview: Preview::default(),
             focus_search: false,
@@ -403,6 +414,9 @@ impl MalletApp {
         let used = state.used_models(editor);
         let scroll_step = editor.config.view.texture_scroll.clamp(0.25, 2.0) as f32;
         let target = state.target(editor);
+        let keys = KeyMove::read(ctx, state.window);
+        state.check_prop_traits(&used);
+        let shown = state.filtered(&used);
 
         let title = match &state.pick {
             Pick::NewEntity => format!("{} Models: pick the model for new props", icon::CUBE_FOCUS),
@@ -411,7 +425,7 @@ impl MalletApp {
         };
         let mut open = true;
         let mut commands = Vec::new();
-        egui::Window::new(title)
+        let window = egui::Window::new(title)
             .id(egui::Id::new("model_browser"))
             .open(&mut open)
             .default_size([1180.0, 740.0])
@@ -422,8 +436,9 @@ impl MalletApp {
             .collapsible(false)
             .show(ctx, |ui| {
                 // Panels fill exactly the window, so it never grows to fit its content.
-                egui::TopBottomPanel::bottom("model_browser_bar")
-                    .show_inside(ui, |ui| state.bottom_bar(ui, &target, &mut commands));
+                egui::TopBottomPanel::top("model_browser_tools").show_inside(ui, |ui| state.toolbar(ui, &used));
+                egui::TopBottomPanel::bottom("model_browser_status")
+                    .show_inside(ui, |ui| state.status(ui, &shown, &target, &mut commands));
                 egui::SidePanel::left("model_browser_sources")
                     .resizable(true)
                     .default_width(SIDEBAR_WIDTH)
@@ -442,15 +457,16 @@ impl MalletApp {
                         .show_inside(ui, |ui| state.preview_pane(ui, &game, &loader, &target, &mut commands));
                 }
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    let size = [ui.available_width(), ui.available_height()];
-                    state.grid(ui, &used, &target, size, scroll_step, &mut commands);
+                    state.grid(ui, &shown, &target, scroll_step, keys, &mut commands);
                 });
             });
+        state.window = window.map(|window| window.response.rect);
         state.thumbnails.trim(options.cache_size());
         state.save_view(ctx, editor);
         for command in commands {
             match command {
                 Command::Use(model, variant, look_chosen) => {
+                    remember(&mut self.model_browser.view.recent, &model);
                     let pick = self.model_browser.pick.clone();
                     let collision = self
                         .model_browser
@@ -660,10 +676,9 @@ impl ModelBrowserState {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
-        let mut received = false;
+        let now = ctx.input(|input| input.time);
         if let Some(loaders) = &self.loaders {
             for (path, picture) in loaders.finished() {
-                received = true;
                 let thumbnail = match picture {
                     Ok((picture, traits)) => {
                         self.prop_traits.insert(path.clone(), traits);
@@ -673,10 +688,10 @@ impl ModelBrowserState {
                     }
                     Err(error) => Thumbnail::Failed(Some(error)),
                 };
-                self.thumbnails.finish(path, thumbnail);
+                self.thumbnails.finish(path, thumbnail, now);
             }
         }
-        if received || self.thumbnails.waiting() {
+        if self.thumbnails.busy(now) {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         self.receive_preview(ctx);
@@ -781,6 +796,7 @@ impl ModelBrowserState {
             filters,
             results,
             left,
+            total: left,
             stop,
         });
     }
@@ -841,8 +857,11 @@ impl ModelBrowserState {
             &self.catalog,
             "models",
             &mut self.hidden_sources,
-            &mut self.view.folder,
-            self.reveal_folder,
+            FolderPick {
+                folder: &mut self.view.folder,
+                search: &mut self.folder_search,
+                reveal: self.reveal_folder,
+            },
             |_| false,
         );
         self.reveal_folder = false;
@@ -865,29 +884,64 @@ impl ModelBrowserState {
             .collect()
     }
 
-    /// The thumbnail grid.
+    /// Makes `path` the selected model, shown in the preview.
+    fn select(&mut self, path: &str) {
+        if self.selected.as_deref() != Some(path) {
+            self.selected = Some(path.to_owned());
+            self.preview.reset_for_new_model();
+        }
+    }
+
+    /// The command that uses `path`: with the look chosen in the preview when the
+    /// preview shows it, else as it comes.
+    fn use_command(&self, path: &str) -> Command {
+        if self.view.show_preview && self.selected.as_deref() == Some(path) {
+            Command::Use(path.to_owned(), self.preview.variant(), self.preview.look_chosen)
+        } else {
+            Command::Use(path.to_owned(), ModelVariant::default(), false)
+        }
+    }
+
+    /// The grid with the folder trail and the Recent and Starred shelf above it. The
+    /// arrow keys move the selection and Enter uses it.
     fn grid(
         &mut self,
         ui: &mut egui::Ui,
-        used: &BTreeSet<String>,
+        shown: &[usize],
         target: &Target,
-        size: [f32; 2],
         scroll_step: f32,
+        keys: KeyMove,
         commands: &mut Vec<Command>,
     ) {
-        if self.catalog.listing.is_none() {
+        path_bar(ui, "All models", &mut self.view.folder);
+        let shelf = Shelf {
+            recent: &self.view.recent,
+            favourites: &self.view.favourites,
+            selected: self.selected.as_deref(),
+            short: short_name,
+            upscale: true,
+        };
+        match shelf.show(
+            ui,
+            &mut self.thumbnails,
+            self.loaders.is_some(),
+            &mut self.shelf_starred,
+        ) {
+            Some(ShelfAction::Select(path)) => self.select(&path),
+            Some(ShelfAction::Use(path)) => commands.push(self.use_command(&path)),
+            None => {}
+        }
+        let Some(listing) = &self.catalog.listing else {
             ui.add_space(20.0);
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label("Listing the game's models...");
             });
             return;
-        }
-        self.check_prop_traits(used);
-        let shown = self.filtered(used);
+        };
         if shown.is_empty() {
-            ui.add_space(20.0);
             if self.traits_check.is_some() {
+                ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(match self.view.kinds {
@@ -895,21 +949,52 @@ impl ModelBrowserState {
                         _ => "Looking for static props...",
                     });
                 });
-            } else {
-                ui.label(
-                    RichText::new("No models match. Clear the search, choose All folders or turn on more sources.")
-                        .color(MUTED),
-                );
+                return;
             }
+            let view = &mut self.view;
+            empty_state(
+                ui,
+                "models",
+                Narrowing {
+                    filter: &mut view.filter,
+                    hidden: &mut self.hidden_sources,
+                    folder: &mut view.folder,
+                    used_only: &mut view.used_only,
+                },
+                |ui| {
+                    if view.kinds != ModelKinds::All && ui.button("Every kind of prop").clicked() {
+                        view.kinds = ModelKinds::All;
+                    }
+                },
+            );
             return;
         }
+        let mut reveal = None;
+        if keys.moves() {
+            let (columns, _) = grid_columns(ui.available_width(), self.view.card_size);
+            let from = self
+                .selected
+                .as_ref()
+                .and_then(|selected| shown.iter().position(|index| listing.entries[*index].0 == *selected));
+            if let Some(next) = keys.target(from, shown.len(), columns) {
+                let path = listing.entries[shown[next]].0.clone();
+                self.select(&path);
+                reveal = Some(next);
+            }
+        }
+        if keys.enter {
+            if let Some(path) = self.selected.clone() {
+                commands.push(self.use_command(&path));
+            }
+        }
+        let mut card_size = self.view.card_size;
         card_grid(
             ui,
             "model_grid",
             shown.len(),
-            self.view.per_row,
-            size,
+            &mut card_size,
             scroll_step,
+            reveal,
             |ui, index, side| {
                 let Some((path, sources)) = self
                     .catalog
@@ -921,44 +1006,56 @@ impl ModelBrowserState {
                 };
                 let current = target.current.as_deref() == Some(path.as_str());
                 let response = self.card(ui, &path, &sources, side, current);
-                if response.clicked() && self.selected.as_ref() != Some(&path) {
-                    self.selected = Some(path.clone());
-                    self.preview.reset_for_new_model();
+                if response.clicked() {
+                    self.select(&path);
                 }
                 if response.double_clicked() {
                     commands.push(Command::Use(path.clone(), ModelVariant::default(), false));
                 }
-                response.context_menu(|ui| {
-                    if ui.button(&target.action).clicked() {
-                        commands.push(Command::Use(path.clone(), ModelVariant::default(), false));
-                        ui.close_menu();
-                    }
-                    if ui.button("Copy path").clicked() {
-                        commands.push(Command::Copy(path.clone()));
-                        ui.close_menu();
-                    }
-                    if ui.button("Show its folder").clicked() {
-                        self.view.folder = Some(
-                            short_name(&path)
-                                .rsplit_once('/')
-                                .map_or(ROOT_FOLDER, |(folder, _)| folder)
-                                .to_owned(),
-                        );
-                        self.reveal_folder = true;
-                        ui.close_menu();
-                    }
-                });
+                response.context_menu(|ui| self.card_menu(ui, &path, target, commands));
             },
         );
+        self.view.card_size = card_size;
+    }
+
+    /// The menu a card opens when right-clicked.
+    fn card_menu(&mut self, ui: &mut egui::Ui, path: &str, target: &Target, commands: &mut Vec<Command>) {
+        if ui.button(&target.action).clicked() {
+            commands.push(Command::Use(path.to_owned(), ModelVariant::default(), false));
+            ui.close_menu();
+        }
+        let starred = self.view.favourites.iter().any(|starred| starred == path);
+        if ui.button(if starred { "Unstar" } else { "Star" }).clicked() {
+            toggle_favourite(&mut self.view.favourites, path);
+            ui.close_menu();
+        }
+        if ui.button("Copy path").clicked() {
+            commands.push(Command::Copy(path.to_owned()));
+            ui.close_menu();
+        }
+        if ui.button("Show its folder").clicked() {
+            self.view.folder = Some(
+                short_name(path)
+                    .rsplit_once('/')
+                    .map_or(ROOT_FOLDER, |(folder, _)| folder)
+                    .to_owned(),
+            );
+            self.reveal_folder = true;
+            ui.close_menu();
+        }
     }
 
     /// One card: the model's thumbnail and its name under it.
     fn card(&mut self, ui: &mut egui::Ui, path: &str, sources: &[String], side: f32, current: bool) -> egui::Response {
         self.thumbnails.show(path, self.loaders.is_some());
-        let selected = self.selected.as_deref() == Some(path);
-        let thumbnail = self.thumbnails.get(path);
-        let response = card(ui, side, short_name(path), current, selected, |painter, rect| {
-            paint_thumbnail(painter, rect, thumbnail, true);
+        let marks = Marks {
+            current,
+            selected: self.selected.as_deref() == Some(path),
+            favourite: self.view.favourites.iter().any(|starred| starred == path),
+        };
+        let thumbnails = &self.thumbnails;
+        let response = card(ui, side, short_name(path), marks, |ui, painter, rect| {
+            paint_thumbnail(ui, painter, rect, thumbnails, path, true);
         });
         let mut details = vec![path.to_owned()];
         details.extend(source_lines(sources));
@@ -991,7 +1088,12 @@ impl ModelBrowserState {
     ) {
         let Some(path) = self.selected.clone() else {
             ui.add_space(20.0);
-            ui.label(RichText::new("Click a model to look at it here.").color(MUTED));
+            ui.label(RichText::new("Click a model to look at it here.").color(muted(ui)));
+            ui.label(
+                RichText::new("The arrow keys move between models, and Enter uses the one picked.")
+                    .small()
+                    .color(muted(ui)),
+            );
             return;
         };
         let collision = self
@@ -1010,9 +1112,9 @@ impl ModelBrowserState {
         let height = side.min((ui.available_height() * 0.5).max(160.0));
         let (rect, response) = ui.allocate_exact_size(egui::vec2(side, height), egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4, Color32::from_gray(24));
+        painter.rect_filled(rect, 4, ui.visuals().extreme_bg_color);
         if self.view.show_backdrop {
-            checkerboard(&painter, rect.shrink(2.0));
+            checkerboard(ui, &painter, rect.shrink(2.0));
         }
         if response.dragged() {
             let delta = response.drag_delta();
@@ -1062,7 +1164,7 @@ impl ModelBrowserState {
                     egui::Align2::CENTER_CENTER,
                     format!("{}\n{}", icon::WARNING, elide(error, 60)),
                     egui::FontId::proportional(13.0),
-                    MUTED,
+                    muted(ui),
                 );
             }
             (Some((texture, shown)), None) if *shown == path => {
@@ -1088,6 +1190,18 @@ impl ModelBrowserState {
             {
                 commands.push(Command::Use(path.clone(), preview.variant(), preview.look_chosen));
             }
+            let starred = self.view.favourites.contains(&path);
+            let star = if starred { icon::STAR_HALF } else { icon::STAR };
+            if chip(ui, starred, star, None)
+                .on_hover_text(if starred {
+                    "Unstar"
+                } else {
+                    "Star, to keep it on the shelf"
+                })
+                .clicked()
+            {
+                toggle_favourite(&mut self.view.favourites, &path);
+            }
             if ui.button(icon::COPY).on_hover_text("Copy the model's path").clicked() {
                 commands.push(Command::Copy(path.clone()));
             }
@@ -1099,8 +1213,8 @@ impl ModelBrowserState {
                 reveal(loader, &path);
             }
         });
-        for warning in warnings(&target.classes, traits.as_ref(), collision) {
-            ui.label(RichText::new(format!("{} {warning}", icon::WARNING)).color(WARNING));
+        for problem in warnings(&target.classes, traits.as_ref(), collision) {
+            ui.label(RichText::new(format!("{} {problem}", icon::WARNING)).color(warning(ui)));
         }
         ui.separator();
         egui::ScrollArea::vertical()
@@ -1155,7 +1269,7 @@ impl ModelBrowserState {
                     ui.label(
                         RichText::new(format!("body {}", details.body_value(&preview.body)))
                             .small()
-                            .color(MUTED),
+                            .color(muted(ui)),
                     );
                 }
                 let spacing = egui::vec2(12.0, 3.0);
@@ -1166,7 +1280,7 @@ impl ModelBrowserState {
                     .max_col_width(widest_column)
                     .show(ui, |ui| {
                         let mut row = |name: &str, value: String| {
-                            ui.label(RichText::new(name).color(MUTED));
+                            ui.label(RichText::new(name).color(muted(ui)));
                             ui.label(value);
                             ui.end_row();
                         };
@@ -1195,7 +1309,7 @@ impl ModelBrowserState {
                         for (material, missing) in &info.materials {
                             let text = RichText::new(material).small();
                             if *missing {
-                                ui.label(text.color(WARNING))
+                                ui.label(text.color(warning(ui)))
                                     .on_hover_text("This material or its texture is missing");
                             } else {
                                 ui.label(text);
@@ -1214,19 +1328,16 @@ impl ModelBrowserState {
             });
     }
 
-    /// The controls under the list: size, search, what to show, and the selected model.
-    fn bottom_bar(&mut self, ui: &mut egui::Ui, target: &Target, commands: &mut Vec<Command>) {
-        let selected = self.selected.clone();
+    /// The bar along the top: the search, the card size and the preview, then what kind
+    /// of prop to show.
+    fn toolbar(&mut self, ui: &mut egui::Ui, used: &BTreeSet<String>) {
         ui.add_space(2.0);
         ui.horizontal_wrapped(|ui| {
-            ui.add(egui::Slider::new(&mut self.view.per_row, 2..=14).text("per row"))
-                .on_hover_text("How many models fit across; they grow and shrink with the window");
-            ui.separator();
             SearchBox {
                 hint: "such as oildrum !gib",
                 help: "Every word must be in the model's path. Start a word with ! to leave out models that have \
                        it. * stands for any text and ? for one character, such as props_*/crate??",
-                width: 190.0,
+                width: 220.0,
             }
             .show(
                 ui,
@@ -1235,28 +1346,22 @@ impl ModelBrowserState {
                 &mut self.focus_search,
             );
             ui.separator();
-            egui::ComboBox::from_id_salt("model_kinds")
-                .selected_text(kinds_label(self.view.kinds))
-                .show_ui(ui, |ui| {
-                    for kinds in [ModelKinds::All, ModelKinds::Static, ModelKinds::Physics] {
-                        ui.selectable_value(&mut self.view.kinds, kinds, kinds_label(kinds));
-                    }
-                })
-                .response
-                .on_hover_text(
-                    "Static props are models prop_static can show: compiled as static props, with no prop \
-                     data. Physics props are models prop_physics takes: with prop data and a collision model. \
-                     Finding either reads the start of every listed model's file, so choose a folder or search \
-                     first to keep it quick.",
-                );
-            ui.checkbox(&mut self.view.used_only, "Only used models")
-                .on_hover_text("Show only the models the map's entities use");
+            size_buttons(ui, &mut self.view.card_size);
             ui.separator();
-            ui.toggle_value(&mut self.view.show_preview, format!("{} Preview", icon::CUBE_FOCUS))
-                .on_hover_text("Show the clicked model in a pane you can turn it in");
-            ui.toggle_value(&mut self.view.show_backdrop, "Backdrop")
+            toggle_chip(
+                ui,
+                &mut self.view.show_preview,
+                &format!("{} Preview", icon::CUBE_FOCUS),
+                None,
+            )
+            .on_hover_text("Show the clicked model in a pane you can turn it in");
+            toggle_chip(ui, &mut self.view.show_backdrop, "Backdrop", None)
                 .on_hover_text("Draw a checkerboard behind the preview, so see-through parts show");
-            if ui.button(format!("{} Reload", icon::ARROWS_CLOCKWISE)).clicked() {
+            if ui
+                .button(icon::ARROWS_CLOCKWISE)
+                .on_hover_text("List the game's models again")
+                .clicked()
+            {
                 self.catalog.reset();
                 self.loaders = None;
                 self.traits_check = None;
@@ -1264,22 +1369,43 @@ impl ModelBrowserState {
                 self.preview.asked = None;
             }
         });
-        ui.horizontal(|ui| {
-            let status = match (&self.catalog.listing, &self.traits_check) {
-                (Some(listing), Some(check)) => format!(
-                    "{} models; checking what kind of prop {} of them are",
-                    thousands(listing.entries.len()),
-                    thousands(check.left)
-                ),
-                (Some(listing), None) => format!("{} models", thousands(listing.entries.len())),
-                (None, _) => String::new(),
-            };
-            ui.label(RichText::new(status).small().color(MUTED));
-            if let Some(path) = &selected {
+        ui.horizontal_wrapped(|ui| {
+            let help = "Static props are models prop_static can show: compiled as static props, with no prop \
+                        data. Physics props are models prop_physics takes: with prop data and a collision model. \
+                        Finding either reads the start of every listed model's file, so choose a folder or search \
+                        first to keep it quick.";
+            for kinds in [ModelKinds::All, ModelKinds::Static, ModelKinds::Physics] {
+                if chip(ui, self.view.kinds == kinds, kinds_label(kinds), None)
+                    .on_hover_text(help)
+                    .clicked()
+                {
+                    self.view.kinds = kinds;
+                }
+            }
+            ui.separator();
+            toggle_chip(ui, &mut self.view.used_only, "Only used", Some(used.len()))
+                .on_hover_text("Show only the models the map's entities use");
+        });
+        ui.add_space(2.0);
+    }
+
+    /// The line along the bottom: how many models show, how far finding what kind of
+    /// prop they are has got, and the selected model while the preview is hidden.
+    fn status(&mut self, ui: &mut egui::Ui, shown: &[usize], target: &Target, commands: &mut Vec<Command>) {
+        let total = self.catalog.listing.as_ref().map(|listing| listing.entries.len());
+        let progress = self.traits_check.as_ref().map(|check| {
+            (
+                1.0 - check.left as f32 / check.total.max(1) as f32,
+                format!("Checking {} for their kind", thousands(check.left)),
+            )
+        });
+        let selected = self.selected.clone().filter(|_| !self.view.show_preview);
+        status_line(ui, "models", shown.len(), total, progress, |ui| {
+            if let Some(path) = selected {
                 ui.separator();
-                ui.label(RichText::new(path).monospace().small());
-                if !self.view.show_preview && ui.small_button(&target.action).clicked() {
-                    commands.push(Command::Use(path.clone(), ModelVariant::default(), false));
+                ui.label(RichText::new(&path).monospace().small());
+                if ui.small_button(&target.action).clicked() {
+                    commands.push(Command::Use(path, ModelVariant::default(), false));
                 }
             }
         });
