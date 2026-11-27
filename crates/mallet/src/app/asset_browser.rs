@@ -1169,7 +1169,7 @@ pub(super) fn status_line(
             Some(total) => format!("{} of {} {noun}", thousands(shown), thousands(total)),
             None => format!("Listing {noun}..."),
         };
-        ui.label(RichText::new(counts).small().color(muted(ui)));
+        ui.label(RichText::new(counts).color(muted(ui)));
         if let Some((fraction, text)) = progress {
             ui.separator();
             ui.add(
