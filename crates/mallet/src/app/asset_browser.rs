@@ -44,6 +44,11 @@ pub(super) fn muted(ui: &egui::Ui) -> Color32 {
     ui.visuals().weak_text_color()
 }
 
+/// The theme's accent colour for text that marks something, such as the entry in use.
+pub(super) fn accent(ui: &egui::Ui) -> Color32 {
+    ui.visuals().hyperlink_color
+}
+
 /// The theme's colour for warnings.
 pub(super) fn warning(ui: &egui::Ui) -> Color32 {
     ui.visuals().warn_fg_color

@@ -7,19 +7,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use egui_phosphor::regular as icon;
 use mallet_vmf::sound::{Outline, OutlineKind};
 
-use super::asset_browser::{thousands, Search, SearchBox};
+use super::asset_browser::{accent, muted, thousands, warning, Search, SearchBox};
 use super::model_browser::Pick;
 use super::MalletApp;
 use crate::config::SoundscapeBrowserView;
 use crate::editor::{class_plays_soundscape, Editor, Tool};
 
-const MUTED: Color32 = Color32::from_gray(140);
-const ACCENT: Color32 = Color32::from_rgb(70, 140, 230);
-const WARNING: Color32 = Color32::from_rgb(235, 160, 80);
 const SIDEBAR_WIDTH: f32 = 230.0;
 const DETAILS_WIDTH: f32 = 400.0;
 const ROW_HEIGHT: f32 = 20.0;
@@ -392,7 +389,7 @@ impl SoundscapeBrowserState {
                 self.view.file = None;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(thousands(listing.entries.len())).small().color(MUTED));
+                ui.label(RichText::new(thousands(listing.entries.len())).small().color(muted(ui)));
             });
         });
         for (file, defined) in &listing.files {
@@ -406,7 +403,7 @@ impl SoundscapeBrowserState {
                     self.view.file = (!chosen).then(|| file.clone());
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(thousands(*defined)).small().color(MUTED));
+                    ui.label(RichText::new(thousands(*defined)).small().color(muted(ui)));
                 });
             });
         }
@@ -451,7 +448,7 @@ impl SoundscapeBrowserState {
             return;
         }
         if shown.is_empty() {
-            ui.label(RichText::new("No soundscape matches the filters.").color(MUTED));
+            ui.label(RichText::new("No soundscape matches the filters.").color(muted(ui)));
             return;
         }
         let row_of = |selected: &Option<String>| {
@@ -496,7 +493,7 @@ impl SoundscapeBrowserState {
                     ui.set_height(ROW_HEIGHT);
                     let mut text = RichText::new(&entry.name);
                     if current && !chosen {
-                        text = text.color(ACCENT).strong();
+                        text = text.color(accent(ui)).strong();
                     } else if current {
                         text = text.strong();
                     }
@@ -516,7 +513,7 @@ impl SoundscapeBrowserState {
                         } else {
                             format!("{count} times")
                         };
-                        ui.label(RichText::new(format!("used {times}")).small().color(MUTED));
+                        ui.label(RichText::new(format!("used {times}")).small().color(muted(ui)));
                     }
                 });
             }
@@ -535,7 +532,7 @@ impl SoundscapeBrowserState {
     fn details(&mut self, ui: &mut egui::Ui, editor: &mut Editor, target: &Target, commands: &mut Vec<Command>) {
         let Some(name) = self.selected.clone() else {
             ui.add_space(8.0);
-            ui.label(RichText::new("Click a soundscape to see what it plays and listen to it.").color(MUTED));
+            ui.label(RichText::new("Click a soundscape to see what it plays and listen to it.").color(muted(ui)));
             return;
         };
         let listening_to = editor.sound.listening().map(str::to_owned);
@@ -555,7 +552,7 @@ impl SoundscapeBrowserState {
             })
             .map(|entry| entry.file.clone());
         if let Some(file) = &file {
-            ui.label(RichText::new(file).small().color(MUTED));
+            ui.label(RichText::new(file).small().color(muted(ui)));
         }
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
@@ -592,7 +589,7 @@ impl SoundscapeBrowserState {
         ui.separator();
         let Some((_, Some(outline))) = &self.outline else {
             ui.colored_label(
-                WARNING,
+                warning(ui),
                 "No script defines this soundscape, so the game plays nothing for it.",
             );
             return;
@@ -614,7 +611,7 @@ impl SoundscapeBrowserState {
                     .collect();
                 if !lacking.is_empty() {
                     ui.colored_label(
-                        WARNING,
+                        warning(ui),
                         format!(
                             "Entity {entity} has no {}, so those sounds stay silent.",
                             lacking.join(", ")
@@ -644,7 +641,7 @@ impl SoundscapeBrowserState {
                         ui.add_space(14.0 * row.depth as f32);
                         let mut text = RichText::new(format!("{glyph}  {}", row.text));
                         if row.kind == OutlineKind::Problem || missing {
-                            text = text.color(WARNING);
+                            text = text.color(warning(ui));
                         } else if row.kind == OutlineKind::Soundscape {
                             text = text.strong();
                         } else if row.kind == OutlineKind::Wave {
@@ -655,7 +652,7 @@ impl SoundscapeBrowserState {
                             label.on_hover_text("This sound file is not among the game's files");
                         }
                         if !row.detail.is_empty() {
-                            ui.label(RichText::new(&row.detail).small().color(MUTED));
+                            ui.label(RichText::new(&row.detail).small().color(muted(ui)));
                         }
                     });
                 }
@@ -710,10 +707,10 @@ impl SoundscapeBrowserState {
                     status.scripts.soundscape_files
                 )
             };
-            ui.label(RichText::new(text).small().color(MUTED));
+            ui.label(RichText::new(text).small().color(muted(ui)));
             for error in &status.scripts.errors {
                 ui.separator();
-                ui.label(RichText::new(error).small().color(WARNING));
+                ui.label(RichText::new(error).small().color(warning(ui)));
             }
             if let Some(name) = &self.selected {
                 ui.separator();
