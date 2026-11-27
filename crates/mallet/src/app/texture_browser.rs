@@ -611,33 +611,7 @@ impl TextureBrowserState {
         let card = ((width - 16.0 - gap * (columns as f32 - 1.0)) / columns as f32).max(32.0);
         let row_height = card + 22.0 + gap;
         let rows = names.len().div_ceil(columns);
-        // The wheel scrolls by whole cards, as set in Mallet Options, instead of egui's
-        // fixed line height. Its input is taken here so the scroll area does not also
-        // scroll.
-        let area = ui.available_rect_before_wrap();
-        let mut wheel = 0.0;
-        if ui.rect_contains_pointer(area) {
-            wheel = ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .map(|event| match event {
-                        egui::Event::MouseWheel { unit, delta, modifiers } if !modifiers.ctrl => match unit {
-                            egui::MouseWheelUnit::Line => delta.y,
-                            egui::MouseWheelUnit::Point => delta.y / 50.0,
-                            egui::MouseWheelUnit::Page => delta.y * (height / row_height).max(1.0),
-                        },
-                        _ => 0.0,
-                    })
-                    .sum::<f32>()
-            });
-            if wheel != 0.0 {
-                ui.ctx().input_mut(|input| {
-                    input.smooth_scroll_delta = egui::Vec2::ZERO;
-                    input.raw_scroll_delta = egui::Vec2::ZERO;
-                });
-            }
-        }
+        let wheel = wheel_rows(ui, ui.available_rect_before_wrap());
         // A solid bar that is always shown, with a handle long enough to grab. egui's
         // default floating bar is hidden until hovered, and with tens of thousands of
         // materials its handle shrinks to a dot that is hard to find and catch. It fits in
@@ -661,7 +635,10 @@ impl TextureBrowserState {
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show_rows(ui, row_height, rows, |ui, range| {
                 if wheel != 0.0 {
-                    ui.scroll_with_delta(egui::vec2(0.0, wheel * row_height * scroll_step));
+                    ui.scroll_with_delta_animation(
+                        egui::vec2(0.0, wheel * row_height * scroll_step),
+                        egui::style::ScrollAnimation::none(),
+                    );
                 }
                 for row in range {
                     ui.horizontal(|ui| {
@@ -993,6 +970,26 @@ fn open_source(loader: &MaterialLoader, material: &str) {
             .arg(path)
             .spawn();
     }
+}
+
+/// How many wheel notches the pointer scrolled over `area` this frame, taken from egui so
+/// its scroll area does not also scroll by its own line height. The browsers scroll that
+/// many cards, as set in Mallet Options. egui spreads one notch over several frames, so the
+/// share it hands out each frame is taken rather than the wheel events, which would leave
+/// the rest of the notch to scroll the grid by egui's fixed amount.
+pub(super) fn wheel_rows(ui: &egui::Ui, area: egui::Rect) -> f32 {
+    if !ui.rect_contains_pointer(area) {
+        return 0.0;
+    }
+    let line = ui
+        .ctx()
+        .options(|options| options.line_scroll_speed)
+        .max(1.0);
+    ui.ctx().input_mut(|input| {
+        let rows = input.smooth_scroll_delta.y / line;
+        input.smooth_scroll_delta.y = 0.0;
+        rows
+    })
 }
 
 /// A grey checkerboard, so transparent parts of a texture show.

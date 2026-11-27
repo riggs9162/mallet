@@ -1070,33 +1070,7 @@ impl ModelBrowserState {
         let card = ((width - 16.0 - gap * (columns as f32 - 1.0)) / columns as f32).max(32.0);
         let row_height = card + 22.0 + gap;
         let rows = shown.len().div_ceil(columns);
-        // The wheel scrolls by whole cards, as set in Mallet Options, instead of egui's
-        // fixed line height. Its input is taken here so the scroll area does not also
-        // scroll.
-        let area = ui.available_rect_before_wrap();
-        let mut wheel = 0.0;
-        if ui.rect_contains_pointer(area) {
-            wheel = ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .map(|event| match event {
-                        egui::Event::MouseWheel { unit, delta, modifiers } if !modifiers.ctrl => match unit {
-                            egui::MouseWheelUnit::Line => delta.y,
-                            egui::MouseWheelUnit::Point => delta.y / 50.0,
-                            egui::MouseWheelUnit::Page => delta.y * (height / row_height).max(1.0),
-                        },
-                        _ => 0.0,
-                    })
-                    .sum::<f32>()
-            });
-            if wheel != 0.0 {
-                ui.ctx().input_mut(|input| {
-                    input.smooth_scroll_delta = egui::Vec2::ZERO;
-                    input.raw_scroll_delta = egui::Vec2::ZERO;
-                });
-            }
-        }
+        let wheel = super::texture_browser::wheel_rows(ui, ui.available_rect_before_wrap());
         // A solid bar that is always shown, with a handle long enough to grab, as in the
         // texture browser. It fits in the 16 points the cards leave free on the right.
         ui.spacing_mut().scroll = egui::style::ScrollStyle {
@@ -1118,7 +1092,10 @@ impl ModelBrowserState {
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show_rows(ui, row_height, rows, |ui, range| {
                 if wheel != 0.0 {
-                    ui.scroll_with_delta(egui::vec2(0.0, wheel * row_height * scroll_step));
+                    ui.scroll_with_delta_animation(
+                        egui::vec2(0.0, wheel * row_height * scroll_step),
+                        egui::style::ScrollAnimation::none(),
+                    );
                 }
                 for row in range {
                     ui.horizontal(|ui| {
