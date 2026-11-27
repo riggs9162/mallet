@@ -97,7 +97,7 @@ pub fn wgpu_setup() -> eframe::egui_wgpu::WgpuSetup {
 
 /// What the 3D views draw besides the map as the game shows it, as the toolbar's
 /// toggles set it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewFilter {
     /// Faces the game never draws: nodraw, clip, trigger, hint, skip and the other tool
     /// textures.
@@ -1022,7 +1022,7 @@ impl Renderer3D {
             .map(|state| state.fingerprint(scene, lighting));
         let look = view_style::current();
         let signature = signature(|hasher| {
-            (slot, style, size).hash(hasher);
+            (slot, style, size, filter).hash(hasher);
             look.hash(hasher);
             (
                 scene.geometry_generation,
