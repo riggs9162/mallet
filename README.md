@@ -133,6 +133,13 @@ Behind everything, where no face covers the view, the 3D views show the 2D skybo
 worldspawn's sky name picks (or Garry's Mod's painted sky), as the void past the map
 looks in Hammer++. Hide the sky textures to see it through the map's sky faces.
 
+The 3D skybox shows there too, as the game draws it: the room around the `sky_camera`,
+seen from where the camera would stand in it and scaled up by the sky camera's `scale`
+(16 unless it says otherwise), with the 2D skybox behind it. The map's sky faces open onto
+it, so it shows wherever the game would show it, in the textured view and the lighting
+preview alike. Fly into the skybox room to edit it as it is built. View > 3D Skybox, or
+the mountains button on the toolbar, turns it off.
+
 Tools > Sky Browser lists every 2D skybox among the game's materials, with the same
 search as the other browsers, and shows the clicked one around you in a live 3D preview:
 drag to look around, scroll to zoom, double-click to look ahead again, and tick Turn

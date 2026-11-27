@@ -102,6 +102,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ToggleHelpers,
     Action::ToggleNodraw,
     Action::ToggleSkyTextures,
+    Action::Toggle3DSkybox,
     Action::SelectionTool,
     Action::CameraTool,
     Action::MagnifyTool,
@@ -688,6 +689,8 @@ impl MalletApp {
                     menu_toggle(ui, keymap, "Nodraw", nodraw, Action::ToggleNodraw, &mut chosen);
                     let sky = editor.config.view.sky_textures;
                     menu_toggle(ui, keymap, "Sky Textures", sky, Action::ToggleSkyTextures, &mut chosen);
+                    let skybox = editor.config.view.skybox_3d;
+                    menu_toggle(ui, keymap, "3D Skybox", skybox, Action::Toggle3DSkybox, &mut chosen);
                     menu_toggle(
                         ui,
                         keymap,
@@ -3148,6 +3151,12 @@ fn run(action: Action, editor: &mut Editor) {
             editor.config.view.nodraw = shown;
             editor.save_config();
             editor.message = format!("Nodraw in the 3D views {}", if shown { "shown" } else { "hidden" });
+        }
+        Action::Toggle3DSkybox => {
+            let shown = !editor.config.view.skybox_3d;
+            editor.config.view.skybox_3d = shown;
+            editor.save_config();
+            editor.message = format!("3D skybox in the 3D views {}", if shown { "shown" } else { "hidden" });
         }
         Action::ToggleSkyTextures => {
             let shown = !editor.config.view.sky_textures;

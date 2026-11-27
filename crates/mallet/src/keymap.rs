@@ -48,6 +48,8 @@ pub enum Action {
     ToggleNodraw,
     /// Show or hide sky faces in the 3D views, which uncovers the 2D skybox behind them.
     ToggleSkyTextures,
+    /// Show or hide the 3D skybox behind the map's sky faces in the 3D views.
+    Toggle3DSkybox,
     SelectionTool,
     /// Switch to the Camera tool.
     CameraTool,

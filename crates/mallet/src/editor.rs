@@ -2291,6 +2291,7 @@ impl Editor {
             helpers: self.config.view.helpers,
             nodraw: self.config.view.nodraw,
             sky_textures: self.config.view.sky_textures,
+            skybox_3d: self.config.view.skybox_3d,
         }
     }
 

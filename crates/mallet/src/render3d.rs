@@ -13,6 +13,7 @@
 mod glow;
 mod lit;
 mod sky;
+mod skybox3d;
 mod sprites;
 
 pub use lit::{LightingInput, LightingStats};
@@ -110,6 +111,8 @@ pub struct ViewFilter {
     pub nodraw: bool,
     /// Sky faces: toolsskybox and the other materials that show the 2D skybox in the game.
     pub sky_textures: bool,
+    /// The 3D skybox behind the sky faces, drawn from the sky_camera and scaled up.
+    pub skybox_3d: bool,
 }
 
 /// One corner of a brush face on the GPU. The textured view shades it by its normal, as
@@ -395,6 +398,9 @@ enum Depth {
     Ignore,
     /// For passes without a depth buffer.
     None,
+    /// Written to the depth buffer like [`Depth::Test`], with no colour: the map's sky
+    /// faces, which open onto the 3D skybox drawn before them.
+    Mask,
     /// Blended translucent faces: tested against the depth buffer but not written to it.
     /// Their shaders give colour already multiplied by opacity, and an alpha of 0 for
     /// added materials, so one blend serves both and the image stays opaque.
@@ -517,6 +523,9 @@ struct Target {
     depth_view: Option<wgpu::TextureView>,
     uniform_buffer: wgpu::Buffer,
     uniform_group: wgpu::BindGroup,
+    /// The camera matrix the 3D skybox is drawn with, seen from the sky camera.
+    skybox_uniform_buffer: wgpu::Buffer,
+    skybox_uniform_group: wgpu::BindGroup,
 }
 
 /// Draw counts from the latest camera frame, to show what culling saves.
@@ -542,12 +551,16 @@ pub struct Renderer3D {
     queue: wgpu::Queue,
     face_pipeline: wgpu::RenderPipeline,
     overdraw_pipeline: wgpu::RenderPipeline,
+    /// Draws the map's sky faces into the depth buffer only, over the 3D skybox.
+    sky_mask_pipeline: wgpu::RenderPipeline,
     translucent_pipeline: wgpu::RenderPipeline,
     model_pipeline: wgpu::RenderPipeline,
     translucent_model_pipeline: wgpu::RenderPipeline,
     sprite_pipelines: sprites::SpritePipelines,
     /// The 2D skybox behind the 3D camera views.
     sky: sky::SkyBackground,
+    /// The 3D skybox's faces, drawn behind the map from the sky camera.
+    skybox: Option<skybox3d::SkyboxFaces>,
     /// When the renderer was made, which animated sprites count their time from.
     started: Instant,
     /// Which slots drew sprites that change over time in their latest draw.
@@ -746,6 +759,7 @@ impl Renderer3D {
         let translucent_model_pipeline = models(Depth::Translucent);
         let face_pipeline = faces(Depth::Test);
         let overdraw_pipeline = faces(Depth::Overdraw);
+        let sky_mask_pipeline = faces(Depth::Mask);
         let translucent_pipeline = faces(Depth::Translucent);
         let line_pipeline = lines(Depth::Ignore);
         let flat_line_pipeline = lines(Depth::None);
@@ -771,11 +785,13 @@ impl Renderer3D {
             queue: queue.clone(),
             face_pipeline,
             overdraw_pipeline,
+            sky_mask_pipeline,
             translucent_pipeline,
             model_pipeline,
             translucent_model_pipeline,
             sprite_pipelines,
             sky,
+            skybox: None,
             started: Instant::now(),
             animating: [false; 4],
             gpu_models: HashMap::new(),
@@ -1086,6 +1102,9 @@ impl Renderer3D {
                 self.update_static_faces(scene);
             }
             self.update_drag_faces(scene, overlay);
+            if filter.skybox_3d {
+                self.update_skybox_faces(scene);
+            }
         } else {
             self.update_edges(scene, overlay);
         }
@@ -1144,8 +1163,20 @@ impl Renderer3D {
             }
         }
         let mut stats = RenderStats::default();
+        let skybox = if textured && filter.skybox_3d {
+            self.skybox_view(scene, camera, aspect)
+        } else {
+            None
+        };
+        let skybox_drawn = skybox.as_ref().map(|view| {
+            let (instances, see_through) =
+                self.model_instances(scene, overlay, &view.planes, false, Some(&view.bounds), &mut stats);
+            let faces = self.skybox.as_ref().map_or(&[][..], |faces| &faces.translucent[..]);
+            let translucent = self.sorted_translucent(faces.iter(), &see_through, view.eye, &view.planes);
+            (instances, translucent)
+        });
         let (instances, see_through_props) = if textured {
-            self.model_instances(scene, overlay, &planes, helpers, &mut stats)
+            self.model_instances(scene, overlay, &planes, helpers, None, &mut stats)
         } else {
             (None, Vec::new())
         };
@@ -1177,7 +1208,7 @@ impl Renderer3D {
                 self.sorted_translucent(
                     unselected.chain(tinted_translucent).chain(&sprites),
                     &see_through_props,
-                    camera,
+                    camera.position.as_vec3(),
                     &planes,
                 )
             }
@@ -1227,13 +1258,62 @@ impl Renderer3D {
         if textured {
             self.sky.prepare(&self.queue, scene, lit && lighting.options.glows);
         }
-        {
+        if let (Some(view), Some((sky_instances, sky_translucent))) = (&skybox, &skybox_drawn) {
+            self.queue.write_buffer(
+                &target.skybox_uniform_buffer,
+                0,
+                bytemuck::cast_slice(&view_uniform(view.matrix, Some(view.eye))),
+            );
             let mut pass = begin_pass(&mut encoder, target, &look);
+            pass.set_bind_group(0, &target.skybox_uniform_group, &[]);
+            self.sky.draw(&mut pass);
+            let hidden = |key: &str| self.hidden_in_skybox(key);
+            match &lit_state {
+                Some(state) => state.draw_skybox(
+                    self,
+                    &mut pass,
+                    &view.planes,
+                    &hidden,
+                    sky_translucent.as_ref(),
+                    sky_instances.as_ref(),
+                    &mut stats,
+                ),
+                None => {
+                    self.draw_skybox_faces(&mut pass, &view.planes, &mut stats);
+                    if let Some((buffer, ranges)) = sky_instances {
+                        self.draw_models(&mut pass, buffer, ranges, &hidden, &mut stats);
+                    }
+                    if let Some(translucent) = sky_translucent {
+                        self.draw_translucent(
+                            &mut pass,
+                            translucent,
+                            sky_instances.as_ref().map(|(buffer, _)| buffer),
+                            (&self.translucent_pipeline, &self.translucent_model_pipeline),
+                            &hidden,
+                            &mut stats,
+                        );
+                    }
+                }
+            }
+        }
+        {
+            let mut pass = if skybox_drawn.is_some() {
+                over_skybox_pass(&mut encoder, target)
+            } else {
+                begin_pass(&mut encoder, target, &look)
+            };
             pass.set_bind_group(0, &target.uniform_group, &[]);
-            if textured {
+            if textured && skybox_drawn.is_none() {
                 self.sky.draw(&mut pass);
             }
-            let hidden = |key: &str| self.hides(key, filter);
+            let opens_on_skybox = skybox_drawn.is_some() && filter.sky_textures;
+            if opens_on_skybox {
+                self.draw_sky_masks(&mut pass, &planes);
+            }
+            let hidden = |key: &str| {
+                self.hides(key, filter)
+                    || (opens_on_skybox && key != WHITE_KEY && self.texture_for(key).surface == Surface::Sky)
+            };
             match (style, &self.faces) {
                 (CameraStyle::Textured, Some(faces)) => {
                     pass.set_pipeline(&self.face_pipeline);
@@ -1423,10 +1503,9 @@ impl Renderer3D {
         &self,
         faces: impl Iterator<Item = &'a TranslucentFace>,
         props: &'a [PropInView],
-        camera: &Camera3D,
+        eye: Vec3,
         planes: &[Vec4; 6],
     ) -> Option<Translucent> {
-        let eye = camera.position.as_vec3();
         let mut visible: Vec<(f32, SortedItem<'a>)> = faces
             .filter(|face| box_visible(planes, face.min, face.max))
             .map(|face| (face.center.distance_squared(eye), SortedItem::Face(face)))
@@ -1575,6 +1654,7 @@ impl Renderer3D {
         overlay: &Overlay,
         planes: &[Vec4; 6],
         helpers: bool,
+        within: Option<&mallet_vmf::geometry::Bounds>,
         stats: &mut RenderStats,
     ) -> (Option<Batches>, Vec<PropInView>) {
         let mut by_model: HashMap<&str, Vec<(ModelInstanceData, Vec3)>> = HashMap::new();
@@ -1582,6 +1662,9 @@ impl Renderer3D {
             let Some(instance) = mesh.model.as_ref().filter(|instance| helpers || !instance.helper) else {
                 continue;
             };
+            if within.is_some_and(|bounds| !skybox3d::contains(bounds, mesh.bounds.center())) {
+                continue;
+            }
             if self.gpu_models.get(&instance.key).is_none_or(Option::is_none) {
                 continue;
             }
@@ -2761,20 +2844,25 @@ fn ensure_target(
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
     });
-    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("mallet viewport matrix"),
-        size: std::mem::size_of::<[f32; VIEW_UNIFORM_LEN]>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let uniform_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("mallet viewport matrix"),
-        layout: uniform_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
-    });
+    let uniform = |label| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: std::mem::size_of::<[f32; VIEW_UNIFORM_LEN]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: uniform_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        (buffer, group)
+    };
+    let (uniform_buffer, uniform_group) = uniform("mallet viewport matrix");
+    let (skybox_uniform_buffer, skybox_uniform_group) = uniform("mallet viewport skybox matrix");
     *slot = Some(Target {
         size,
         color_view: color.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -2788,6 +2876,8 @@ fn ensure_target(
         depth_view,
         uniform_buffer,
         uniform_group,
+        skybox_uniform_buffer,
+        skybox_uniform_group,
     });
     true
 }
@@ -2807,6 +2897,35 @@ fn begin_pass<'a>(encoder: &'a mut wgpu::CommandEncoder, target: &'a Target, loo
                     b: f64::from(background.b()),
                     a: 1.0,
                 }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: target
+            .depth_view
+            .as_ref()
+            .map(|view| wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    })
+}
+
+/// Draws over the 3D skybox already in a viewport target's colour image, with a cleared
+/// depth buffer, so the map always covers the skybox.
+fn over_skybox_pass<'a>(encoder: &'a mut wgpu::CommandEncoder, target: &'a Target) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("mallet viewport over skybox"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &target.color_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -3249,11 +3368,11 @@ fn pipeline(
 ) -> wgpu::RenderPipeline {
     let depth_stencil = match depth {
         Depth::None => None,
-        Depth::Test | Depth::Overdraw | Depth::Ignore | Depth::Translucent => Some(wgpu::DepthStencilState {
+        Depth::Test | Depth::Overdraw | Depth::Ignore | Depth::Translucent | Depth::Mask => Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: matches!(depth, Depth::Test | Depth::Overdraw),
+            depth_write_enabled: matches!(depth, Depth::Test | Depth::Overdraw | Depth::Mask),
             depth_compare: match depth {
-                Depth::Test | Depth::Translucent => wgpu::CompareFunction::Less,
+                Depth::Test | Depth::Translucent | Depth::Mask => wgpu::CompareFunction::Less,
                 Depth::Overdraw => wgpu::CompareFunction::LessEqual,
                 _ => wgpu::CompareFunction::Always,
             },
@@ -3288,7 +3407,11 @@ fn pipeline(
             targets: &[Some(wgpu::ColorTargetState {
                 format: COLOR_FORMAT,
                 blend: (depth == Depth::Translucent).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: if depth == Depth::Mask {
+                    wgpu::ColorWrites::empty()
+                } else {
+                    wgpu::ColorWrites::ALL
+                },
             })],
             compilation_options: Default::default(),
         }),

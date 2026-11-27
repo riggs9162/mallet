@@ -303,6 +303,12 @@ impl MalletApp {
                         editor.config.view.sky_textures,
                     ),
                     (
+                        icon::MOUNTAINS,
+                        "3D skybox: show the 3D skybox around the sky_camera behind the map's sky faces in the 3D views, scaled up as the game shows it",
+                        Action::Toggle3DSkybox,
+                        editor.config.view.skybox_3d,
+                    ),
+                    (
                         icon::STICKER,
                         "Editor helpers: show point entity boxes, editor sprites and editor models in the 3D views",
                         Action::ToggleHelpers,

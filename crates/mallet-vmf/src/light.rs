@@ -776,6 +776,9 @@ pub struct Sky {
     /// Where the first sky_camera stands: inside the 3D skybox, which the game draws
     /// behind the sky and lights on its own.
     pub camera: Option<DVec3>,
+    /// How many times larger than it is built the game shows the 3D skybox: the
+    /// sky_camera's `scale`, 16 unless it says otherwise.
+    pub camera_scale: f64,
 }
 
 /// Everything about a map's lighting that a preview needs.
@@ -1017,6 +1020,7 @@ impl MapLighting {
                 }
                 "sky_camera" if lighting.sky.camera.is_none() => {
                     lighting.sky.camera = Some(origin);
+                    lighting.sky.camera_scale = number(entity, "scale").filter(|scale| *scale > 0.0).unwrap_or(16.0);
                 }
                 "env_sun" => {
                     let rgb = entity.get("rendercolor").and_then(rgb_color).unwrap_or(DVec3::ONE);

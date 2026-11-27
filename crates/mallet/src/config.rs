@@ -929,6 +929,9 @@ pub struct ViewOptions {
     pub nodraw: bool,
     /// Draw sky faces in the 3D views; hidden, the 2D skybox behind them shows through.
     pub sky_textures: bool,
+    /// Draw the 3D skybox behind the map's sky faces in the 3D views, around the
+    /// sky_camera and scaled up as the game shows it.
+    pub skybox_3d: bool,
     /// Draw editor-only helpers in the 3D views: point entity boxes, editor sprites and
     /// the editor models some classes show.
     pub helpers: bool,
@@ -981,6 +984,7 @@ impl Default for ViewOptions {
             helpers: true,
             nodraw: true,
             sky_textures: true,
+            skybox_3d: true,
             draw_distance: crate::view3d::DEFAULT_DRAW_DISTANCE,
             fov: crate::view3d::DEFAULT_FOV,
             camera_preview: true,

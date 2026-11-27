@@ -2657,6 +2657,42 @@ impl LitState {
         }
     }
 
+    /// Draws the 3D skybox lit, seen from the sky camera whose matrix is bound to group
+    /// 0: its opaque faces, its props and its translucent faces.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_skybox<'a>(
+        &'a self,
+        renderer: &'a Renderer3D,
+        pass: &mut wgpu::RenderPass<'a>,
+        planes: &[Vec4; 6],
+        hidden: &dyn Fn(&str) -> bool,
+        translucent: Option<&'a Translucent>,
+        instances: Option<&'a Batches>,
+        stats: &mut RenderStats,
+    ) {
+        let Some(group) = &self.group else {
+            return;
+        };
+        pass.set_bind_group(2, group, &[]);
+        if let Some(mesh) = renderer.skybox.as_ref().and_then(|faces| faces.opaque.as_ref()) {
+            pass.set_pipeline(&self.face);
+            super::skybox3d::draw_chunks(renderer, pass, mesh, planes, stats);
+        }
+        if let Some((buffer, ranges)) = instances {
+            self.draw_models(renderer, pass, buffer, ranges, hidden, stats);
+        }
+        if let Some(translucent) = translucent {
+            renderer.draw_translucent(
+                pass,
+                translucent,
+                instances.map(|(buffer, _)| buffer),
+                (&self.translucent, &self.translucent_model),
+                hidden,
+                stats,
+            );
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_models<'a>(
         &'a self,
@@ -3462,7 +3498,7 @@ fn zone_of(skybox: Option<&Bounds>, point: DVec3) -> Zone {
 /// The 3D skybox: the room the sky_camera stands in, found as the world brushes that touch
 /// the one under the camera, and the ones touching those. `None` without a sky_camera, or
 /// when that group reaches over half the map, as when the skybox touches the map itself.
-fn skybox_bounds(scene: &Scene) -> Option<Bounds> {
+pub(super) fn skybox_bounds(scene: &Scene) -> Option<Bounds> {
     let camera = scene.lighting.sky.camera?;
     let brushes: Vec<Bounds> = scene
         .meshes
