@@ -27,6 +27,8 @@ const MIN_WATER_REFLECTIVITY: f32 = 0.05;
 /// textured 3D view uses the same colours.
 const WATER_HORIZON: [f32; 3] = [0.78, 0.86, 0.92];
 const WATER_ZENITH: [f32; 3] = [0.32, 0.52, 0.82];
+/// The mid-grey of the lines that divide a blended material's layers in its thumbnail.
+const BLEND_LINE: [u8; 4] = [128, 128, 128, 255];
 
 /// A texture ready for display. Shared, because many faces use the same one.
 pub type Texture = Arc<Image>;
@@ -728,6 +730,64 @@ const WATER_THUMBNAIL_VIEW: [f32; 3] = [0.0, -0.5, 0.6];
 /// The direction the sun glint comes from, the same as the faces' shading.
 const WATER_SUN: [f32; 3] = [0.3, 0.5, 1.0];
 
+/// Tiles a blended material's layers into one thumbnail with mid-grey lines between the
+/// parts. Two layers split along the diagonal from bottom-left to top-right, the first on
+/// the top-left. Three or four layers fill the quadrants in reading order, the last layer
+/// covering any quadrant left over. The result keeps the first layer's full size and takes
+/// its pixel size; the other layers are sampled nearest-neighbour to that size.
+fn composite_blend(layers: &[Image]) -> Image {
+    let first = &layers[0];
+    let (width, height) = (first.pixel_width, first.pixel_height);
+    let thickness = (width.max(height) / 128).max(1);
+    let half_thickness = f64::from(thickness) / 2.0;
+    let diagonal_length = f64::from(width).hypot(f64::from(height));
+    let column_start = (width / 2).saturating_sub(thickness / 2);
+    let row_start = (height / 2).saturating_sub(thickness / 2);
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let layer = if layers.len() == 2 {
+                let across = f64::from(height) * (f64::from(x) + 0.5) + f64::from(width) * (f64::from(y) + 0.5)
+                    - f64::from(width) * f64::from(height);
+                if across.abs() / diagonal_length <= half_thickness {
+                    None
+                } else if across < 0.0 {
+                    Some(0)
+                } else {
+                    Some(1)
+                }
+            } else {
+                let on_column_line = (column_start..column_start + thickness).contains(&x);
+                let on_row_line = (row_start..row_start + thickness).contains(&y);
+                if on_column_line || on_row_line {
+                    None
+                } else {
+                    let row = usize::from(y >= row_start + thickness);
+                    let column = usize::from(x >= column_start + thickness);
+                    Some((row * 2 + column).min(layers.len() - 1))
+                }
+            };
+            match layer {
+                Some(index) => {
+                    let source = &layers[index];
+                    let source_x = u64::from(x) * u64::from(source.pixel_width) / u64::from(width);
+                    let source_y = u64::from(y) * u64::from(source.pixel_height) / u64::from(height);
+                    let offset = ((source_y * u64::from(source.pixel_width) + source_x) * 4) as usize;
+                    rgba.extend_from_slice(&source.rgba[offset..offset + 4]);
+                }
+                None => rgba.extend_from_slice(&BLEND_LINE),
+            }
+        }
+    }
+    Image {
+        width: first.width,
+        height: first.height,
+        pixel_width: width,
+        pixel_height: height,
+        rgba,
+    }
+}
+
 /// Renders a water thumbnail from its normal map, the way the surface looks in the game:
 /// the water is the tint, the surface reflects the sky more at grazing angles, and the
 /// normal map's ripples make the reflection shimmer. The map's pixels are read as normals
@@ -1115,11 +1175,19 @@ impl MaterialLoader {
 
     /// Loads a material's texture at most `max_side` pixels across, for thumbnails. Water
     /// is rendered from its normal map as the surface looks in the game, so the browser
-    /// shows what it is rather than the map's blue-grey normals.
+    /// shows what it is rather than the map's blue-grey normals. A blended material without
+    /// a tool texture shows its layers together, so its blends look different from one
+    /// another.
     pub fn thumbnail(&self, material: &str, max_side: u32) -> Option<Image> {
         let key = material_key(material);
         let properties = self.properties(&key, 0)?;
         let water = properties.material().water;
+        if water.is_none() && properties.tool_texture != Some(true) && properties.second_texture.is_some() {
+            let layers = self.blend_layers(&properties, max_side);
+            if layers.len() >= 2 {
+                return Some(composite_blend(&layers));
+            }
+        }
         let name = match water {
             Some(_) => properties.normal_map.clone().or_else(|| properties.texture.clone()),
             None => properties.texture.clone(),
@@ -1423,5 +1491,63 @@ mod tests {
         assert_eq!((rgba[3], rgba[7]), (255, 255));
         assert!(rgba[2] > rgba[0], "the blue tint shows through: {rgba:?}");
         assert_ne!(rgba[4..7], rgba[0..3], "the ripples change the surface");
+    }
+
+    /// A solid layer of `width` by `height` pixels, each `color`.
+    fn solid_layer(color: [u8; 4], width: u32, height: u32) -> Image {
+        Image {
+            width,
+            height,
+            pixel_width: width,
+            pixel_height: height,
+            rgba: color.repeat((width * height) as usize),
+        }
+    }
+
+    fn pixel_at(image: &Image, x: u32, y: u32) -> [u8; 4] {
+        let offset = ((y * image.pixel_width + x) * 4) as usize;
+        image.rgba[offset..offset + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn blended_thumbnails_split_along_the_diagonal() {
+        let red = [255, 0, 0, 255];
+        let blue = [0, 0, 255, 255];
+        let base = Image {
+            width: 8,
+            height: 8,
+            ..solid_layer(red, 4, 4)
+        };
+        let image = composite_blend(&[base, solid_layer(blue, 4, 4)]);
+        assert_eq!(
+            (image.width, image.height),
+            (8, 8),
+            "the base texture's full size is kept"
+        );
+        assert_eq!((image.pixel_width, image.pixel_height), (4, 4));
+        assert_eq!(pixel_at(&image, 0, 0), red);
+        assert_eq!(pixel_at(&image, 3, 3), blue);
+        assert_eq!(pixel_at(&image, 3, 0), BLEND_LINE, "the diagonal is drawn in grey");
+        assert_eq!(pixel_at(&image, 0, 3), BLEND_LINE, "the diagonal is drawn in grey");
+    }
+
+    #[test]
+    fn blended_thumbnails_fill_quadrants() {
+        let layers = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]]
+            .map(|color| solid_layer(color, 4, 4));
+        let four = composite_blend(&layers);
+        assert_eq!(pixel_at(&four, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel_at(&four, 3, 0), [0, 255, 0, 255]);
+        assert_eq!(pixel_at(&four, 0, 3), [0, 0, 255, 255]);
+        assert_eq!(pixel_at(&four, 3, 3), [255, 255, 0, 255]);
+        assert_eq!(pixel_at(&four, 2, 0), BLEND_LINE, "the quadrants are divided in grey");
+        assert_eq!(pixel_at(&four, 0, 2), BLEND_LINE, "the quadrants are divided in grey");
+
+        let three = composite_blend(&layers[..3]);
+        assert_eq!(
+            pixel_at(&three, 3, 3),
+            [0, 0, 255, 255],
+            "the third layer fills the bottom"
+        );
     }
 }
