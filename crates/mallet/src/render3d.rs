@@ -76,8 +76,14 @@ const SWAP_COST_FACTOR: u32 = 8;
 
 /// How eframe sets up the graphics card: as it does by itself, and asking for DXT texture
 /// sampling where the card has it, so textures can stay compressed in its memory.
+///
+/// Only the native backends (Vulkan, DirectX 12, Metal) are started, unless
+/// `WGPU_BACKEND` names others. eframe also starts OpenGL by default, which loads the
+/// card's OpenGL driver at launch even though Mallet never draws with it, and some
+/// NVIDIA drivers hang there for good, so Mallet never opens a window.
 pub fn wgpu_setup() -> eframe::egui_wgpu::WgpuSetup {
-    let defaults = eframe::egui_wgpu::WgpuSetupCreateNew::default();
+    let mut defaults = eframe::egui_wgpu::WgpuSetupCreateNew::default();
+    defaults.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
     let describe = Arc::clone(&defaults.device_descriptor);
     eframe::egui_wgpu::WgpuSetup::CreateNew(eframe::egui_wgpu::WgpuSetupCreateNew {
         device_descriptor: Arc::new(move |adapter| {
