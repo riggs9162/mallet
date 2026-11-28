@@ -12,6 +12,7 @@ pub mod geometry;
 pub mod hollow;
 pub mod hull;
 mod index;
+pub mod instance;
 pub mod light;
 pub mod lightmap;
 mod model;
