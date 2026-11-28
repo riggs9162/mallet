@@ -28,6 +28,7 @@ use crate::config::Config;
 use crate::content_watch::ContentWatch;
 use crate::document::Document;
 use crate::input::InputFrame;
+use crate::instances::InstanceLibrary;
 use crate::lighting::{load_texture_lights, TextureLights};
 use crate::render3d::{CameraStyle, LightingInput, Renderer3D, ViewFilter};
 use crate::scene::{
@@ -404,6 +405,8 @@ pub struct Editor {
     content_watch: Option<ContentWatch>,
     /// Prop models loaded so far, shared by every tab.
     pub models: ModelCache,
+    /// The maps instances place, read so far and shared by every tab.
+    pub instances: InstanceLibrary,
     /// The prop model wireframes the 2D views show while they are turned on.
     pub model_wires: ModelWires,
     /// The size of the picture each decal texture seen so far projects, shared by every
@@ -559,6 +562,7 @@ impl Default for Editor {
             materials: None,
             content_watch: None,
             models: ModelCache::new(),
+            instances: InstanceLibrary::default(),
             model_wires: ModelWires::default(),
             decal_sizes: DecalSizes::new(),
             model_errors: HashMap::new(),
@@ -811,6 +815,9 @@ impl Editor {
         self.pointfile = map.pointfile;
         self.face_selection = map.face_selection;
         self.visgroups = map.visgroups;
+        if self.scene.has_instances() && self.scene.instances_read != self.instances.generation() {
+            self.rebuild_scene();
+        }
         self.refresh_face_marks();
         self.clear_clip_points();
     }
@@ -882,14 +889,7 @@ impl Editor {
     }
 
     fn set_document(&mut self, document: Document) {
-        self.ensure_models(document.vmf.entities());
-        self.ensure_decal_sizes(document.vmf.entities());
-        self.scene = Scene::build(
-            &document.vmf,
-            &self.models,
-            self.game_data.as_deref(),
-            &self.decal_sizes,
-        );
+        self.scene = self.build_scene(&document);
         self.document = Some(document);
         self.selection.clear();
         self.overlay = Overlay::default();
@@ -927,9 +927,11 @@ impl Editor {
     /// Mallet's own, anything else for VMF.
     pub fn save(&mut self, path: Option<PathBuf>) -> Result<PathBuf, String> {
         let document = self.store_view()?;
+        let folder_before = document.path.as_deref().and_then(Path::parent).map(Path::to_path_buf);
         if let Some(path) = path {
             document.path = Some(path);
         }
+        let moved = document.path.as_deref().and_then(Path::parent) != folder_before.as_deref();
         let result = document.save();
         if result.is_ok() {
             document.dirty = false;
@@ -944,6 +946,11 @@ impl Editor {
         match (result, saved) {
             (Ok(()), Some(path)) => {
                 self.remember_map(&path);
+                if moved && self.scene.has_instances() {
+                    let message = std::mem::take(&mut self.message);
+                    self.rebuild_scene();
+                    self.message = message;
+                }
                 Ok(path)
             }
             _ => Err(self.message.clone()),
@@ -1093,14 +1100,7 @@ impl Editor {
     /// longer exist.
     pub fn rebuild_scene(&mut self) {
         if let Some(document) = self.document.take() {
-            self.ensure_models(document.vmf.entities());
-            self.ensure_decal_sizes(document.vmf.entities());
-            self.scene = Scene::build(
-                &document.vmf,
-                &self.models,
-                self.game_data.as_deref(),
-                &self.decal_sizes,
-            );
+            self.scene = self.build_scene(&document);
             self.document = Some(document);
             self.add_pointfile_to_scene();
         } else {
@@ -1108,6 +1108,43 @@ impl Editor {
         }
         self.refresh_visgroups();
         self.sync_selection();
+    }
+
+    /// Builds the scene of `document`, with what its instances place: their maps are read
+    /// and their models and decal textures loaded as the map's own are.
+    fn build_scene(&mut self, document: &Document) -> Scene {
+        let placed = self.instances.place_all(&document.vmf, document.path.as_deref());
+        self.ensure_models(document.vmf.entities().chain(placed.entities()));
+        self.ensure_decal_sizes(document.vmf.entities().chain(placed.entities()));
+        let mut scene = Scene::build(
+            &document.vmf,
+            &self.models,
+            self.game_data.as_deref(),
+            &self.decal_sizes,
+        );
+        scene.add_instances(placed, &self.models, self.game_data.as_deref(), &self.decal_sizes);
+        scene.instances_read = self.instances.generation();
+        scene
+    }
+
+    /// Builds the scene again when a map an instance places has changed on disk since it
+    /// was read, or a missing one has appeared. Returns whether it did.
+    pub fn take_instance_changes(&mut self) -> bool {
+        if self.instances.changed_on_disk() {
+            self.message = "Read changed instances again".to_owned();
+        }
+        if !self.scene.has_instances() || self.scene.instances_read == self.instances.generation() {
+            return false;
+        }
+        self.rebuild_scene();
+        true
+    }
+
+    /// Reads every map the open map's instances place again and shows them anew.
+    pub fn reload_instances(&mut self) {
+        self.instances.forget();
+        self.rebuild_scene();
+        self.message = "Read the instances again".to_owned();
     }
 
     /// Drops selected brushes, entities and faces that are no longer in the map, and

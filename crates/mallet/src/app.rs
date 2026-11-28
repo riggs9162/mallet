@@ -145,6 +145,7 @@ const KEY_ACTIONS: &[Action] = &[
     Action::ViewLighting,
     Action::GoToBrush,
     Action::CheckForProblems,
+    Action::ReloadInstances,
     Action::FindEntities,
     Action::Transform,
     Action::SnapToGrid,
@@ -640,6 +641,8 @@ impl MalletApp {
                     menu_item(ui, keymap, "Check for Problems...", Action::CheckForProblems, &mut chosen);
                     menu_item(ui, keymap, "Show Information...", Action::MapInformation, &mut chosen);
                     menu_item(ui, keymap, "Map Properties...", Action::MapProperties, &mut chosen);
+                    ui.separator();
+                    menu_item(ui, keymap, "Reload Instances", Action::ReloadInstances, &mut chosen);
                 });
                 ui.menu_button("View", |ui| {
                     let keymap = &self.keymap;
@@ -2293,6 +2296,10 @@ impl MalletApp {
     /// Drops the window's own pictures of materials whose files were saved again, and
     /// looks for such files again about every second while a game is mounted.
     fn take_content_changes(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        if editor.instances.watching() {
+            ctx.request_repaint_after(crate::content_watch::POLL_INTERVAL);
+            editor.take_instance_changes();
+        }
         if editor.materials.is_none() {
             return;
         }
@@ -3123,6 +3130,7 @@ fn run(action: Action, editor: &mut Editor) {
         Action::Copy => report(editor.copy_selection().map(drop), editor),
         Action::Paste => report(editor.paste_at_cursor().map(drop), editor),
         Action::PasteSpecial => report(editor.open_paste_special(), editor),
+        Action::ReloadInstances => editor.reload_instances(),
         Action::GridSmaller => editor.change_grid(0.5),
         Action::GridLarger => editor.change_grid(2.0),
         Action::ToggleSnapToGrid => {

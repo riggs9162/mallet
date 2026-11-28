@@ -236,6 +236,26 @@ reused their last image, and how many textures are still loading. View > 3D draw
 sets how far the 3D view draws, like Hammer's back clipping plane. For the best
 speed on large maps, run the release build (`cargo build --release -p mallet`).
 
+## Instances
+
+A `func_instance` shows the map its `file` key names where the compiler will put it: its
+brushes and displacements, overlays, props and point entities, moved to the instance's
+`origin` and turned by its `angles`, in the 2D views and both 3D views. Like VBSP, Mallet
+looks for the file beside the map that holds the instance first, then in the folders above
+and in an `instances` folder beside them; instances inside instances look beside their own
+file first, down to eight deep. `replaceNN` variables and the instance's name fix-up are
+applied as VBSP applies them.
+
+What an instance places is drawn a little cooler and darker in the 3D views, and in a
+colour leaning towards the instance's in the 2D views. It cannot be edited from the map:
+clicking it selects the `func_instance`, which moves, turns and copies with all of it, and
+saving the map writes only the instance entity. Its lights shine in the lighting preview,
+and its brushes and props cast and catch shadows like the map's own.
+
+Mallet notices a saved instance map within about a second and shows it anew; Map > Reload
+Instances reads them all again at once. An instance whose map is missing or cannot be read
+shows only its marker, and Check for Problems says why.
+
 ## Overlays and decals
 
 Overlays (`info_overlay`) and decals (`infodecal`) are drawn in the 3D views the way the

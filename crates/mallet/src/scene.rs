@@ -13,11 +13,13 @@ use mallet_content::{parallel_map, EntityClass, GameData, Model};
 use mallet_vmf::displacement::Surface;
 use mallet_vmf::geometry::{faces_bounds, solid_faces, Bounds, Plane};
 use mallet_vmf::edit::Touched;
-use mallet_vmf::light::MapLighting;
+use mallet_vmf::instance;
+use mallet_vmf::light::{Beam, Glow, Light, MapLighting};
 use mallet_vmf::overlay::{self, Piece};
 use mallet_vmf::sound::MapSounds;
 use mallet_vmf::{parse_vec3, Entity, Side, Solid, TexAxis, Vmf};
 
+use crate::instances::{InstanceProblem, Placed};
 use crate::view2d::Axis2D;
 use crate::world_text::WorldText;
 
@@ -581,6 +583,7 @@ impl WireMesh {
             origin: None,
             first_face: None,
             decal: false,
+            instanced: false,
         }
     }
 
@@ -671,6 +674,16 @@ pub struct FaceHit {
     pub solid: u32,
     /// Where the ray met the face.
     pub point: DVec3,
+}
+
+/// A brush face a ray hit, with the mesh it belongs to.
+pub struct SurfaceHit<'a> {
+    pub mesh: &'a WireMesh,
+    pub face: &'a SceneFace,
+    /// Where the ray met the face.
+    pub point: DVec3,
+    /// The face's outward normal there, a displacement's where it is sculpted.
+    pub normal: DVec3,
 }
 
 /// Loaded prop models by [`model_key`]; `None` when a model could not be loaded.
@@ -783,6 +796,10 @@ pub struct WireMesh {
     /// boxes pick the entity by its node, not its picture, except with the Overlay and
     /// Decal tools; the texture tool and tools that look for a surface see through it too.
     pub decal: bool,
+    /// Part of what a `func_instance` places: shown, lit and picked as the instance
+    /// entity that owns it, but not part of the map, so it has no brush or side ids of
+    /// its own and nothing edits it.
+    pub instanced: bool,
 }
 
 /// Everything the viewports draw.
@@ -808,6 +825,29 @@ pub struct Scene {
     next_face: u32,
     /// The map's soundscape entities and ambient sounds, for the sound preview.
     pub sounds: MapSounds,
+    /// The lights, glows and beams the map's instances place, each owned by its
+    /// instance entity, which [`Scene::lighting`] holds as well.
+    instance_lighting: MapLighting,
+    /// The ids of the instance entities that place meshes in the scene.
+    instance_owners: HashSet<u32>,
+    /// What each instance entity places, by its id.
+    pub instance_info: HashMap<u32, InstanceInfo>,
+    /// What kept any of the map's instances from showing.
+    pub instance_problems: Vec<InstanceProblem>,
+    /// The [`crate::instances::InstanceLibrary::generation`] the instances were placed
+    /// from.
+    pub instances_read: u64,
+}
+
+/// What one instance entity places in the scene.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InstanceInfo {
+    /// The maps it reads, its own first, then those of the instances inside it.
+    pub files: Vec<std::path::PathBuf>,
+    pub solids: usize,
+    /// The entities it places, the instances inside it left out.
+    pub entities: usize,
+    pub lights: usize,
 }
 
 /// One step of [`Scene::retextures`]: these meshes changed from `from` to `to`.
@@ -903,6 +943,96 @@ impl Scene {
         self.meshes.extend(added.into_iter().flatten());
     }
 
+    /// Adds what the map's instances place, each part built as a map of its own and then
+    /// given to its instance entity: drawn in a colour between its own and the
+    /// instance's, picked and selected as the instance, and lit and casting shadows
+    /// like the map's own brushes and props. The lights it holds shine in the lighting
+    /// preview, moving with the instance when it is dragged.
+    pub fn add_instances(
+        &mut self,
+        placed: Placed,
+        models: &ModelCache,
+        game_data: Option<&GameData>,
+        decals: &DecalSizes,
+    ) {
+        self.instance_problems = placed.problems;
+        if placed.instances.is_empty() {
+            return;
+        }
+        let colors: HashMap<u32, Color32> = self
+            .meshes
+            .iter()
+            .filter(|mesh| !mesh.instanced)
+            .filter_map(|mesh| match mesh.owner {
+                Some(Owner::Entity(id)) => Some((id, mesh.color)),
+                _ => None,
+            })
+            .collect();
+        for placed in &placed.instances {
+            let owner = placed.entity;
+            let marker = colors.get(&owner).copied().unwrap_or(DEFAULT_COLOR);
+            self.instance_owners.insert(owner);
+            let mut info = InstanceInfo {
+                files: placed.files.clone(),
+                ..InstanceInfo::default()
+            };
+            for part in &placed.parts {
+                let built = Scene::build(part, models, game_data, decals);
+                info.solids += built.solid_count;
+                info.entities += built.entity_count;
+                info.lights += built.lighting.lights.len();
+                for mut mesh in built.meshes.into_iter().filter(|mesh| !mesh.is_hole()) {
+                    mesh.owner = Some(Owner::Entity(owner));
+                    mesh.solid = None;
+                    mesh.instanced = true;
+                    mesh.color = instance_color(mesh.color, marker);
+                    for face in &mut mesh.faces {
+                        face.side = None;
+                        face.solid = None;
+                        face.selected = false;
+                    }
+                    mesh.first_face = Some(self.number_faces(mesh.faces.len()));
+                    self.bounds.add_bounds(&mesh.bounds);
+                    self.meshes.push(mesh);
+                }
+                let lighting = built.lighting;
+                let owned = Some(owner);
+                self.instance_lighting
+                    .lights
+                    .extend(lighting.lights.into_iter().map(|light| Light { entity: owned, ..light }));
+                self.instance_lighting
+                    .glows
+                    .extend(lighting.glows.into_iter().map(|glow| Glow { entity: owned, ..glow }));
+                self.instance_lighting
+                    .beams
+                    .extend(lighting.beams.into_iter().map(|beam| Beam { entity: owned, ..beam }));
+                if self.instance_lighting.ambient.is_none() {
+                    self.instance_lighting.ambient = lighting.ambient;
+                }
+            }
+            self.instance_info.insert(owner, info);
+        }
+        self.merge_instance_lighting();
+    }
+
+    /// Adds the instances' lights, glows and beams to the map's, and their ambient light
+    /// when the map has none of its own.
+    fn merge_instance_lighting(&mut self) {
+        let placed = &self.instance_lighting;
+        self.lighting.lights.extend(placed.lights.iter().cloned());
+        self.lighting.glows.extend(placed.glows.iter().cloned());
+        self.lighting.beams.extend(placed.beams.iter().cloned());
+        if self.lighting.ambient.is_none() {
+            self.lighting.ambient = placed.ambient;
+        }
+    }
+
+    /// Whether the map has instances, shown or not, so their maps are looked for again
+    /// when the map moves to another folder or a map an instance reads changes.
+    pub fn has_instances(&self) -> bool {
+        !self.instance_info.is_empty() || !self.instance_problems.is_empty()
+    }
+
     /// Whether an edit touched few enough brushes and entities for [`Scene::patch`] to
     /// be quicker than building the whole scene.
     pub fn patches(&self, touched: &Touched) -> bool {
@@ -939,6 +1069,9 @@ impl Scene {
                 continue;
             }
             faces += mesh.faces.len();
+            if mesh.instanced {
+                continue;
+            }
             match (mesh.owner, mesh.decal) {
                 (Some(Owner::Entity(id)), true) => {
                     pictures.insert(id, at);
@@ -957,6 +1090,12 @@ impl Scene {
             return false;
         }
         let class_of = |entity: &Entity| game_data.and_then(|data| data.class(entity.classname()));
+        let places = |id: &u32| {
+            self.instance_owners.contains(id) || vmf.entity_by_id(*id).is_some_and(instance::is_instance)
+        };
+        if touched.entities.iter().any(places) {
+            return false;
+        }
         let mut parts: Vec<(Option<usize>, Part)> = Vec::new();
         let mut gone: Vec<usize> = Vec::new();
         let mut planned: HashSet<u32> = HashSet::new();
@@ -1065,6 +1204,7 @@ impl Scene {
             });
             self.lighting = lighting;
             self.sounds = sounds;
+            self.merge_instance_lighting();
         }
         self.note_changed(step.changed, step.previous);
         true
@@ -1171,7 +1311,11 @@ impl Scene {
     /// selected point entity when only point entities are selected, as Hammer snaps them
     /// by their origin, or else the minimum corner of the selection's bounds.
     pub fn selection_anchor(&self) -> DVec3 {
-        let mut selected = self.meshes.iter().filter(|mesh| mesh.selected).peekable();
+        let mut selected = self
+            .meshes
+            .iter()
+            .filter(|mesh| mesh.selected && !mesh.instanced)
+            .peekable();
         let first = selected.peek().and_then(|mesh| mesh.origin);
         match first {
             Some(origin) if selected.all(|mesh| mesh.origin.is_some()) => origin,
@@ -1482,18 +1626,51 @@ impl Scene {
 
     /// The brush face a ray hits first among the brushes `wanted` lets count, its hit
     /// point and its outward normal, seeing through point entities, props, overlays and
-    /// decals as [`Scene::surface_face`] does.
+    /// decals as [`Scene::surface_face`] does. Faces that instances place are seen
+    /// through too, as they cannot be edited.
     pub fn surface_face_where(
         &self,
         origin: DVec3,
         direction: DVec3,
         wanted: impl Fn(&WireMesh) -> bool,
     ) -> Option<(FaceHit, DVec3)> {
+        let hit = self.first_surface(origin, direction, false, wanted)?;
+        let face_hit = FaceHit {
+            side: hit.face.side?,
+            solid: hit.face.solid?,
+            point: hit.point,
+        };
+        Some((face_hit, hit.normal))
+    }
+
+    /// The brush face a ray hits first among the brushes `wanted` lets count, including
+    /// the faces instances place, as a line traced through the compiled map meets them.
+    pub fn surface_where(
+        &self,
+        origin: DVec3,
+        direction: DVec3,
+        wanted: impl Fn(&WireMesh) -> bool,
+    ) -> Option<SurfaceHit<'_>> {
+        self.first_surface(origin, direction, true, wanted)
+    }
+
+    /// The first face a ray hits among the brush faces of meshes `wanted` lets count,
+    /// with instanced brush faces among them when `instanced` is set.
+    fn first_surface(
+        &self,
+        origin: DVec3,
+        direction: DVec3,
+        instanced: bool,
+        wanted: impl Fn(&WireMesh) -> bool,
+    ) -> Option<SurfaceHit<'_>> {
+        let brush_face = |mesh: &WireMesh, face: &SceneFace| {
+            face.side.is_some() || (instanced && mesh.instanced && face.material.is_some())
+        };
         let (mesh, distance, plane) = self
             .meshes
             .iter()
             .filter(|mesh| wanted(mesh))
-            .filter(|mesh| mesh.model.is_none() && !mesh.decal && mesh.faces.iter().any(|face| face.side.is_some()))
+            .filter(|mesh| mesh.model.is_none() && !mesh.decal && mesh.faces.iter().any(|face| brush_face(mesh, face)))
             .filter_map(|mesh| {
                 if let Some((distance, face)) = displacement_hit(mesh, origin, direction) {
                     return Some((mesh, distance, face));
@@ -1504,17 +1681,17 @@ impl Scene {
             .min_by(|a, b| a.1.total_cmp(&b.1))?;
         let face = mesh.faces.get(plane)?;
         let point = origin + direction * distance;
-        let hit = FaceHit {
-            side: face.side?,
-            solid: face.solid?,
-            point,
-        };
         let normal = face
             .displacement
             .as_ref()
             .and_then(|surface| Some(surface.normals[surface.nearest_vertex(point)?]))
             .unwrap_or(face.normal);
-        Some((hit, normal))
+        Some(SurfaceHit {
+            mesh,
+            face,
+            point,
+            normal,
+        })
     }
 
     /// The brush face nearest to a point and no further than `reach` from it, passing
@@ -1805,6 +1982,16 @@ fn ray_convex_face(origin: DVec3, direction: DVec3, planes: &[Plane]) -> Option<
     Some((enter, entered))
 }
 
+/// How far towards its instance's colour the 2D views draw what an instance places.
+const INSTANCE_COLOR_SHARE: f32 = 0.6;
+
+/// The colour of a mesh an instance places: its own, drawn most of the way towards the
+/// instance entity's, so the contents read as one instance in the 2D views.
+fn instance_color(own: Color32, instance: Color32) -> Color32 {
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * INSTANCE_COLOR_SHARE).round() as u8;
+    Color32::from_rgb(mix(own.r(), instance.r()), mix(own.g(), instance.g()), mix(own.b(), instance.b()))
+}
+
 fn to_color(color: Option<[u8; 3]>) -> Color32 {
     color.map_or(DEFAULT_COLOR, |[r, g, b]| Color32::from_rgb(r, g, b))
 }
@@ -1947,6 +2134,7 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
             origin: Some(origin),
             first_face: None,
             decal: false,
+            instanced: false,
         });
     };
     let transform = if class.is_some_and(|class| class.light_prop) {
@@ -2004,6 +2192,7 @@ fn point_mesh(entity: &Entity, class: Option<&EntityClass>, models: &ModelCache)
         origin: Some(origin),
         first_face: None,
         decal: false,
+        instanced: false,
     })
 }
 
@@ -2047,6 +2236,7 @@ fn text_mesh(text: WorldText, color: Color32, owner: Option<Owner>) -> WireMesh 
         text: Some(text),
         first_face: None,
         decal: false,
+        instanced: false,
     }
 }
 
@@ -2252,6 +2442,7 @@ fn brush_mesh(solid: &Solid, color: Color32, owner: Option<Owner>) -> Option<Wir
         origin: None,
         first_face: None,
         decal: false,
+        instanced: false,
     })
 }
 
@@ -2384,6 +2575,7 @@ fn decal_mesh(
         origin: entity.origin(),
         first_face: None,
         decal: true,
+        instanced: false,
     }
 }
 
@@ -2527,6 +2719,7 @@ mod tests {
             origin: None,
             first_face: None,
             decal: false,
+            instanced: false,
         }
     }
 

@@ -51,6 +51,7 @@ pub enum ProblemKind {
     WrongPropClass,
     UnknownClass,
     MissingParent,
+    MissingInstance,
 }
 
 impl ProblemKind {
@@ -68,6 +69,7 @@ impl ProblemKind {
             Self::WrongPropClass => "Wrong prop class",
             Self::UnknownClass => "Unknown class",
             Self::MissingParent => "Missing parent",
+            Self::MissingInstance => "Instance not shown",
         }
     }
 }
@@ -98,7 +100,8 @@ impl Problem {
             | ProblemKind::MissingTarget
             | ProblemKind::DuplicateId
             | ProblemKind::UnknownClass
-            | ProblemKind::MissingParent => false,
+            | ProblemKind::MissingParent
+            | ProblemKind::MissingInstance => false,
         }
     }
 
@@ -231,6 +234,14 @@ impl Editor {
                 continue;
             }
             self.check_entity(entity, owner, &names, &mut models, &mut problems);
+        }
+        for problem in &self.scene.instance_problems {
+            problems.push(Problem {
+                kind: ProblemKind::MissingInstance,
+                object: Some(Owner::Entity(problem.entity)),
+                detail: format!("Instance {} {}", problem.entity, problem.detail),
+                items: Vec::new(),
+            });
         }
         for (ids, noun) in [(&solid_ids, "brushes"), (&entity_ids, "entities")] {
             let mut duplicates: Vec<(&u32, &usize)> = ids.iter().filter(|(_, count)| **count > 1).collect();

@@ -147,6 +147,8 @@ pub enum Action {
     MapInformation,
     /// Check the map for problems, as Hammer's Check for Problems does.
     CheckForProblems,
+    /// Read the maps the map's instances place again from disk.
+    ReloadInstances,
     /// List the map's entities with filters, as Hammer's Entity Report does.
     EntityReport,
     /// Find entities by name, as Hammer's Find Entities does.

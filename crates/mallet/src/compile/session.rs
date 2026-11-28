@@ -301,6 +301,7 @@ impl Editor {
             origin: None,
             first_face: None,
             decal: false,
+            instanced: false,
         });
         self.scene.geometry_generation = next_generation();
     }

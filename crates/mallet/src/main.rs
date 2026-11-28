@@ -30,6 +30,7 @@ mod faces;
 mod gizmo;
 mod handoff;
 mod input;
+mod instances;
 mod keymap;
 mod lighting;
 mod look_buttons;

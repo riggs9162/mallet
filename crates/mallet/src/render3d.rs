@@ -54,6 +54,9 @@ const SELECTION_TINT: f32 = 0.4;
 /// How strongly selected brush faces are tinted red in the 3D view: lighter than other
 /// selected objects, as in Hammer++, so the texture stays readable under the yellow outline.
 const FACE_SELECTION_TINT: f32 = 0.3;
+/// The tint of what instances place, cooler and a little darker than the map's own
+/// faces and props, so it reads as instanced in the camera views.
+const INSTANCE_TINT: [f32; 3] = [0.84, 0.89, 1.0];
 /// Key for the plain white texture used by point entity boxes.
 const WHITE_KEY: &str = "";
 /// Side length of the world cubes faces are grouped into for culling.
@@ -1687,10 +1690,11 @@ impl Renderer3D {
             }
             stats.models_drawn += 1;
             let transform = remap.map_or(instance.transform, |remap| remap.matrix() * instance.transform);
+            let [red, green, blue] = if mesh.instanced { INSTANCE_TINT } else { [1.0; 3] };
             by_model.entry(instance.key.as_str()).or_default().push((
                 ModelInstanceData {
                     transform: transform.as_mat4().to_cols_array(),
-                    tint: [1.0, 1.0, 1.0, 0.0],
+                    tint: [red, green, blue, 0.0],
                 },
                 bounds.center().as_vec3(),
             ));
@@ -2497,6 +2501,8 @@ impl Renderer3D {
             let tint = if mesh.faces.iter().any(|face| face.material.is_none()) {
                 let [r, g, b, _] = egui::Rgba::from(mesh.color).to_array();
                 [r, g, b]
+            } else if mesh.instanced {
+                INSTANCE_TINT
             } else {
                 [1.0, 1.0, 1.0]
             };
