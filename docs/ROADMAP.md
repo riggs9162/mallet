@@ -166,6 +166,7 @@ Mallet draws displacements and has Hammer's main displacement tools; these items
 - [ ] Path tool: place and chain path entities such as `path_track` and `path_corner`. Hammer
 - [ ] Sprinkle tool with presets. Hammer (CS:GO), H++
 - [ ] Physics tool: drag, explode and shoot props, ragdolls and brushes, keeping their poses. H++
+- [ ] Propper++: turn selected brushes, displacements and props into one combined model, compiled with its collision model, and put it in the map as a prop in their place. H++
 - [x] `editor_text`: 3D text placed in the map, which only the editor shows. H++
 - [x] Apply Current Texture to selected brushes (Shift+T). Hammer
 
