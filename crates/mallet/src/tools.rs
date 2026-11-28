@@ -163,6 +163,12 @@ fn editor_definitions() -> Value {
             &[],
         ),
         tool(
+            "reload_instances",
+            "Read every map the open map's func_instance entities place again from disk and show them anew.              Mallet notices saved instance maps by itself within about a second; this is for when it should              happen now. Says for each instance which files it read, how many brushes, entities and lights it              places, and why it shows nothing when its map cannot be found or read.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "insert_map",
             "Paste every brush and entity of another map file, a .vmf or a .mallet, into the open map and \
              select them, as one undo step: the way to bring a generated piece or a prefab into a map without \
@@ -218,7 +224,7 @@ fn editor_definitions() -> Value {
         ),
         tool(
             "get_entity",
-            "Show every key, output connection and brush id of one entity.",
+            "Show every key, output connection and brush id of one entity. For a func_instance, also the              maps it reads and how many brushes, entities and lights it places, which the views show and              light but which are not part of the open map.",
             json!({ "id": id }),
             &["id"],
         ),
@@ -1462,6 +1468,26 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
             editor.export_copy(&path)?;
             Ok(ToolResult::text(format!("Exported a copy to {}", path.display())))
         }
+        "reload_instances" => {
+            if editor.document.is_none() {
+                return Err("no map is open".to_owned());
+            }
+            editor.reload_instances();
+            let instances: Vec<Value> = editor
+                .document
+                .as_ref()
+                .into_iter()
+                .flat_map(|document| document.vmf.entities())
+                .filter(|entity| mallet_vmf::instance::is_instance(entity))
+                .filter_map(Entity::id)
+                .map(|id| {
+                    let mut value = instance_json(editor, id);
+                    value["id"] = json!(id);
+                    value
+                })
+                .collect();
+            Ok(ToolResult::json(&json!({ "instances": instances })))
+        }
         "reload_map" => {
             let unsaved = editor.document.as_ref().is_some_and(|document| document.dirty);
             if unsaved && optional_flag(args, "discard")? != Some(true) {
@@ -1499,6 +1525,9 @@ fn run_checked(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResu
                 .find(|entity| entity.id() == Some(id))
                 .ok_or_else(|| format!("no entity has id {id}"))?;
             let mut details = entity_details(entity);
+            if mallet_vmf::instance::is_instance(entity) {
+                details["instance"] = instance_json(editor, id);
+            }
             let class = editor.entity_class(entity.classname());
             details["fgd_class"] = json!(class.map(|class| class.name.clone()));
             details["outputs"] = Value::Array(entity.connections().iter().map(connection_json).collect());
@@ -3313,6 +3342,28 @@ fn class_json(class: &EntityClass) -> Value {
         "inputs": ports(&class.inputs),
         "outputs": ports(&class.outputs),
     })
+}
+
+/// What the instance entity `id` places, as get_entity and reload_instances give it.
+fn instance_json(editor: &Editor, id: u32) -> Value {
+    let problems: Vec<&str> = editor
+        .scene
+        .instance_problems
+        .iter()
+        .filter(|problem| problem.entity == id)
+        .map(|problem| problem.detail.as_str())
+        .collect();
+    match editor.scene.instance_info.get(&id) {
+        Some(info) => json!({
+            "shown": true,
+            "files": info.files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+            "solids": info.solids,
+            "entities": info.entities,
+            "lights": info.lights,
+            "problems": problems,
+        }),
+        None => json!({ "shown": false, "problems": problems }),
+    }
 }
 
 fn entity_details(entity: &Entity) -> Value {

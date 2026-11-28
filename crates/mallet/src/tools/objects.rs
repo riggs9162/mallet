@@ -594,25 +594,27 @@ pub(super) fn trace_line(editor: &mut Editor, args: &Value) -> Result<ToolResult
         .iter()
         .map(|(from, direction, reach)| {
             let hit = scene
-                .surface_face_where(*from, *direction, stops)
-                .filter(|(hit, _)| hit.point.distance(*from) <= *reach + 1e-6);
-            let Some((hit, normal)) = hit else {
+                .surface_where(*from, *direction, stops)
+                .filter(|hit| hit.point.distance(*from) <= *reach + 1e-6);
+            let Some(hit) = hit else {
                 return Value::Null;
             };
-            let mesh = scene.meshes.iter().find(|mesh| mesh.solid == Some(hit.solid));
-            let face = mesh.and_then(|mesh| mesh.faces.iter().find(|face| face.side == Some(hit.side)));
-            json!({
+            let mut value = json!({
                 "point": hit.point.to_array().map(round),
                 "distance": round(hit.point.distance(*from)),
-                "normal": normal.to_array().map(round),
-                "side": hit.side,
-                "solid": hit.solid,
-                "entity": mesh.and_then(|mesh| match mesh.owner {
+                "normal": hit.normal.to_array().map(round),
+                "side": hit.face.side,
+                "solid": hit.face.solid,
+                "entity": match hit.mesh.owner {
                     Some(Owner::Entity(id)) => Some(id),
                     _ => world,
-                }),
-                "material": face.and_then(|face| face.material.clone()),
-            })
+                },
+                "material": hit.face.material.clone(),
+            });
+            if hit.mesh.instanced {
+                value["instance"] = json!(true);
+            }
+            value
         })
         .collect();
     Ok(ToolResult::json(&json!({ "hits": hits })))
